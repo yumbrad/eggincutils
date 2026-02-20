@@ -1,0 +1,9 @@
+[[redirects]]
+from = "/xp-ge-craft/*"
+to = "https://xp-ge-craft.netlify.app/:splat"
+status = 200
+
+[[redirects]]
+from = "/ship-timer/*"
+to = "https://ship-timer.netlify.app/:splat"
+status = 200
