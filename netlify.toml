@@ -1,7 +1,7 @@
 [[redirects]]
 from = "/xp-ge-craft"
-to = "/xp-ge-craft/"
-status = 301
+to = "https://xp-ge-craft.netlify.app/xp-ge-craft"
+status = 200
 
 [[redirects]]
 from = "/xp-ge-craft/*"
