@@ -1,0 +1,933 @@
+{
+  "aurelian_brooch_1": {
+    "id": "aurelian-brooch-1",
+    "name": "Plain Aurelian brooch",
+    "tierNumber": 1,
+    "tierName": "Plain",
+    "iconFilename": "afx_aurelian_brooch_1.png"
+  },
+  "aurelian_brooch_2": {
+    "id": "aurelian-brooch-2",
+    "name": "Aurelian brooch",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_aurelian_brooch_2.png"
+  },
+  "aurelian_brooch_3": {
+    "id": "aurelian-brooch-3",
+    "name": "Jeweled Aurelian brooch",
+    "tierNumber": 3,
+    "tierName": "Jeweled",
+    "iconFilename": "afx_aurelian_brooch_3.png"
+  },
+  "aurelian_brooch_4": {
+    "id": "aurelian-brooch-4",
+    "name": "Eggceptional Aurelian brooch",
+    "tierNumber": 4,
+    "tierName": "Eggceptional",
+    "iconFilename": "afx_aurelian_brooch_4.png"
+  },
+  "beak_of_midas_1": {
+    "id": "beak-of-midas-1",
+    "name": "Dull beak of Midas",
+    "tierNumber": 1,
+    "tierName": "Dull",
+    "iconFilename": "afx_beak_of_midas_1.png"
+  },
+  "beak_of_midas_2": {
+    "id": "beak-of-midas-2",
+    "name": "Beak of Midas",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_beak_of_midas_2.png"
+  },
+  "beak_of_midas_3": {
+    "id": "beak-of-midas-3",
+    "name": "Jeweled beak of Midas",
+    "tierNumber": 3,
+    "tierName": "Jeweled",
+    "iconFilename": "afx_beak_of_midas_3.png"
+  },
+  "beak_of_midas_4": {
+    "id": "beak-of-midas-4",
+    "name": "Glistening beak of Midas",
+    "tierNumber": 4,
+    "tierName": "Glistening",
+    "iconFilename": "afx_beak_of_midas_4.png"
+  },
+  "book_of_basan_1": {
+    "id": "book-of-basan-1",
+    "name": "Book of Basan",
+    "tierNumber": 1,
+    "tierName": "Regular",
+    "iconFilename": "afx_book_of_basan_1.png"
+  },
+  "book_of_basan_2": {
+    "id": "book-of-basan-2",
+    "name": "Collectors book of Basan",
+    "tierNumber": 2,
+    "tierName": "Collectors",
+    "iconFilename": "afx_book_of_basan_2.png"
+  },
+  "book_of_basan_3": {
+    "id": "book-of-basan-3",
+    "name": "Fortified book of Basan",
+    "tierNumber": 3,
+    "tierName": "Fortified",
+    "iconFilename": "afx_book_of_basan_3.png"
+  },
+  "book_of_basan_4": {
+    "id": "book-of-basan-4",
+    "name": "Gilded book of Basan",
+    "tierNumber": 4,
+    "tierName": "Gilded",
+    "iconFilename": "afx_book_of_basan_4.png"
+  },
+  "carved_rainstick_1": {
+    "id": "carved-rainstick-1",
+    "name": "Simple carved rainstick",
+    "tierNumber": 1,
+    "tierName": "Simple",
+    "iconFilename": "afx_carved_rainstick_1.png"
+  },
+  "carved_rainstick_2": {
+    "id": "carved-rainstick-2",
+    "name": "Carved rainstick",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_carved_rainstick_2.png"
+  },
+  "carved_rainstick_3": {
+    "id": "carved-rainstick-3",
+    "name": "Ornate carved rainstick",
+    "tierNumber": 3,
+    "tierName": "Ornate",
+    "iconFilename": "afx_carved_rainstick_3.png"
+  },
+  "carved_rainstick_4": {
+    "id": "carved-rainstick-4",
+    "name": "Meggnificent carved rainstick",
+    "tierNumber": 4,
+    "tierName": "Meggnificent",
+    "iconFilename": "afx_carved_rainstick_4.png"
+  },
+  "clarity_stone_1": {
+    "id": "clarity-stone-1",
+    "name": "Clarity stone fragment",
+    "tierNumber": 1,
+    "tierName": "Fragment",
+    "iconFilename": "afx_clarity_stone_1.png"
+  },
+  "clarity_stone_2": {
+    "id": "clarity-stone-2",
+    "name": "Clarity stone",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_clarity_stone_2.png"
+  },
+  "clarity_stone_3": {
+    "id": "clarity-stone-3",
+    "name": "Eggsquisite clarity stone",
+    "tierNumber": 3,
+    "tierName": "Eggsquisite",
+    "iconFilename": "afx_clarity_stone_3.png"
+  },
+  "clarity_stone_4": {
+    "id": "clarity-stone-4",
+    "name": "Eggceptional clarity stone",
+    "tierNumber": 4,
+    "tierName": "Eggceptional",
+    "iconFilename": "afx_clarity_stone_4.png"
+  },
+  "demeters_necklace_1": {
+    "id": "demeters-necklace-1",
+    "name": "Simple Demeters necklace",
+    "tierNumber": 1,
+    "tierName": "Simple",
+    "iconFilename": "afx_demeters_necklace_1.png"
+  },
+  "demeters_necklace_2": {
+    "id": "demeters-necklace-2",
+    "name": "Jeweled Demeters necklace",
+    "tierNumber": 2,
+    "tierName": "Jeweled",
+    "iconFilename": "afx_demeters_necklace_2.png"
+  },
+  "demeters_necklace_3": {
+    "id": "demeters-necklace-3",
+    "name": "Pristine Demeters necklace",
+    "tierNumber": 3,
+    "tierName": "Pristine",
+    "iconFilename": "afx_demeters_necklace_3.png"
+  },
+  "demeters_necklace_4": {
+    "id": "demeters-necklace-4",
+    "name": "Beggspoke Demeters necklace",
+    "tierNumber": 4,
+    "tierName": "Beggspoke",
+    "iconFilename": "afx_demeters_necklace_4.png"
+  },
+  "dilithium_monocle_1": {
+    "id": "dilithium-monocle-1",
+    "name": "Dilithium monocle",
+    "tierNumber": 1,
+    "tierName": "Regular",
+    "iconFilename": "afx_dilithium_monocle_1.png"
+  },
+  "dilithium_monocle_2": {
+    "id": "dilithium-monocle-2",
+    "name": "Precise dilithium monocle",
+    "tierNumber": 2,
+    "tierName": "Precise",
+    "iconFilename": "afx_dilithium_monocle_2.png"
+  },
+  "dilithium_monocle_3": {
+    "id": "dilithium-monocle-3",
+    "name": "Eggsacting dilithium monocle",
+    "tierNumber": 3,
+    "tierName": "Eggsacting",
+    "iconFilename": "afx_dilithium_monocle_3.png"
+  },
+  "dilithium_monocle_4": {
+    "id": "dilithium-monocle-4",
+    "name": "Flawless dilithium monocle",
+    "tierNumber": 4,
+    "tierName": "Flawless",
+    "iconFilename": "afx_dilithium_monocle_4.png"
+  },
+  "dilithium_stone_1": {
+    "id": "dilithium-stone-1",
+    "name": "Dilithium stone fragment",
+    "tierNumber": 1,
+    "tierName": "Fragment",
+    "iconFilename": "afx_dilithium_stone_1.png"
+  },
+  "dilithium_stone_2": {
+    "id": "dilithium-stone-2",
+    "name": "Dilithium stone",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_dilithium_stone_2.png"
+  },
+  "dilithium_stone_3": {
+    "id": "dilithium-stone-3",
+    "name": "Eggsquisite dilithium stone",
+    "tierNumber": 3,
+    "tierName": "Eggsquisite",
+    "iconFilename": "afx_dilithium_stone_3.png"
+  },
+  "dilithium_stone_4": {
+    "id": "dilithium-stone-4",
+    "name": "Brilliant dilithium stone",
+    "tierNumber": 4,
+    "tierName": "Brilliant",
+    "iconFilename": "afx_dilithium_stone_4.png"
+  },
+  "gold_meteorite_1": {
+    "id": "gold-meteorite-1",
+    "name": "Tiny gold meteorite",
+    "tierNumber": 1,
+    "tierName": "Tiny",
+    "iconFilename": "afx_gold_meteorite_1.png"
+  },
+  "gold_meteorite_2": {
+    "id": "gold-meteorite-2",
+    "name": "Enriched gold meteorite",
+    "tierNumber": 2,
+    "tierName": "Enriched",
+    "iconFilename": "afx_gold_meteorite_2.png"
+  },
+  "gold_meteorite_3": {
+    "id": "gold-meteorite-3",
+    "name": "Solid gold meteorite",
+    "tierNumber": 3,
+    "tierName": "Solid",
+    "iconFilename": "afx_gold_meteorite_3.png"
+  },
+  "interstellar_compass_1": {
+    "id": "interstellar-compass-1",
+    "name": "Miscalibrated interstellar compass",
+    "tierNumber": 1,
+    "tierName": "Miscalibrated",
+    "iconFilename": "afx_interstellar_compass_1.png"
+  },
+  "interstellar_compass_2": {
+    "id": "interstellar-compass-2",
+    "name": "Interstellar compass",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_interstellar_compass_2.png"
+  },
+  "interstellar_compass_3": {
+    "id": "interstellar-compass-3",
+    "name": "Precise interstellar compass",
+    "tierNumber": 3,
+    "tierName": "Precise",
+    "iconFilename": "afx_interstellar_compass_3.png"
+  },
+  "interstellar_compass_4": {
+    "id": "interstellar-compass-4",
+    "name": "Clairvoyant interstellar compass",
+    "tierNumber": 4,
+    "tierName": "Clairvoyant",
+    "iconFilename": "afx_interstellar_compass_4.png"
+  },
+  "life_stone_1": {
+    "id": "life-stone-1",
+    "name": "Life stone fragment",
+    "tierNumber": 1,
+    "tierName": "Fragment",
+    "iconFilename": "afx_life_stone_1.png"
+  },
+  "life_stone_2": {
+    "id": "life-stone-2",
+    "name": "Life stone",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_life_stone_2.png"
+  },
+  "life_stone_3": {
+    "id": "life-stone-3",
+    "name": "Good life stone",
+    "tierNumber": 3,
+    "tierName": "Good",
+    "iconFilename": "afx_life_stone_3.png"
+  },
+  "life_stone_4": {
+    "id": "life-stone-4",
+    "name": "Eggceptional life stone",
+    "tierNumber": 4,
+    "tierName": "Eggceptional",
+    "iconFilename": "afx_life_stone_4.png"
+  },
+  "light_of_eggendil_1": {
+    "id": "light-of-eggendil-1",
+    "name": "Dim light of Eggendil",
+    "tierNumber": 1,
+    "tierName": "Dim",
+    "iconFilename": "afx_light_eggendil_1.png"
+  },
+  "light_of_eggendil_2": {
+    "id": "light-of-eggendil-2",
+    "name": "Shimmering light of Eggendil",
+    "tierNumber": 2,
+    "tierName": "Shimmering",
+    "iconFilename": "afx_light_eggendil_2.png"
+  },
+  "light_of_eggendil_3": {
+    "id": "light-of-eggendil-3",
+    "name": "Glowing light of Eggendil",
+    "tierNumber": 3,
+    "tierName": "Glowing",
+    "iconFilename": "afx_light_eggendil_3.png"
+  },
+  "light_of_eggendil_4": {
+    "id": "light-of-eggendil-4",
+    "name": "Brilliant light of Eggendil",
+    "tierNumber": 4,
+    "tierName": "Brilliant",
+    "iconFilename": "afx_light_eggendil_4.png"
+  },
+  "lunar_stone_1": {
+    "id": "lunar-stone-1",
+    "name": "Lunar stone fragment",
+    "tierNumber": 1,
+    "tierName": "Fragment",
+    "iconFilename": "afx_lunar_stone_1.png"
+  },
+  "lunar_stone_2": {
+    "id": "lunar-stone-2",
+    "name": "Lunar stone",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_lunar_stone_2.png"
+  },
+  "lunar_stone_3": {
+    "id": "lunar-stone-3",
+    "name": "Eggsquisite lunar stone",
+    "tierNumber": 3,
+    "tierName": "Eggsquisite",
+    "iconFilename": "afx_lunar_stone_3.png"
+  },
+  "lunar_stone_4": {
+    "id": "lunar-stone-4",
+    "name": "Meggnificent lunar stone",
+    "tierNumber": 4,
+    "tierName": "Meggnificent",
+    "iconFilename": "afx_lunar_stone_4.png"
+  },
+  "lunar_totem_1": {
+    "id": "lunar-totem-1",
+    "name": "Basic lunar totem",
+    "tierNumber": 1,
+    "tierName": "Basic",
+    "iconFilename": "afx_lunar_totem_1.png"
+  },
+  "lunar_totem_2": {
+    "id": "lunar-totem-2",
+    "name": "Lunar totem",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_lunar_totem_2.png"
+  },
+  "lunar_totem_3": {
+    "id": "lunar-totem-3",
+    "name": "Powerful lunar totem",
+    "tierNumber": 3,
+    "tierName": "Powerful",
+    "iconFilename": "afx_lunar_totem_3.png"
+  },
+  "lunar_totem_4": {
+    "id": "lunar-totem-4",
+    "name": "Eggceptional lunar totem",
+    "tierNumber": 4,
+    "tierName": "Eggceptional",
+    "iconFilename": "afx_lunar_totem_4.png"
+  },
+  "mercurys_lens_1": {
+    "id": "mercurys-lens-1",
+    "name": "Misaligned Mercury's lens",
+    "tierNumber": 1,
+    "tierName": "Misaligned",
+    "iconFilename": "afx_mercurys_lens_1.png"
+  },
+  "mercurys_lens_2": {
+    "id": "mercurys-lens-2",
+    "name": "Mercury's lens",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_mercurys_lens_2.png"
+  },
+  "mercurys_lens_3": {
+    "id": "mercurys-lens-3",
+    "name": "Precise Mercury's lens",
+    "tierNumber": 3,
+    "tierName": "Precise",
+    "iconFilename": "afx_mercurys_lens_3.png"
+  },
+  "mercurys_lens_4": {
+    "id": "mercurys-lens-4",
+    "name": "Meggnificent Mercury's lens",
+    "tierNumber": 4,
+    "tierName": "Meggnificent",
+    "iconFilename": "afx_mercurys_lens_4.png"
+  },
+  "neodymium_medallion_1": {
+    "id": "neodymium-medallion-1",
+    "name": "Weak neodymium medallion",
+    "tierNumber": 1,
+    "tierName": "Weak",
+    "iconFilename": "afx_neo_medallion_1.png"
+  },
+  "neodymium_medallion_2": {
+    "id": "neodymium-medallion-2",
+    "name": "Neodymium medallion",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_neo_medallion_2.png"
+  },
+  "neodymium_medallion_3": {
+    "id": "neodymium-medallion-3",
+    "name": "Precise neodymium medallion",
+    "tierNumber": 3,
+    "tierName": "Precise",
+    "iconFilename": "afx_neo_medallion_3.png"
+  },
+  "neodymium_medallion_4": {
+    "id": "neodymium-medallion-4",
+    "name": "Eggceptional neodymium medallion",
+    "tierNumber": 4,
+    "tierName": "Eggceptional",
+    "iconFilename": "afx_neo_medallion_4.png"
+  },
+  "ornate_gusset_1": {
+    "id": "gusset-1",
+    "name": "Plain gusset",
+    "tierNumber": 1,
+    "tierName": "Plain",
+    "iconFilename": "afx_ornate_gusset_1.png"
+  },
+  "ornate_gusset_2": {
+    "id": "gusset-2",
+    "name": "Ornate gusset",
+    "tierNumber": 2,
+    "tierName": "Ornate",
+    "iconFilename": "afx_ornate_gusset_2.png"
+  },
+  "ornate_gusset_3": {
+    "id": "gusset-3",
+    "name": "Distegguished gusset",
+    "tierNumber": 3,
+    "tierName": "Distegguished",
+    "iconFilename": "afx_ornate_gusset_3.png"
+  },
+  "ornate_gusset_4": {
+    "id": "gusset-4",
+    "name": "Jeweled gusset",
+    "tierNumber": 4,
+    "tierName": "Jeweled",
+    "iconFilename": "afx_ornate_gusset_4.png"
+  },
+  "phoenix_feather_1": {
+    "id": "phoenix-feather-1",
+    "name": "Tattered phoenix feather",
+    "tierNumber": 1,
+    "tierName": "Tattered",
+    "iconFilename": "afx_phoenix_feather_1.png"
+  },
+  "phoenix_feather_2": {
+    "id": "phoenix-feather-2",
+    "name": "Phoenix feather",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_phoenix_feather_2.png"
+  },
+  "phoenix_feather_3": {
+    "id": "phoenix-feather-3",
+    "name": "Brilliant phoenix feather",
+    "tierNumber": 3,
+    "tierName": "Brilliant",
+    "iconFilename": "afx_phoenix_feather_3.png"
+  },
+  "phoenix_feather_4": {
+    "id": "phoenix-feather-4",
+    "name": "Blazing phoenix feather",
+    "tierNumber": 4,
+    "tierName": "Blazing",
+    "iconFilename": "afx_phoenix_feather_4.png"
+  },
+  "prophecy_stone_1": {
+    "id": "prophecy-stone-1",
+    "name": "Prophecy stone fragment",
+    "tierNumber": 1,
+    "tierName": "Fragment",
+    "iconFilename": "afx_prophecy_stone_1.png"
+  },
+  "prophecy_stone_2": {
+    "id": "prophecy-stone-2",
+    "name": "Prophecy stone",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_prophecy_stone_2.png"
+  },
+  "prophecy_stone_3": {
+    "id": "prophecy-stone-3",
+    "name": "Eggsquisite prophecy stone",
+    "tierNumber": 3,
+    "tierName": "Eggsquisite",
+    "iconFilename": "afx_prophecy_stone_3.png"
+  },
+  "prophecy_stone_4": {
+    "id": "prophecy-stone-4",
+    "name": "Radiant prophecy stone",
+    "tierNumber": 4,
+    "tierName": "Radiant",
+    "iconFilename": "afx_prophecy_stone_4.png"
+  },
+  "puzzle_cube_1": {
+    "id": "puzzle-cube-1",
+    "name": "Ancient puzzle cube",
+    "tierNumber": 1,
+    "tierName": "Ancient",
+    "iconFilename": "afx_puzzle_cube_1.png"
+  },
+  "puzzle_cube_2": {
+    "id": "puzzle-cube-2",
+    "name": "Puzzle cube",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_puzzle_cube_2.png"
+  },
+  "puzzle_cube_3": {
+    "id": "puzzle-cube-3",
+    "name": "Mystical puzzle cube",
+    "tierNumber": 3,
+    "tierName": "Mystical",
+    "iconFilename": "afx_puzzle_cube_3.png"
+  },
+  "puzzle_cube_4": {
+    "id": "puzzle-cube-4",
+    "name": "Unsolvable puzzle cube",
+    "tierNumber": 4,
+    "tierName": "Unsolvable",
+    "iconFilename": "afx_puzzle_cube_4.png"
+  },
+  "quantum_metronome_1": {
+    "id": "quantum-metronome-1",
+    "name": "Misaligned quantum metronome",
+    "tierNumber": 1,
+    "tierName": "Misaligned",
+    "iconFilename": "afx_quantum_metronome_1.png"
+  },
+  "quantum_metronome_2": {
+    "id": "quantum-metronome-2",
+    "name": "Adequate quantum metronome",
+    "tierNumber": 2,
+    "tierName": "Adequate",
+    "iconFilename": "afx_quantum_metronome_2.png"
+  },
+  "quantum_metronome_3": {
+    "id": "quantum-metronome-3",
+    "name": "Perfect quantum metronome",
+    "tierNumber": 3,
+    "tierName": "Perfect",
+    "iconFilename": "afx_quantum_metronome_3.png"
+  },
+  "quantum_metronome_4": {
+    "id": "quantum-metronome-4",
+    "name": "Reggference quantum metronome",
+    "tierNumber": 4,
+    "tierName": "Reggference",
+    "iconFilename": "afx_quantum_metronome_4.png"
+  },
+  "quantum_stone_1": {
+    "id": "quantum-stone-1",
+    "name": "Quantum stone fragment",
+    "tierNumber": 1,
+    "tierName": "Fragment",
+    "iconFilename": "afx_quantum_stone_1.png"
+  },
+  "quantum_stone_2": {
+    "id": "quantum-stone-2",
+    "name": "Quantum stone",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_quantum_stone_2.png"
+  },
+  "quantum_stone_3": {
+    "id": "quantum-stone-3",
+    "name": "Phased quantum stone",
+    "tierNumber": 3,
+    "tierName": "Phased",
+    "iconFilename": "afx_quantum_stone_3.png"
+  },
+  "quantum_stone_4": {
+    "id": "quantum-stone-4",
+    "name": "Meggnificent quantum stone",
+    "tierNumber": 4,
+    "tierName": "Meggnificent",
+    "iconFilename": "afx_quantum_stone_4.png"
+  },
+  "shell_stone_1": {
+    "id": "shell-stone-1",
+    "name": "Shell stone fragment",
+    "tierNumber": 1,
+    "tierName": "Fragment",
+    "iconFilename": "afx_shell_stone_1.png"
+  },
+  "shell_stone_2": {
+    "id": "shell-stone-2",
+    "name": "Shell stone",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_shell_stone_2.png"
+  },
+  "shell_stone_3": {
+    "id": "shell-stone-3",
+    "name": "Eggsquisite shell stone",
+    "tierNumber": 3,
+    "tierName": "Eggsquisite",
+    "iconFilename": "afx_shell_stone_3.png"
+  },
+  "shell_stone_4": {
+    "id": "shell-stone-4",
+    "name": "Flawless shell stone",
+    "tierNumber": 4,
+    "tierName": "Flawless",
+    "iconFilename": "afx_shell_stone_4.png"
+  },
+  "ship_in_a_bottle_1": {
+    "id": "ship-in-a-bottle-1",
+    "name": "Ship in a bottle",
+    "tierNumber": 1,
+    "tierName": "Regular",
+    "iconFilename": "afx_ship_in_a_bottle_1.png"
+  },
+  "ship_in_a_bottle_2": {
+    "id": "ship-in-a-bottle-2",
+    "name": "Detailed ship in a bottle",
+    "tierNumber": 2,
+    "tierName": "Detailed",
+    "iconFilename": "afx_ship_in_a_bottle_2.png"
+  },
+  "ship_in_a_bottle_3": {
+    "id": "ship-in-a-bottle-3",
+    "name": "Complex ship in a bottle",
+    "tierNumber": 3,
+    "tierName": "Complex",
+    "iconFilename": "afx_ship_in_a_bottle_3.png"
+  },
+  "ship_in_a_bottle_4": {
+    "id": "ship-in-a-bottle-4",
+    "name": "Eggquisite ship in a bottle",
+    "tierNumber": 4,
+    "tierName": "Eggquisite",
+    "iconFilename": "afx_ship_in_a_bottle_4.png"
+  },
+  "solar_titanium_1": {
+    "id": "solar-titanium-1",
+    "name": "Solar titanium ore",
+    "tierNumber": 1,
+    "tierName": "Ore",
+    "iconFilename": "afx_solar_titanium_1.png"
+  },
+  "solar_titanium_2": {
+    "id": "solar-titanium-2",
+    "name": "Solar titanium bar",
+    "tierNumber": 2,
+    "tierName": "Bar",
+    "iconFilename": "afx_solar_titanium_2.png"
+  },
+  "solar_titanium_3": {
+    "id": "solar-titanium-3",
+    "name": "Solar titanium geogon",
+    "tierNumber": 3,
+    "tierName": "Geogon",
+    "iconFilename": "afx_solar_titanium_3.png"
+  },
+  "soul_stone_1": {
+    "id": "soul-stone-1",
+    "name": "Soul stone fragment",
+    "tierNumber": 1,
+    "tierName": "Fragment",
+    "iconFilename": "afx_soul_stone_1.png"
+  },
+  "soul_stone_2": {
+    "id": "soul-stone-2",
+    "name": "Soul stone",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_soul_stone_2.png"
+  },
+  "soul_stone_3": {
+    "id": "soul-stone-3",
+    "name": "Eggsquisite soul stone",
+    "tierNumber": 3,
+    "tierName": "Eggsquisite",
+    "iconFilename": "afx_soul_stone_3.png"
+  },
+  "soul_stone_4": {
+    "id": "soul-stone-4",
+    "name": "Radiant soul stone",
+    "tierNumber": 4,
+    "tierName": "Radiant",
+    "iconFilename": "afx_soul_stone_4.png"
+  },
+  "tachyon_deflector_1": {
+    "id": "tachyon-deflector-1",
+    "name": "Weak tachyon deflector",
+    "tierNumber": 1,
+    "tierName": "Weak",
+    "iconFilename": "afx_tachyon_deflector_1.png"
+  },
+  "tachyon_deflector_2": {
+    "id": "tachyon-deflector-2",
+    "name": "Tachyon deflector",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_tachyon_deflector_2.png"
+  },
+  "tachyon_deflector_3": {
+    "id": "tachyon-deflector-3",
+    "name": "Robust tachyon deflector",
+    "tierNumber": 3,
+    "tierName": "Robust",
+    "iconFilename": "afx_tachyon_deflector_3.png"
+  },
+  "tachyon_deflector_4": {
+    "id": "tachyon-deflector-4",
+    "name": "Eggceptional tachyon deflector",
+    "tierNumber": 4,
+    "tierName": "Eggceptional",
+    "iconFilename": "afx_tachyon_deflector_4.png"
+  },
+  "tachyon_stone_1": {
+    "id": "tachyon-stone-1",
+    "name": "Tachyon stone fragment",
+    "tierNumber": 1,
+    "tierName": "Fragment",
+    "iconFilename": "afx_tachyon_stone_1.png"
+  },
+  "tachyon_stone_2": {
+    "id": "tachyon-stone-2",
+    "name": "Tachyon stone",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_tachyon_stone_2.png"
+  },
+  "tachyon_stone_3": {
+    "id": "tachyon-stone-3",
+    "name": "Eggsquisite tachyon stone",
+    "tierNumber": 3,
+    "tierName": "Eggsquisite",
+    "iconFilename": "afx_tachyon_stone_3.png"
+  },
+  "tachyon_stone_4": {
+    "id": "tachyon-stone-4",
+    "name": "Brilliant tachyon stone",
+    "tierNumber": 4,
+    "tierName": "Brilliant",
+    "iconFilename": "afx_tachyon_stone_4.png"
+  },
+  "tau_ceti_geode_1": {
+    "id": "tau-ceti-geode-1",
+    "name": "Tau Ceti geode piece",
+    "tierNumber": 1,
+    "tierName": "Tau",
+    "iconFilename": "afx_tau_ceti_geode_1.png"
+  },
+  "tau_ceti_geode_2": {
+    "id": "tau-ceti-geode-2",
+    "name": "Glimmering Tau Ceti geode",
+    "tierNumber": 2,
+    "tierName": "Glimmering",
+    "iconFilename": "afx_tau_ceti_geode_2.png"
+  },
+  "tau_ceti_geode_3": {
+    "id": "tau-ceti-geode-3",
+    "name": "Radiant Tau Ceti geode",
+    "tierNumber": 3,
+    "tierName": "Radiant",
+    "iconFilename": "afx_tau_ceti_geode_3.png"
+  },
+  "terra_stone_1": {
+    "id": "terra-stone-1",
+    "name": "Terra stone fragment",
+    "tierNumber": 1,
+    "tierName": "Fragment",
+    "iconFilename": "afx_terra_stone_1.png"
+  },
+  "terra_stone_2": {
+    "id": "terra-stone-2",
+    "name": "Terra stone",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_terra_stone_2.png"
+  },
+  "terra_stone_3": {
+    "id": "terra-stone-3",
+    "name": "Rich terra stone",
+    "tierNumber": 3,
+    "tierName": "Rich",
+    "iconFilename": "afx_terra_stone_3.png"
+  },
+  "terra_stone_4": {
+    "id": "terra-stone-4",
+    "name": "Eggceptional terra stone",
+    "tierNumber": 4,
+    "tierName": "Eggceptional",
+    "iconFilename": "afx_terra_stone_4.png"
+  },
+  "the_chalice_1": {
+    "id": "the-chalice-1",
+    "name": "Plain chalice",
+    "tierNumber": 1,
+    "tierName": "Plain",
+    "iconFilename": "afx_the_chalice_1.png"
+  },
+  "the_chalice_2": {
+    "id": "the-chalice-2",
+    "name": "Polished chalice",
+    "tierNumber": 2,
+    "tierName": "Polished",
+    "iconFilename": "afx_the_chalice_2.png"
+  },
+  "the_chalice_3": {
+    "id": "the-chalice-3",
+    "name": "Jeweled chalice",
+    "tierNumber": 3,
+    "tierName": "Jeweled",
+    "iconFilename": "afx_the_chalice_3.png"
+  },
+  "the_chalice_4": {
+    "id": "the-chalice-4",
+    "name": "Eggceptional chalice",
+    "tierNumber": 4,
+    "tierName": "Eggceptional",
+    "iconFilename": "afx_the_chalice_4.png"
+  },
+  "titanium_actuator_1": {
+    "id": "titanium-actuator-1",
+    "name": "Inconsistent titanium actuator",
+    "tierNumber": 1,
+    "tierName": "Inconsistent",
+    "iconFilename": "afx_titanium_actuator_1.png"
+  },
+  "titanium_actuator_2": {
+    "id": "titanium-actuator-2",
+    "name": "Titanium actuator",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_titanium_actuator_2.png"
+  },
+  "titanium_actuator_3": {
+    "id": "titanium-actuator-3",
+    "name": "Precise titanium actuator",
+    "tierNumber": 3,
+    "tierName": "Precise",
+    "iconFilename": "afx_titanium_actuator_3.png"
+  },
+  "titanium_actuator_4": {
+    "id": "titanium-actuator-4",
+    "name": "Reggference titanium actuator",
+    "tierNumber": 4,
+    "tierName": "Reggference",
+    "iconFilename": "afx_titanium_actuator_4.png"
+  },
+  "tungsten_ankh_1": {
+    "id": "tungsten-ankh-1",
+    "name": "Crude tungsten ankh",
+    "tierNumber": 1,
+    "tierName": "Crude",
+    "iconFilename": "afx_tungsten_ankh_1.png"
+  },
+  "tungsten_ankh_2": {
+    "id": "tungsten-ankh-2",
+    "name": "Tungsten ankh",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_tungsten_ankh_2.png"
+  },
+  "tungsten_ankh_3": {
+    "id": "tungsten-ankh-3",
+    "name": "Polished tungsten ankh",
+    "tierNumber": 3,
+    "tierName": "Polished",
+    "iconFilename": "afx_tungsten_ankh_3.png"
+  },
+  "tungsten_ankh_4": {
+    "id": "tungsten-ankh-4",
+    "name": "Brilliant tungsten ankh",
+    "tierNumber": 4,
+    "tierName": "Brilliant",
+    "iconFilename": "afx_tungsten_ankh_4.png"
+  },
+  "vial_martian_dust_1": {
+    "id": "vial-of-martian-dust-1",
+    "name": "Tiny vial of Martian dust",
+    "tierNumber": 1,
+    "tierName": "Tiny",
+    "iconFilename": "afx_vial_martian_dust_1.png"
+  },
+  "vial_martian_dust_2": {
+    "id": "vial-of-martian-dust-2",
+    "name": "Vial of Martian dust",
+    "tierNumber": 2,
+    "tierName": "Regular",
+    "iconFilename": "afx_vial_martian_dust_2.png"
+  },
+  "vial_martian_dust_3": {
+    "id": "vial-of-martian-dust-3",
+    "name": "Hermetic vial of Martian dust",
+    "tierNumber": 3,
+    "tierName": "Hermetic",
+    "iconFilename": "afx_vial_martian_dust_3.png"
+  },
+  "vial_martian_dust_4": {
+    "id": "vial-of-martian-dust-4",
+    "name": "Prime vial of Martian dust",
+    "tierNumber": 4,
+    "tierName": "Prime",
+    "iconFilename": "afx_vial_martian_dust_4.png"
+  }
+}

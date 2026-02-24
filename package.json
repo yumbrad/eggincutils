@@ -1,0 +1,26 @@
+{
+  "name": "eggincutils",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "axios": "^1.13.5",
+    "next": "^14.2.35",
+    "protobufjs": "^8.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "22.0.0",
+    "@types/react": "18.3.3",
+    "typescript": "5.5.4",
+    "vitest": "^1.6.1"
+  }
+}

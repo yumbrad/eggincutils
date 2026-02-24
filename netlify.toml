@@ -1,14 +1,5 @@
-[[redirects]]
-from = "/xp-ge-craft"
-to = "https://xp-ge-craft.netlify.app/xp-ge-craft"
-status = 200
+[build]
+command = "npm run build"
 
-[[redirects]]
-from = "/xp-ge-craft/*"
-to = "https://xp-ge-craft.netlify.app/xp-ge-craft/:splat"
-status = 200
-
-[[redirects]]
-from = "/ship-timer/*"
-to = "https://ship-timer.netlify.app/:splat"
-status = 200
+[[plugins]]
+package = "@netlify/plugin-nextjs"

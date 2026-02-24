@@ -1,0 +1,784 @@
+{
+    "puzzle_cube_1": null,
+    "puzzle_cube_2": {
+        "ingredients": {
+            "puzzle_cube_1": 3
+        },
+        "xp": 32,
+        "cost": 91
+    },
+    "puzzle_cube_3": {
+        "ingredients": {
+            "puzzle_cube_2": 7,
+            "ornate_gusset_1": 2
+        },
+        "xp": 17767,
+        "cost": 14673
+    },
+    "puzzle_cube_4": {
+        "ingredients": {
+            "puzzle_cube_3": 10,
+            "gold_meteorite_3": 2
+        },
+        "xp": 252473,
+        "cost": 110353
+    },
+    "lunar_totem_1": null,
+    "lunar_totem_2": {
+        "ingredients": {
+            "lunar_totem_1": 3
+        },
+        "xp": 273,
+        "cost": 553
+    },
+    "lunar_totem_3": {
+        "ingredients": {
+            "lunar_totem_2": 6
+        },
+        "xp": 13972,
+        "cost": 12234
+    },
+    "lunar_totem_4": {
+        "ingredients": {
+            "lunar_totem_3": 6,
+            "solar_titanium_2": 1
+        },
+        "xp": 210070,
+        "cost": 91819
+    },
+    "demeters_necklace_1": null,
+    "demeters_necklace_2": {
+        "ingredients": {
+            "demeters_necklace_1": 3
+        },
+        "xp": 175,
+        "cost": 383
+    },
+    "demeters_necklace_3": {
+        "ingredients": {
+            "demeters_necklace_2": 5,
+            "the_chalice_1": 2
+        },
+        "xp": 7514,
+        "cost": 7628
+    },
+    "demeters_necklace_4": {
+        "ingredients": {
+            "demeters_necklace_3": 6,
+            "gold_meteorite_3": 1
+        },
+        "xp": 70868,
+        "cost": 41267
+    },
+    "vial_martian_dust_1": null,
+    "vial_martian_dust_2": {
+        "ingredients": {
+            "vial_martian_dust_1": 5
+        },
+        "xp": 2546,
+        "cost": 3303
+    },
+    "vial_martian_dust_3": {
+        "ingredients": {
+            "vial_martian_dust_2": 7,
+            "solar_titanium_2": 2
+        },
+        "xp": 38768,
+        "cost": 26354
+    },
+    "vial_martian_dust_4": {
+        "ingredients": {
+            "vial_martian_dust_3": 8,
+            "tau_ceti_geode_3": 1
+        },
+        "xp": 371742,
+        "cost": 139254
+    },
+    "aurelian_brooch_1": null,
+    "aurelian_brooch_2": {
+        "ingredients": {
+            "aurelian_brooch_1": 5
+        },
+        "xp": 699,
+        "cost": 1187
+    },
+    "aurelian_brooch_3": {
+        "ingredients": {
+            "aurelian_brooch_2": 7,
+            "demeters_necklace_3": 2
+        },
+        "xp": 16424,
+        "cost": 13827
+    },
+    "aurelian_brooch_4": {
+        "ingredients": {
+            "aurelian_brooch_3": 10,
+            "gold_meteorite_3": 2
+        },
+        "xp": 114342,
+        "cost": 58753
+    },
+    "tungsten_ankh_1": null,
+    "tungsten_ankh_2": {
+        "ingredients": {
+            "tungsten_ankh_1": 6
+        },
+        "xp": 3236,
+        "cost": 3982
+    },
+    "tungsten_ankh_3": {
+        "ingredients": {
+            "tungsten_ankh_2": 7,
+            "solar_titanium_2": 2
+        },
+        "xp": 36318,
+        "cost": 25100
+    },
+    "tungsten_ankh_4": {
+        "ingredients": {
+            "tungsten_ankh_3": 8,
+            "gold_meteorite_3": 4
+        },
+        "xp": 270812,
+        "cost": 110546
+    },
+    "ornate_gusset_1": null,
+    "ornate_gusset_2": {
+        "ingredients": {
+            "ornate_gusset_1": 5
+        },
+        "xp": 4528,
+        "cost": 5167
+    },
+    "ornate_gusset_3": {
+        "ingredients": {
+            "ornate_gusset_2": 6,
+            "mercurys_lens_2": 2
+        },
+        "xp": 44048,
+        "cost": 28986
+    },
+    "ornate_gusset_4": {
+        "ingredients": {
+            "ornate_gusset_3": 8,
+            "gold_meteorite_3": 3
+        },
+        "xp": 464653,
+        "cost": 163774
+    },
+    "neodymium_medallion_1": null,
+    "neodymium_medallion_2": {
+        "ingredients": {
+            "neodymium_medallion_1": 4
+        },
+        "xp": 3236,
+        "cost": 3982
+    },
+    "neodymium_medallion_3": {
+        "ingredients": {
+            "neodymium_medallion_2": 5,
+            "tau_ceti_geode_2": 1
+        },
+        "xp": 20703,
+        "cost": 16466
+    },
+    "neodymium_medallion_4": {
+        "ingredients": {
+            "neodymium_medallion_3": 6,
+            "interstellar_compass_3": 2
+        },
+        "xp": 114342,
+        "cost": 58753
+    },
+    "mercurys_lens_1": null,
+    "mercurys_lens_2": {
+        "ingredients": {
+            "mercurys_lens_1": 6
+        },
+        "xp": 6823,
+        "cost": 7084
+    },
+    "mercurys_lens_3": {
+        "ingredients": {
+            "mercurys_lens_2": 8,
+            "tau_ceti_geode_2": 2
+        },
+        "xp": 46885,
+        "cost": 30366
+    },
+    "mercurys_lens_4": {
+        "ingredients": {
+            "mercurys_lens_3": 10,
+            "solar_titanium_3": 6
+        },
+        "xp": 871817,
+        "cost": 295511
+    },
+    "beak_of_midas_1": null,
+    "beak_of_midas_2": {
+        "ingredients": {
+            "beak_of_midas_1": 4
+        },
+        "xp": 5586,
+        "cost": 6075
+    },
+    "beak_of_midas_3": {
+        "ingredients": {
+            "beak_of_midas_2": 5,
+            "tau_ceti_geode_2": 1
+        },
+        "xp": 33987,
+        "cost": 23886
+    },
+    "beak_of_midas_4": {
+        "ingredients": {
+            "beak_of_midas_3": 6,
+            "gold_meteorite_3": 3
+        },
+        "xp": 192350,
+        "cost": 86083
+    },
+    "carved_rainstick_1": null,
+    "carved_rainstick_2": {
+        "ingredients": {
+            "carved_rainstick_1": 5,
+            "ornate_gusset_1": 1
+        },
+        "xp": 10830,
+        "cost": 10083
+    },
+    "carved_rainstick_3": {
+        "ingredients": {
+            "carved_rainstick_2": 7,
+            "beak_of_midas_3": 1
+        },
+        "xp": 66967,
+        "cost": 39572
+    },
+    "carved_rainstick_4": {
+        "ingredients": {
+            "carved_rainstick_3": 9,
+            "tau_ceti_geode_3": 2
+        },
+        "xp": 481723,
+        "cost": 168122
+    },
+    "interstellar_compass_1": null,
+    "interstellar_compass_2": {
+        "ingredients": {
+            "interstellar_compass_1": 6
+        },
+        "xp": 9913,
+        "cost": 9426
+    },
+    "interstellar_compass_3": {
+        "ingredients": {
+            "interstellar_compass_2": 8,
+            "solar_titanium_2": 4
+        },
+        "xp": 63232,
+        "cost": 37924
+    },
+    "interstellar_compass_4": {
+        "ingredients": {
+            "interstellar_compass_3": 10,
+            "tau_ceti_geode_3": 4
+        },
+        "xp": 604836,
+        "cost": 226570
+    },
+    "the_chalice_1": null,
+    "the_chalice_2": {
+        "ingredients": {
+            "the_chalice_1": 4,
+            "gold_meteorite_2": 1
+        },
+        "xp": 9057,
+        "cost": 8798
+    },
+    "the_chalice_3": {
+        "ingredients": {
+            "the_chalice_2": 6,
+            "tau_ceti_geode_2": 4
+        },
+        "xp": 46885,
+        "cost": 30366
+    },
+    "the_chalice_4": {
+        "ingredients": {
+            "the_chalice_3": 8,
+            "beak_of_midas_4": 2
+        },
+        "xp": 371742,
+        "cost": 139254
+    },
+    "phoenix_feather_1": null,
+    "phoenix_feather_2": {
+        "ingredients": {
+            "phoenix_feather_1": 6,
+            "tau_ceti_geode_2": 1
+        },
+        "xp": 20703,
+        "cost": 16466
+    },
+    "phoenix_feather_3": {
+        "ingredients": {
+            "phoenix_feather_2": 10,
+            "book_of_basan_1": 2
+        },
+        "xp": 93053,
+        "cost": 50473
+    },
+    "phoenix_feather_4": {
+        "ingredients": {
+            "phoenix_feather_3": 12,
+            "book_of_basan_3": 1
+        },
+        "xp": 775063,
+        "cost": 237297
+    },
+    "quantum_metronome_1": null,
+    "quantum_metronome_2": {
+        "ingredients": {
+            "quantum_metronome_1": 5,
+            "titanium_actuator_1": 2
+        },
+        "xp": 23997,
+        "cost": 18400
+    },
+    "quantum_metronome_3": {
+        "ingredients": {
+            "quantum_metronome_2": 7,
+            "mercurys_lens_3": 4
+        },
+        "xp": 139175,
+        "cost": 67893
+    },
+    "quantum_metronome_4": {
+        "ingredients": {
+            "quantum_metronome_3": 9,
+            "tau_ceti_geode_3": 4
+        },
+        "xp": 992590,
+        "cost": 306621
+    },
+    "dilithium_monocle_1": null,
+    "dilithium_monocle_2": {
+        "ingredients": {
+            "dilithium_monocle_1": 5,
+            "titanium_actuator_1": 1
+        },
+        "xp": 35138,
+        "cost": 24488
+    },
+    "dilithium_monocle_3": {
+        "ingredients": {
+            "dilithium_monocle_2": 8,
+            "solar_titanium_3": 2
+        },
+        "xp": 175798,
+        "cost": 80591
+    },
+    "dilithium_monocle_4": {
+        "ingredients": {
+            "dilithium_monocle_3": 10,
+            "mercurys_lens_4": 2
+        },
+        "xp": 936029,
+        "cost": 271970
+    },
+    "titanium_actuator_1": null,
+    "titanium_actuator_2": {
+        "ingredients": {
+            "titanium_actuator_1": 4,
+            "solar_titanium_2": 4
+        },
+        "xp": 38768,
+        "cost": 26354
+    },
+    "titanium_actuator_3": {
+        "ingredients": {
+            "titanium_actuator_2": 6,
+            "solar_titanium_3": 3
+        },
+        "xp": 201060,
+        "cost": 88920
+    },
+    "titanium_actuator_4": {
+        "ingredients": {
+            "titanium_actuator_3": 8,
+            "quantum_metronome_4": 3
+        },
+        "xp": 680184,
+        "cost": 215901
+    },
+    "ship_in_a_bottle_1": null,
+    "ship_in_a_bottle_2": {
+        "ingredients": {
+            "ship_in_a_bottle_1": 6,
+            "demeters_necklace_4": 2
+        },
+        "xp": 59659,
+        "cost": 36322
+    },
+    "ship_in_a_bottle_3": {
+        "ingredients": {
+            "ship_in_a_bottle_2": 9,
+            "solar_titanium_3": 3
+        },
+        "xp": 282119,
+        "cost": 113895
+    },
+    "ship_in_a_bottle_4": {
+        "ingredients": {
+            "ship_in_a_bottle_3": 12,
+            "book_of_basan_3": 2
+        },
+        "xp": 1522971,
+        "cost": 442510
+    },
+    "tachyon_deflector_1": null,
+    "tachyon_deflector_2": {
+        "ingredients": {
+            "tachyon_deflector_1": 6,
+            "ship_in_a_bottle_2": 2
+        },
+        "xp": 139767,
+        "cost": 77412
+    },
+    "tachyon_deflector_3": {
+        "ingredients": {
+            "tachyon_deflector_2": 10,
+            "quantum_metronome_4": 1
+        },
+        "xp": 728996,
+        "cost": 259516
+    },
+    "tachyon_deflector_4": {
+        "ingredients": {
+            "tachyon_deflector_3": 12,
+            "ship_in_a_bottle_4": 4
+        },
+        "xp": 4858320,
+        "cost": 1220592
+    },
+    "book_of_basan_1": null,
+    "book_of_basan_2": {
+        "ingredients": {
+            "book_of_basan_1": 6,
+            "gold_meteorite_3": 4
+        },
+        "xp": 237510,
+        "cost": 114405
+    },
+    "book_of_basan_3": {
+        "ingredients": {
+            "book_of_basan_2": 10,
+            "the_chalice_4": 3
+        },
+        "xp": 1043048,
+        "cost": 360473
+    },
+    "book_of_basan_4": {
+        "ingredients": {
+            "book_of_basan_3": 12,
+            "light_of_eggendil_4": 1
+        },
+        "xp": 3663626,
+        "cost": 934702
+    },
+    "light_of_eggendil_1": null,
+    "light_of_eggendil_2": {
+        "ingredients": {
+            "light_of_eggendil_1": 5,
+            "tau_ceti_geode_3": 1
+        },
+        "xp": 139175,
+        "cost": 67893
+    },
+    "light_of_eggendil_3": {
+        "ingredients": {
+            "light_of_eggendil_2": 7,
+            "phoenix_feather_3": 4
+        },
+        "xp": 481723,
+        "cost": 168122
+    },
+    "light_of_eggendil_4": {
+        "ingredients": {
+            "light_of_eggendil_3": 10,
+            "phoenix_feather_4": 4
+        },
+        "xp": 1224134,
+        "cost": 330069
+    },
+    "lunar_stone_1": null,
+    "lunar_stone_2": {
+        "ingredients": {
+            "lunar_stone_1": 20
+        },
+        "xp": 159,
+        "cost": 774
+    },
+    "lunar_stone_3": {
+        "ingredients": {
+            "lunar_stone_2": 20
+        },
+        "xp": 11890,
+        "cost": 22588
+    },
+    "lunar_stone_4": {
+        "ingredients": {
+            "lunar_stone_3": 25
+        },
+        "xp": 234442,
+        "cost": 203549
+    },
+    "shell_stone_1": null,
+    "shell_stone_2": {
+        "ingredients": {
+            "shell_stone_1": 20
+        },
+        "xp": 43,
+        "cost": 262
+    },
+    "shell_stone_3": {
+        "ingredients": {
+            "shell_stone_2": 20
+        },
+        "xp": 8825,
+        "cost": 18048
+    },
+    "shell_stone_4": {
+        "ingredients": {
+            "shell_stone_3": 10,
+            "dilithium_stone_3": 5
+        },
+        "xp": 202685,
+        "cost": 183125
+    },
+    "tachyon_stone_1": null,
+    "tachyon_stone_2": {
+        "ingredients": {
+            "tachyon_stone_1": 20
+        },
+        "xp": 93,
+        "cost": 496
+    },
+    "tachyon_stone_3": {
+        "ingredients": {
+            "tachyon_stone_2": 15
+        },
+        "xp": 8825,
+        "cost": 18048
+    },
+    "tachyon_stone_4": {
+        "ingredients": {
+            "tachyon_stone_3": 20
+        },
+        "xp": 289070,
+        "cost": 236946
+    },
+    "terra_stone_1": null,
+    "terra_stone_2": {
+        "ingredients": {
+            "terra_stone_1": 20
+        },
+        "xp": 1733,
+        "cost": 5196
+    },
+    "terra_stone_3": {
+        "ingredients": {
+            "terra_stone_2": 15
+        },
+        "xp": 17357,
+        "cost": 29989
+    },
+    "terra_stone_4": {
+        "ingredients": {
+            "terra_stone_3": 20
+        },
+        "xp": 407589,
+        "cost": 303838
+    },
+    "soul_stone_1": null,
+    "soul_stone_2": {
+        "ingredients": {
+            "soul_stone_1": 20
+        },
+        "xp": 1733,
+        "cost": 5196
+    },
+    "soul_stone_3": {
+        "ingredients": {
+            "soul_stone_2": 15
+        },
+        "xp": 45795,
+        "cost": 64771
+    },
+    "soul_stone_4": {
+        "ingredients": {
+            "soul_stone_3": 20
+        },
+        "xp": 283741,
+        "cost": 250022
+    },
+    "dilithium_stone_1": null,
+    "dilithium_stone_2": {
+        "ingredients": {
+            "dilithium_stone_1": 20
+        },
+        "xp": 9893,
+        "cost": 19671
+    },
+    "dilithium_stone_3": {
+        "ingredients": {
+            "dilithium_stone_2": 12
+        },
+        "xp": 68138,
+        "cost": 82572
+    },
+    "dilithium_stone_4": {
+        "ingredients": {
+            "dilithium_stone_3": 15
+        },
+        "xp": 722988,
+        "cost": 459363
+    },
+    "quantum_stone_1": null,
+    "quantum_stone_2": {
+        "ingredients": {
+            "quantum_stone_1": 20
+        },
+        "xp": 2668,
+        "cost": 7253
+    },
+    "quantum_stone_3": {
+        "ingredients": {
+            "quantum_stone_2": 15
+        },
+        "xp": 13697,
+        "cost": 25118
+    },
+    "quantum_stone_4": {
+        "ingredients": {
+            "quantum_stone_3": 20
+        },
+        "xp": 274584,
+        "cost": 228279
+    },
+    "life_stone_1": null,
+    "life_stone_2": {
+        "ingredients": {
+            "life_stone_1": 20
+        },
+        "xp": 4326,
+        "cost": 10507
+    },
+    "life_stone_3": {
+        "ingredients": {
+            "life_stone_2": 12
+        },
+        "xp": 47364,
+        "cost": 63177
+    },
+    "life_stone_4": {
+        "ingredients": {
+            "life_stone_3": 15
+        },
+        "xp": 447455,
+        "cost": 325028
+    },
+    "clarity_stone_1": null,
+    "clarity_stone_2": {
+        "ingredients": {
+            "clarity_stone_1": 20
+        },
+        "xp": 21893,
+        "cost": 36603
+    },
+    "clarity_stone_3": {
+        "ingredients": {
+            "clarity_stone_2": 10,
+            "prophecy_stone_2": 2
+        },
+        "xp": 191437,
+        "cost": 185026
+    },
+    "clarity_stone_4": {
+        "ingredients": {
+            "clarity_stone_3": 20,
+            "prophecy_stone_4": 2
+        },
+        "xp": 1281227,
+        "cost": 774986
+    },
+    "prophecy_stone_1": null,
+    "prophecy_stone_2": {
+        "ingredients": {
+            "prophecy_stone_1": 20
+        },
+        "xp": 32523,
+        "cost": 50259
+    },
+    "prophecy_stone_3": {
+        "ingredients": {
+            "prophecy_stone_2": 10
+        },
+        "xp": 271491,
+        "cost": 246536
+    },
+    "prophecy_stone_4": {
+        "ingredients": {
+            "prophecy_stone_3": 12,
+            "soul_stone_4": 2
+        },
+        "xp": 1182751,
+        "cost": 731674
+    },
+    "gold_meteorite_1": null,
+    "gold_meteorite_2": {
+        "ingredients": {
+            "gold_meteorite_1": 9
+        },
+        "xp": 483,
+        "cost": 3983
+    },
+    "gold_meteorite_3": {
+        "ingredients": {
+            "gold_meteorite_2": 11
+        },
+        "xp": 7814,
+        "cost": 31373
+    },
+    "tau_ceti_geode_1": null,
+    "tau_ceti_geode_2": {
+        "ingredients": {
+            "tau_ceti_geode_1": 12
+        },
+        "xp": 1196,
+        "cost": 7867
+    },
+    "tau_ceti_geode_3": {
+        "ingredients": {
+            "tau_ceti_geode_2": 14
+        },
+        "xp": 16135,
+        "cost": 53150
+    },
+    "solar_titanium_1": null,
+    "solar_titanium_2": {
+        "ingredients": {
+            "solar_titanium_1": 10
+        },
+        "xp": 446,
+        "cost": 3753
+    },
+    "solar_titanium_3": {
+        "ingredients": {
+            "solar_titanium_2": 12
+        },
+        "xp": 10090,
+        "cost": 37794
+    }
+}
