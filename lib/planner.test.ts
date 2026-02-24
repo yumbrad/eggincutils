@@ -5,11 +5,16 @@ import type { PlayerProfile } from "./profile";
 vi.mock("./loot-data", () => ({
   loadLootData: vi.fn(),
 }));
+vi.mock("./highs", () => ({
+  solveWithHighs: vi.fn(),
+}));
 
 import { loadLootData } from "./loot-data";
+import { solveWithHighs } from "./highs";
 import { MissionCoverageError, missionDurationLabel, planForTarget, summarizeCraftRows } from "./planner";
 
 const mockedLoadLootData = vi.mocked(loadLootData);
+const mockedSolveWithHighs = vi.mocked(solveWithHighs);
 
 function baseProfile(): PlayerProfile {
   return {
@@ -43,6 +48,7 @@ describe("planner helpers", () => {
 describe("planForTarget coverage handling", () => {
   beforeEach(() => {
     mockedLoadLootData.mockReset();
+    mockedSolveWithHighs.mockReset();
   });
 
   it("throws MissionCoverageError when required items have no mission coverage", async () => {
@@ -51,5 +57,133 @@ describe("planForTarget coverage handling", () => {
     });
 
     await expect(planForTarget(baseProfile(), "puzzle-cube-1", 1, 0.5)).rejects.toBeInstanceOf(MissionCoverageError);
+  });
+
+  it("uses HiGHS mission allocation when solver returns an optimal solution", async () => {
+    mockedLoadLootData.mockResolvedValue({
+      missions: [
+        {
+          afxShip: 0,
+          afxDurationType: 0,
+          missionId: "test-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "puzzle-cube-1",
+                      counts: [1, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    mockedSolveWithHighs.mockResolvedValue({
+      Status: "Optimal",
+      Columns: {
+        m_0: { Primal: 2 },
+      },
+    });
+
+    const profile = baseProfile();
+    profile.missionOptions = [
+      {
+        ship: "CHICKEN_ONE",
+        missionId: "test-short",
+        durationType: "SHORT",
+        level: 0,
+        durationSeconds: 1200,
+        capacity: 1,
+      },
+    ];
+
+    const result = await planForTarget(profile, "puzzle-cube-1", 2, 0.5);
+    expect(result.missions).toHaveLength(1);
+    expect(result.missions[0].launches).toBe(2);
+    expect(result.notes.some((note) => note.includes("unified HiGHS model"))).toBe(true);
+  });
+
+  it("builds binary craft discount variables for craftable targets in unified solve", async () => {
+    mockedLoadLootData.mockResolvedValue({
+      missions: [],
+    });
+
+    let lpModel = "";
+    mockedSolveWithHighs.mockImplementation(async (model) => {
+      lpModel = model;
+      return {
+        Status: "Optimal",
+        Columns: {
+          c_0: { Primal: 1 },
+        },
+      };
+    });
+
+    const result = await planForTarget(baseProfile(), "soul-stone-2", 1, 0.5);
+    expect(lpModel).toContain("Binary");
+    expect(result.crafts.length).toBeGreaterThan(0);
+    expect(result.notes.some((note) => note.includes("exact craft discount scheduling"))).toBe(true);
+  });
+
+  it("falls back to greedy mission allocation when HiGHS is non-optimal", async () => {
+    mockedLoadLootData.mockResolvedValue({
+      missions: [
+        {
+          afxShip: 0,
+          afxDurationType: 0,
+          missionId: "test-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "puzzle-cube-1",
+                      counts: [1, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    mockedSolveWithHighs.mockResolvedValue({
+      Status: "Infeasible",
+      Columns: {},
+    });
+
+    const profile = baseProfile();
+    profile.missionOptions = [
+      {
+        ship: "CHICKEN_ONE",
+        missionId: "test-short",
+        durationType: "SHORT",
+        level: 0,
+        durationSeconds: 1200,
+        capacity: 1,
+      },
+    ];
+
+    const result = await planForTarget(profile, "puzzle-cube-1", 2, 0.5);
+    expect(result.missions).toHaveLength(1);
+    expect(result.missions[0].launches).toBe(2);
+    expect(result.notes.some((note) => note.includes("greedy fallback"))).toBe(true);
   });
 });

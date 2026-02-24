@@ -1,4 +1,5 @@
 import { loadLootData, MissionLevelLootStore, MissionTargetLootStore } from "./loot-data";
+import { solveWithHighs } from "./highs";
 import { itemIdToKey, itemKeyToDisplayName, itemKeyToId } from "./item-utils";
 import { getRecipe, recipes } from "./recipes";
 import { MissionOption } from "./ship-data";
@@ -54,14 +55,15 @@ export class MissionCoverageError extends Error {
 }
 
 const MAX_GREEDY_ITERATIONS = 3000;
+const MAX_CRAFT_COUNT_FOR_DISCOUNT = 300;
+const MAX_DISCOUNT_FACTOR = 0.9;
+const DISCOUNT_CURVE_EXPONENT = 0.2;
+const MISSION_SOLVER_UNMET_PENALTY_FACTOR = 1000;
 const SCORE_EPS = 1e-9;
 
 function getDiscountedCost(baseCost: number, craftCount: number): number {
-  const maxCraftCountForDiscount = 300;
-  const maxDiscountFactor = 0.9;
-  const discountCurveExponent = 0.2;
-  const progress = Math.min(1, craftCount / maxCraftCountForDiscount);
-  const multiplier = 1 - maxDiscountFactor * Math.pow(progress, discountCurveExponent);
+  const progress = Math.min(1, craftCount / MAX_CRAFT_COUNT_FOR_DISCOUNT);
+  const multiplier = 1 - MAX_DISCOUNT_FACTOR * Math.pow(progress, DISCOUNT_CURVE_EXPONENT);
   return Math.floor(baseCost * multiplier);
 }
 
@@ -83,6 +85,49 @@ function collectClosure(itemKey: string, visited: Set<string>): void {
   for (const ingredient of Object.keys(recipe.ingredients)) {
     collectClosure(ingredient, visited);
   }
+}
+
+function collectCraftUpperBounds(
+  itemKey: string,
+  quantity: number,
+  totals: Record<string, number>,
+  depth = 0
+): void {
+  if (quantity <= 0 || depth > 60) {
+    return;
+  }
+  const recipe = getRecipe(itemKey);
+  if (!recipe) {
+    return;
+  }
+  totals[itemKey] = (totals[itemKey] || 0) + quantity;
+  for (const [ingredientKey, ingredientQty] of Object.entries(recipe.ingredients)) {
+    collectCraftUpperBounds(ingredientKey, quantity * ingredientQty, totals, depth + 1);
+  }
+}
+
+function estimateCraftUpperBounds(targetKey: string, quantity: number): Record<string, number> {
+  const totals: Record<string, number> = {};
+  collectCraftUpperBounds(targetKey, Math.max(0, Math.round(quantity)), totals);
+  return totals;
+}
+
+function getBatchDiscountedCost(baseCost: number, initialCraftCount: number, craftsToAdd: number): number {
+  const safeCount = Math.max(0, Math.round(craftsToAdd));
+  if (safeCount <= 0 || baseCost <= 0) {
+    return 0;
+  }
+  const start = Math.max(0, initialCraftCount);
+  const varyingCount = Math.max(0, Math.min(safeCount, MAX_CRAFT_COUNT_FOR_DISCOUNT - start));
+  let total = 0;
+  for (let index = 0; index < varyingCount; index += 1) {
+    total += getDiscountedCost(baseCost, start + index);
+  }
+  const tailCount = safeCount - varyingCount;
+  if (tailCount > 0) {
+    total += tailCount * getDiscountedCost(baseCost, start + varyingCount);
+  }
+  return total;
 }
 
 function pickLevel(levels: MissionLevelLootStore[], desiredLevel: number): MissionLevelLootStore | null {
@@ -122,13 +167,16 @@ function yieldsFromTarget(target: MissionTargetLootStore, items: Set<string>, ca
   return yields;
 }
 
-async function buildMissionActions(profile: PlayerProfile, relevantItems: Set<string>): Promise<MissionAction[]> {
+async function buildMissionActionsForOptions(
+  missionOptions: MissionOption[],
+  relevantItems: Set<string>
+): Promise<MissionAction[]> {
   const loot = await loadLootData();
   const byMissionId = new Map(loot.missions.map((mission) => [mission.missionId, mission]));
 
   const actions: MissionAction[] = [];
 
-  for (const option of profile.missionOptions) {
+  for (const option of missionOptions) {
     const mission = byMissionId.get(option.missionId);
     if (!mission) {
       continue;
@@ -159,6 +207,10 @@ async function buildMissionActions(profile: PlayerProfile, relevantItems: Set<st
   return actions;
 }
 
+async function buildMissionActions(profile: PlayerProfile, relevantItems: Set<string>): Promise<MissionAction[]> {
+  return buildMissionActionsForOptions(profile.missionOptions, relevantItems);
+}
+
 function bestTimePerUnit(itemKey: string, actions: MissionAction[]): number {
   let best = Number.POSITIVE_INFINITY;
   for (const action of actions) {
@@ -174,7 +226,521 @@ function bestTimePerUnit(itemKey: string, actions: MissionAction[]): number {
   return best;
 }
 
-export async function planForTarget(
+type MissionAllocation = {
+  missionCounts: Record<string, number>;
+  totalSlotSeconds: number;
+  remainingDemand: Record<string, number>;
+  notes: string[];
+};
+
+function formatLpNumber(value: number): string {
+  if (!Number.isFinite(value)) {
+    throw new Error(`invalid LP coefficient: ${value}`);
+  }
+  const normalized = Math.abs(value) < SCORE_EPS ? 0 : value;
+  if (Number.isInteger(normalized)) {
+    return String(normalized);
+  }
+  return normalized.toFixed(9).replace(/\.?0+$/, "");
+}
+
+function applyMissionCountsToDemand(
+  demand: Record<string, number>,
+  actions: MissionAction[],
+  missionCounts: Record<string, number>
+): Record<string, number> {
+  const remaining: Record<string, number> = { ...demand };
+  const byActionKey = new Map(actions.map((action) => [action.key, action]));
+
+  for (const [actionKey, launchesRaw] of Object.entries(missionCounts)) {
+    const launches = Math.max(0, Math.round(launchesRaw));
+    if (launches <= 0) {
+      continue;
+    }
+    const action = byActionKey.get(actionKey);
+    if (!action) {
+      continue;
+    }
+    for (const [itemKey, yieldPerMission] of Object.entries(action.yields)) {
+      if (!remaining[itemKey] || yieldPerMission <= 0) {
+        continue;
+      }
+      remaining[itemKey] = Math.max(0, remaining[itemKey] - yieldPerMission * launches);
+    }
+  }
+
+  return remaining;
+}
+
+function allocateMissionsGreedy(
+  actions: MissionAction[],
+  initialDemand: Record<string, number>
+): MissionAllocation {
+  const remainingDemand: Record<string, number> = { ...initialDemand };
+  const missionCounts: Record<string, number> = {};
+  let totalSlotSeconds = 0;
+
+  for (let iteration = 0; iteration < MAX_GREEDY_ITERATIONS; iteration += 1) {
+    const unmetTotal = Object.values(remainingDemand).reduce((sum, value) => sum + value, 0);
+    if (unmetTotal <= SCORE_EPS) {
+      break;
+    }
+
+    let bestAction: MissionAction | null = null;
+    let bestCoverageRate = 0;
+
+    for (const action of actions) {
+      let covered = 0;
+      for (const [itemKey, remainingQty] of Object.entries(remainingDemand)) {
+        if (remainingQty <= 0) {
+          continue;
+        }
+        const yieldPerMission = action.yields[itemKey] || 0;
+        if (yieldPerMission <= 0) {
+          continue;
+        }
+        covered += Math.min(remainingQty, yieldPerMission);
+      }
+      if (covered <= 0) {
+        continue;
+      }
+
+      const coverageRate = covered / action.durationSeconds;
+      if (coverageRate > bestCoverageRate) {
+        bestCoverageRate = coverageRate;
+        bestAction = action;
+      }
+    }
+
+    if (!bestAction) {
+      break;
+    }
+
+    missionCounts[bestAction.key] = (missionCounts[bestAction.key] || 0) + 1;
+    totalSlotSeconds += bestAction.durationSeconds;
+    for (const [itemKey, yieldPerMission] of Object.entries(bestAction.yields)) {
+      if (!remainingDemand[itemKey]) {
+        continue;
+      }
+      remainingDemand[itemKey] = Math.max(0, remainingDemand[itemKey] - yieldPerMission);
+    }
+  }
+
+  return {
+    missionCounts,
+    totalSlotSeconds,
+    remainingDemand,
+    notes: ["Mission allocation fell back to greedy selection."],
+  };
+}
+
+async function allocateMissionsWithSolver(
+  actions: MissionAction[],
+  initialDemand: Record<string, number>
+): Promise<MissionAllocation> {
+  const demandEntries = Object.entries(initialDemand).filter(([, qty]) => qty > SCORE_EPS);
+  if (demandEntries.length === 0 || actions.length === 0) {
+    return {
+      missionCounts: {},
+      totalSlotSeconds: 0,
+      remainingDemand: { ...initialDemand },
+      notes: [],
+    };
+  }
+
+  const missionVars = actions.map((_, index) => `m_${index}`);
+  const unmetVars = demandEntries.map((_, index) => `u_${index}`);
+  const maxMissionDuration = Math.max(...actions.map((action) => action.durationSeconds));
+  const unmetPenalty = Math.max(1_000_000, maxMissionDuration * MISSION_SOLVER_UNMET_PENALTY_FACTOR);
+
+  const lines: string[] = [];
+  lines.push("Minimize");
+  const objectiveTerms = [
+    ...missionVars.map(
+      (variable, index) => `${formatLpNumber(actions[index].durationSeconds)} ${variable}`
+    ),
+    ...unmetVars.map((variable) => `${formatLpNumber(unmetPenalty)} ${variable}`),
+  ];
+  lines.push(`  obj: ${objectiveTerms.join(" + ")}`);
+
+  lines.push("Subject To");
+  for (let demandIndex = 0; demandIndex < demandEntries.length; demandIndex += 1) {
+    const [itemKey, demandQty] = demandEntries[demandIndex];
+    const lhsTerms: string[] = [];
+    for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
+      const yieldPerMission = actions[actionIndex].yields[itemKey] || 0;
+      if (yieldPerMission <= SCORE_EPS) {
+        continue;
+      }
+      lhsTerms.push(`${formatLpNumber(yieldPerMission)} ${missionVars[actionIndex]}`);
+    }
+    lhsTerms.push(unmetVars[demandIndex]);
+    lines.push(`  d_${demandIndex}: ${lhsTerms.join(" + ")} >= ${formatLpNumber(demandQty)}`);
+  }
+
+  lines.push("Bounds");
+  for (const variable of missionVars) {
+    lines.push(`  ${variable} >= 0`);
+  }
+  for (const variable of unmetVars) {
+    lines.push(`  ${variable} >= 0`);
+  }
+
+  lines.push("General");
+  const chunkSize = 24;
+  for (let index = 0; index < missionVars.length; index += chunkSize) {
+    lines.push(`  ${missionVars.slice(index, index + chunkSize).join(" ")}`);
+  }
+  lines.push("End");
+
+  try {
+    const solution = await solveWithHighs(lines.join("\n"));
+    const status = solution.Status || "Unknown";
+    if (status !== "Optimal") {
+      const greedy = allocateMissionsGreedy(actions, initialDemand);
+      return {
+        ...greedy,
+        notes: [`HiGHS mission allocation returned status '${status}'; using greedy fallback.`, ...greedy.notes],
+      };
+    }
+
+    const missionCounts: Record<string, number> = {};
+    let totalSlotSeconds = 0;
+    let hadFractionalLaunches = false;
+
+    for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
+      const rawLaunches = solution.Columns?.[missionVars[actionIndex]]?.Primal || 0;
+      const launches = Math.max(0, Math.round(rawLaunches));
+      if (Math.abs(rawLaunches - launches) > 1e-6) {
+        hadFractionalLaunches = true;
+      }
+      if (launches <= 0) {
+        continue;
+      }
+      const action = actions[actionIndex];
+      missionCounts[action.key] = launches;
+      totalSlotSeconds += launches * action.durationSeconds;
+    }
+
+    const remainingDemand = applyMissionCountsToDemand(initialDemand, actions, missionCounts);
+    const notes = ["Mission allocation solved with HiGHS MILP."];
+    if (hadFractionalLaunches) {
+      notes.push("Solver produced fractional launch values; rounded to nearest integer launches.");
+    }
+
+    return {
+      missionCounts,
+      totalSlotSeconds,
+      remainingDemand,
+      notes,
+    };
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    const greedy = allocateMissionsGreedy(actions, initialDemand);
+    return {
+      ...greedy,
+      notes: [`HiGHS mission allocation unavailable (${details}); using greedy fallback.`, ...greedy.notes],
+    };
+  }
+}
+
+type UnifiedPlan = {
+  crafts: Record<string, number>;
+  missionCounts: Record<string, number>;
+  remainingDemand: Record<string, number>;
+  geCost: number;
+  totalSlotSeconds: number;
+  notes: string[];
+};
+
+function formatLinearExpression(terms: Array<{ coefficient: number; variable: string }>): string {
+  const filtered = terms.filter((term) => Math.abs(term.coefficient) > SCORE_EPS);
+  if (filtered.length === 0) {
+    return "0";
+  }
+
+  let expression = "";
+  for (let index = 0; index < filtered.length; index += 1) {
+    const term = filtered[index];
+    const absCoeff = Math.abs(term.coefficient);
+    const coeffText = formatLpNumber(absCoeff);
+    if (index === 0) {
+      expression += term.coefficient < 0 ? `- ${coeffText} ${term.variable}` : `${coeffText} ${term.variable}`;
+      continue;
+    }
+    expression += term.coefficient < 0 ? ` - ${coeffText} ${term.variable}` : ` + ${coeffText} ${term.variable}`;
+  }
+  return expression;
+}
+
+async function solveUnifiedCraftMissionPlan(options: {
+  profile: PlayerProfile;
+  targetKey: string;
+  quantity: number;
+  priorityTime: number;
+  closure: Set<string>;
+  actions: MissionAction[];
+  geRef: number;
+  timeRef: number;
+}): Promise<UnifiedPlan> {
+  const { profile, targetKey, quantity, priorityTime, closure, actions, geRef, timeRef } = options;
+  const itemKeys = Array.from(closure).sort();
+  const missionVars = actions.map((_, index) => `m_${index}`);
+  const unmetVarByItem = new Map<string, string>();
+  for (let index = 0; index < itemKeys.length; index += 1) {
+    unmetVarByItem.set(itemKeys[index], `u_${index}`);
+  }
+
+  type CraftCostModel = {
+    itemKey: string;
+    craftVar: string;
+    craftBound: number;
+    baseCost: number;
+    initialCraftCount: number;
+    preDiscountUnitVars: string[];
+    preDiscountUnitCosts: number[];
+    tailVar: string | null;
+    tailCap: number;
+  };
+
+  const craftUpperBounds = estimateCraftUpperBounds(targetKey, quantity);
+  const craftModels: CraftCostModel[] = [];
+  const craftModelByItem = new Map<string, CraftCostModel>();
+
+  let craftVarCounter = 0;
+  let craftUnitCounter = 0;
+  let craftTailCounter = 0;
+  for (const itemKey of itemKeys) {
+    const recipe = getRecipe(itemKey);
+    if (!recipe) {
+      continue;
+    }
+    const craftBound = Math.max(0, Math.ceil(craftUpperBounds[itemKey] || 0));
+    if (craftBound <= 0) {
+      continue;
+    }
+    const initialCraftCount = Math.max(0, profile.craftCounts[itemKey] || 0);
+    const preDiscountSlots = Math.max(
+      0,
+      Math.min(craftBound, MAX_CRAFT_COUNT_FOR_DISCOUNT - initialCraftCount)
+    );
+    const preDiscountUnitVars: string[] = [];
+    const preDiscountUnitCosts: number[] = [];
+    for (let slot = 0; slot < preDiscountSlots; slot += 1) {
+      preDiscountUnitVars.push(`cy_${craftUnitCounter}`);
+      preDiscountUnitCosts.push(getDiscountedCost(recipe.cost, initialCraftCount + slot));
+      craftUnitCounter += 1;
+    }
+    const tailCap = Math.max(0, craftBound - preDiscountSlots);
+    const tailVar = tailCap > 0 ? `ct_${craftTailCounter++}` : null;
+
+    const model: CraftCostModel = {
+      itemKey,
+      craftVar: `c_${craftVarCounter++}`,
+      craftBound,
+      baseCost: recipe.cost,
+      initialCraftCount,
+      preDiscountUnitVars,
+      preDiscountUnitCosts,
+      tailVar,
+      tailCap,
+    };
+    craftModels.push(model);
+    craftModelByItem.set(itemKey, model);
+  }
+
+  const demandByItem = new Map<string, number>(itemKeys.map((itemKey) => [itemKey, itemKey === targetKey ? quantity : 0]));
+  const normalizedGeRef = Math.max(1, geRef);
+  const normalizedTimeRef = Math.max(1, timeRef);
+
+  const lines: string[] = [];
+  lines.push("Minimize");
+  const objectiveTerms: Array<{ coefficient: number; variable: string }> = [];
+  let maxObjectiveCoeff = 1;
+
+  for (const model of craftModels) {
+    for (let index = 0; index < model.preDiscountUnitVars.length; index += 1) {
+      const coefficient = ((1 - priorityTime) * model.preDiscountUnitCosts[index]) / normalizedGeRef;
+      objectiveTerms.push({
+        coefficient,
+        variable: model.preDiscountUnitVars[index],
+      });
+      maxObjectiveCoeff = Math.max(maxObjectiveCoeff, Math.abs(coefficient));
+    }
+    if (model.tailVar && model.tailCap > 0) {
+      const tailCost = getDiscountedCost(
+        model.baseCost,
+        model.initialCraftCount + model.preDiscountUnitVars.length
+      );
+      const coefficient = ((1 - priorityTime) * tailCost) / normalizedGeRef;
+      objectiveTerms.push({
+        coefficient,
+        variable: model.tailVar,
+      });
+      maxObjectiveCoeff = Math.max(maxObjectiveCoeff, Math.abs(coefficient));
+    }
+  }
+
+  for (let index = 0; index < actions.length; index += 1) {
+    const coefficient = (priorityTime * (actions[index].durationSeconds / 3)) / normalizedTimeRef;
+    objectiveTerms.push({
+      coefficient,
+      variable: missionVars[index],
+    });
+    maxObjectiveCoeff = Math.max(maxObjectiveCoeff, Math.abs(coefficient));
+  }
+
+  const unmetPenaltyCoeff = maxObjectiveCoeff * 1_000_000;
+  for (const itemKey of itemKeys) {
+    objectiveTerms.push({
+      coefficient: unmetPenaltyCoeff,
+      variable: unmetVarByItem.get(itemKey)!,
+    });
+  }
+  lines.push(`  obj: ${formatLinearExpression(objectiveTerms)}`);
+
+  lines.push("Subject To");
+  for (let itemIndex = 0; itemIndex < itemKeys.length; itemIndex += 1) {
+    const itemKey = itemKeys[itemIndex];
+    const inventoryQty = Math.max(0, profile.inventory[itemKey] || 0);
+    const demandQty = demandByItem.get(itemKey) || 0;
+    const terms: Array<{ coefficient: number; variable: string }> = [];
+
+    const outputModel = craftModelByItem.get(itemKey);
+    if (outputModel) {
+      terms.push({ coefficient: 1, variable: outputModel.craftVar });
+    }
+    for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
+      const yieldPerMission = actions[actionIndex].yields[itemKey] || 0;
+      if (yieldPerMission > SCORE_EPS) {
+        terms.push({ coefficient: yieldPerMission, variable: missionVars[actionIndex] });
+      }
+    }
+    terms.push({ coefficient: 1, variable: unmetVarByItem.get(itemKey)! });
+
+    for (const craftModel of craftModels) {
+      const recipe = getRecipe(craftModel.itemKey);
+      const ingredientQty = recipe?.ingredients[itemKey] || 0;
+      if (ingredientQty > 0) {
+        terms.push({ coefficient: -ingredientQty, variable: craftModel.craftVar });
+      }
+    }
+
+    const rhs = demandQty - inventoryQty;
+    lines.push(`  b_${itemIndex}: ${formatLinearExpression(terms)} >= ${formatLpNumber(rhs)}`);
+  }
+
+  for (let modelIndex = 0; modelIndex < craftModels.length; modelIndex += 1) {
+    const model = craftModels[modelIndex];
+    const relationTerms: Array<{ coefficient: number; variable: string }> = [
+      { coefficient: 1, variable: model.craftVar },
+      ...model.preDiscountUnitVars.map((variable) => ({ coefficient: -1, variable })),
+    ];
+    if (model.tailVar) {
+      relationTerms.push({ coefficient: -1, variable: model.tailVar });
+    }
+    lines.push(`  cl_${modelIndex}: ${formatLinearExpression(relationTerms)} = 0`);
+
+    for (let unitIndex = 0; unitIndex + 1 < model.preDiscountUnitVars.length; unitIndex += 1) {
+      lines.push(
+        `  cm_${modelIndex}_${unitIndex}: ${model.preDiscountUnitVars[unitIndex]} - ${model.preDiscountUnitVars[unitIndex + 1]} >= 0`
+      );
+    }
+    if (model.tailVar && model.preDiscountUnitVars.length > 0) {
+      const lastUnitVar = model.preDiscountUnitVars[model.preDiscountUnitVars.length - 1];
+      lines.push(`  ctg_${modelIndex}: ${model.tailVar} - ${formatLpNumber(model.tailCap)} ${lastUnitVar} <= 0`);
+    }
+  }
+
+  lines.push("Bounds");
+  for (const model of craftModels) {
+    lines.push(`  0 <= ${model.craftVar} <= ${formatLpNumber(model.craftBound)}`);
+    for (const unitVar of model.preDiscountUnitVars) {
+      lines.push(`  0 <= ${unitVar} <= 1`);
+    }
+    if (model.tailVar) {
+      lines.push(`  0 <= ${model.tailVar} <= ${formatLpNumber(model.tailCap)}`);
+    }
+  }
+  for (const variable of missionVars) {
+    lines.push(`  ${variable} >= 0`);
+  }
+  for (const variable of unmetVarByItem.values()) {
+    lines.push(`  ${variable} >= 0`);
+  }
+
+  const integerVars = [
+    ...craftModels.map((model) => model.craftVar),
+    ...craftModels.flatMap((model) => (model.tailVar ? [model.tailVar] : [])),
+    ...missionVars,
+  ];
+  if (integerVars.length > 0) {
+    lines.push("General");
+    const chunkSize = 24;
+    for (let index = 0; index < integerVars.length; index += chunkSize) {
+      lines.push(`  ${integerVars.slice(index, index + chunkSize).join(" ")}`);
+    }
+  }
+  const binaryVars = craftModels.flatMap((model) => model.preDiscountUnitVars);
+  if (binaryVars.length > 0) {
+    lines.push("Binary");
+    const chunkSize = 24;
+    for (let index = 0; index < binaryVars.length; index += chunkSize) {
+      lines.push(`  ${binaryVars.slice(index, index + chunkSize).join(" ")}`);
+    }
+  }
+  lines.push("End");
+
+  const solution = await solveWithHighs(lines.join("\n"));
+  const status = solution.Status || "Unknown";
+  if (status !== "Optimal") {
+    throw new Error(`unified HiGHS solve status '${status}'`);
+  }
+
+  const crafts: Record<string, number> = {};
+  for (const model of craftModels) {
+    const rawValue = solution.Columns?.[model.craftVar]?.Primal || 0;
+    const rounded = Math.max(0, Math.round(rawValue));
+    if (rounded > 0) {
+      crafts[model.itemKey] = rounded;
+    }
+  }
+
+  const missionCounts: Record<string, number> = {};
+  for (let index = 0; index < actions.length; index += 1) {
+    const rawValue = solution.Columns?.[missionVars[index]]?.Primal || 0;
+    const rounded = Math.max(0, Math.round(rawValue));
+    if (rounded > 0) {
+      missionCounts[actions[index].key] = rounded;
+    }
+  }
+
+  const remainingDemand: Record<string, number> = {};
+  for (const itemKey of itemKeys) {
+    const rawValue = solution.Columns?.[unmetVarByItem.get(itemKey)!]?.Primal || 0;
+    remainingDemand[itemKey] = Math.max(0, rawValue);
+  }
+
+  const geCost = craftModels.reduce((sum, model) => {
+    const craftedCount = crafts[model.itemKey] || 0;
+    return sum + getBatchDiscountedCost(model.baseCost, model.initialCraftCount, craftedCount);
+  }, 0);
+  const totalSlotSeconds = actions.reduce((sum, action) => {
+    const launches = missionCounts[action.key] || 0;
+    return sum + launches * action.durationSeconds;
+  }, 0);
+
+  return {
+    crafts,
+    missionCounts,
+    remainingDemand,
+    geCost,
+    totalSlotSeconds,
+    notes: ["Craft + mission allocation solved with unified HiGHS model (exact craft discount scheduling)."],
+  };
+}
+
+async function planForTargetHeuristic(
   profile: PlayerProfile,
   targetItemId: string,
   quantity: number,
@@ -260,55 +826,10 @@ export async function planForTarget(
     }
   }
 
-  const missionCounts: Record<string, number> = {};
-  let totalSlotSeconds = 0;
-
-  for (let iteration = 0; iteration < MAX_GREEDY_ITERATIONS; iteration += 1) {
-    const unmetTotal = Object.values(remainingDemand).reduce((sum, value) => sum + value, 0);
-    if (unmetTotal <= SCORE_EPS) {
-      break;
-    }
-
-    let bestAction: MissionAction | null = null;
-    let bestCoverageRate = 0;
-
-    for (const action of actions) {
-      let covered = 0;
-      for (const [itemKey, remainingQty] of Object.entries(remainingDemand)) {
-        if (remainingQty <= 0) {
-          continue;
-        }
-        const yieldPerMission = action.yields[itemKey] || 0;
-        if (yieldPerMission <= 0) {
-          continue;
-        }
-        covered += Math.min(remainingQty, yieldPerMission);
-      }
-      if (covered <= 0) {
-        continue;
-      }
-
-      const coverageRate = covered / action.durationSeconds;
-      if (coverageRate > bestCoverageRate) {
-        bestCoverageRate = coverageRate;
-        bestAction = action;
-      }
-    }
-
-    if (!bestAction) {
-      break;
-    }
-
-    missionCounts[bestAction.key] = (missionCounts[bestAction.key] || 0) + 1;
-    totalSlotSeconds += bestAction.durationSeconds;
-
-    for (const [itemKey, yieldPerMission] of Object.entries(bestAction.yields)) {
-      if (!remainingDemand[itemKey]) {
-        continue;
-      }
-      remainingDemand[itemKey] = Math.max(0, remainingDemand[itemKey] - yieldPerMission);
-    }
-  }
+  const missionAllocation = await allocateMissionsWithSolver(actions, remainingDemand);
+  const missionCounts = missionAllocation.missionCounts;
+  const totalSlotSeconds = missionAllocation.totalSlotSeconds;
+  const remainingDemandAfterMissions = missionAllocation.remainingDemand;
 
   const expectedHours = totalSlotSeconds / 3 / 3600;
   const weightedScore = normalizedScore(geCost, totalSlotSeconds / 3, priorityTime, geRef, timeRef);
@@ -342,12 +863,12 @@ export async function planForTarget(
     .map(([itemKey, count]) => ({ itemId: itemKeyToId(itemKey), count }))
     .sort((a, b) => b.count - a.count);
 
-  const unmetItems = Object.entries(remainingDemand)
+  const unmetItems = Object.entries(remainingDemandAfterMissions)
     .filter(([, qty]) => qty > 1e-6)
     .map(([itemKey, qty]) => ({ itemId: itemKeyToId(itemKey), quantity: qty }))
     .sort((a, b) => b.quantity - a.quantity);
 
-  const uncoveredItemKeys = Object.entries(remainingDemand)
+  const uncoveredItemKeys = Object.entries(remainingDemandAfterMissions)
     .filter(
       ([itemKey, qty]) =>
         qty > 1e-6 &&
@@ -362,7 +883,7 @@ export async function planForTarget(
     throw new MissionCoverageError(uncoveredItemKeys);
   }
 
-  const notes: string[] = [];
+  const notes: string[] = [...missionAllocation.notes];
   if (actions.length === 0) {
     notes.push("No eligible mission loot actions were found for your current mission options and loot dataset.");
   }
@@ -377,7 +898,7 @@ export async function planForTarget(
     );
   }
   notes.push(
-    "Planner currently uses expected-drop values and greedy mission allocation with 3 mission slots. Re-run after returns."
+    "Planner currently uses expected-drop values with solver-backed mission allocation and 3 mission slots. Re-run after returns."
   );
   notes.push(
     "Rarity is treated as fungible for planning (shiny inventory counted toward craftable supply by item tier)."
@@ -395,6 +916,131 @@ export async function planForTarget(
     unmetItems,
     notes,
   };
+}
+
+export async function planForTarget(
+  profile: PlayerProfile,
+  targetItemId: string,
+  quantity: number,
+  priorityTimeRaw: number
+): Promise<PlannerResult> {
+  const targetKey = itemIdToKey(targetItemId);
+  const priorityTime = Math.max(0, Math.min(1, priorityTimeRaw));
+  const quantityInt = Math.max(1, Math.round(quantity));
+
+  const closure = new Set<string>();
+  collectClosure(targetKey, closure);
+
+  const actions = await buildMissionActions(profile, closure);
+  const geRef = Math.max(1, getRecipe(targetKey)?.cost || 1000);
+  const fastestActionDuration = actions.length > 0 ? Math.min(...actions.map((action) => action.durationSeconds)) : 3600;
+  const timeRef = Math.max(1, fastestActionDuration / 3);
+
+  try {
+    const unified = await solveUnifiedCraftMissionPlan({
+      profile,
+      targetKey,
+      quantity: quantityInt,
+      priorityTime,
+      closure,
+      actions,
+      geRef,
+      timeRef,
+    });
+
+    const missionRows: PlanMissionRow[] = Object.entries(unified.missionCounts)
+      .map(([key, launches]) => {
+        const action = actions.find((candidate) => candidate.key === key);
+        if (!action) {
+          return null;
+        }
+        const expectedYields = Object.entries(action.yields)
+          .map(([itemKey, perMission]) => ({ itemId: itemKeyToId(itemKey), quantity: perMission * launches }))
+          .filter((entry) => entry.quantity > 0)
+          .sort((a, b) => b.quantity - a.quantity)
+          .slice(0, 6);
+
+        return {
+          missionId: action.missionId,
+          ship: action.ship,
+          durationType: action.durationType,
+          targetAfxId: action.targetAfxId,
+          launches,
+          durationSeconds: action.durationSeconds,
+          expectedYields,
+        };
+      })
+      .filter((row): row is PlanMissionRow => row !== null)
+      .sort((a, b) => b.launches - a.launches);
+
+    const craftRows: PlanCraftRow[] = Object.entries(unified.crafts)
+      .map(([itemKey, count]) => ({ itemId: itemKeyToId(itemKey), count }))
+      .sort((a, b) => b.count - a.count);
+
+    const unmetItems = Object.entries(unified.remainingDemand)
+      .filter(([, qty]) => qty > 1e-6)
+      .map(([itemKey, qty]) => ({ itemId: itemKeyToId(itemKey), quantity: qty }))
+      .sort((a, b) => b.quantity - a.quantity);
+
+    const uncoveredItemKeys = Object.entries(unified.remainingDemand)
+      .filter(
+        ([itemKey, qty]) =>
+          qty > 1e-6 &&
+          !actions.some((action) => {
+            const yieldPerMission = action.yields[itemKey] || 0;
+            return yieldPerMission > 0;
+          })
+      )
+      .map(([itemKey]) => itemKey);
+
+    if (uncoveredItemKeys.length > 0 && missionRows.length === 0 && craftRows.length === 0) {
+      throw new MissionCoverageError(uncoveredItemKeys);
+    }
+
+    const notes: string[] = [...unified.notes];
+    if (actions.length === 0) {
+      notes.push("No eligible mission loot actions were found for your current mission options and loot dataset.");
+    }
+    if (unmetItems.length > 0) {
+      notes.push("Some ingredient demand remains unmet by current mission options/dataset.");
+    }
+    if (uncoveredItemKeys.length > 0) {
+      notes.push(
+        `No mission drop coverage found for: ${uncoveredItemKeys
+          .map((itemKey) => itemKeyToDisplayName(itemKey))
+          .join(", ")}.`
+      );
+    }
+    notes.push(
+      "Planner currently uses expected-drop values with unified solver-backed craft+mission allocation and 3 mission slots. Re-run after returns."
+    );
+    notes.push(
+      "Rarity is treated as fungible for planning (shiny inventory counted toward craftable supply by item tier)."
+    );
+
+    return {
+      targetItemId,
+      quantity: quantityInt,
+      priorityTime,
+      geCost: unified.geCost,
+      expectedHours: unified.totalSlotSeconds / 3 / 3600,
+      weightedScore: normalizedScore(unified.geCost, unified.totalSlotSeconds / 3, priorityTime, geRef, timeRef),
+      crafts: craftRows,
+      missions: missionRows,
+      unmetItems,
+      notes,
+    };
+  } catch (error) {
+    if (error instanceof MissionCoverageError) {
+      throw error;
+    }
+    const details = error instanceof Error ? error.message : String(error);
+    const fallback = await planForTargetHeuristic(profile, targetItemId, quantityInt, priorityTime);
+    fallback.notes.unshift(
+      `Unified solver allocation unavailable (${details}); fell back to heuristic craft decomposition + mission solver allocation.`
+    );
+    return fallback;
+  }
 }
 
 export function summarizeCraftRows(rows: PlanCraftRow[]): string[] {

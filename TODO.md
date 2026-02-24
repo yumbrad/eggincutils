@@ -134,6 +134,12 @@ This is expected-value + greedy allocation. It is intentionally rerunnable after
 3. Model slider as weighted objective with normalized terms and optional risk profile options.
 4. Add rolling-horizon mode / replanning endpoint from current observed returns.
 
+### Phase B status (updated 2026-02-24)
+- [x] 1. Craft + mission allocation now runs in a unified HiGHS model with exact craft-discount scheduling (plus heuristic fallback path for solver/runtime failures).
+- [ ] 2. Horizon/star-progression optimization not started.
+- [ ] 3. Slider-aware normalized objective for full solver model not started.
+- [ ] 4. Rolling-horizon/replanning endpoint not started.
+
 ## Phase C - Integrate old tools fully
 1. Port `../xp-ge-craft` UI/features into `/xp-ge-craft` route in this repo.
 2. Port `../egginc-ship-timer` UI/features into `/ship-timer` route in this repo.
