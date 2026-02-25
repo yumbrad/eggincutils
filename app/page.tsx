@@ -34,11 +34,9 @@ export default function HomePage() {
           <Image src="/media/hamster_egg_poly.png" alt="" width={768} height={1024} className="home-hamster" priority />
         </div>
         <div className="home-brand-copy">
-          <p className="brand-kicker">Egg, Inc. utility suite</p>
-          <h1 className="brand-title">techyum&apos;s Egg Utility Suite</h1>
-          <p className="brand-subtitle muted">
-            Unified planning tools for artifact farming, XP-to-GE crafting decisions, and ship launch timing.
-          </p>
+          <p className="brand-kicker">Egg Inc. Chicken-to-consumer Layer Operations Layer (C2C-LOL)™ <br />
+                                      with Dilithium Enterprise Resource Planning (DERP™)</p>
+          <h1 className="brand-title">techyum&apos;s eggy tools</h1>
         </div>
       </div>
 

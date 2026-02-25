@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import artifactDisplay from "../../data/artifact-display.json";
 import recipes from "../../data/recipes.json";
@@ -16,6 +16,14 @@ import {
   itemKeyToIconUrl,
   itemKeyToId,
 } from "../../lib/item-utils";
+import {
+  LOCAL_PREF_KEYS,
+  readFirstStoredString,
+  readStoredBoolean,
+  readStoredInteger,
+  writeStoredBoolean,
+  writeStoredString,
+} from "../../lib/local-preferences";
 import styles from "./page.module.css";
 
 type ShipLevelInfo = {
@@ -136,6 +144,8 @@ type MissionTimeline = {
 };
 
 const DURATION_TYPES: DurationType[] = ["TUTORIAL", "SHORT", "LONG", "EPIC"];
+const SHARED_EID_KEYS = [LOCAL_PREF_KEYS.sharedEid, LOCAL_PREF_KEYS.legacyEid] as const;
+const SHARED_INCLUDE_SLOTTED_KEYS = [LOCAL_PREF_KEYS.sharedIncludeSlotted, LOCAL_PREF_KEYS.legacyIncludeSlotted] as const;
 
 function durationTypeLabel(durationType: string): string {
   switch (durationType) {
@@ -466,20 +476,102 @@ export default function MissionCraftPlannerPage() {
   const [profileSnapshot, setProfileSnapshot] = useState<ProfileSnapshot | null>(null);
 
   const targetOptions = useMemo(() => {
-    const display = artifactDisplay as Record<string, { id: string; name: string; tierName: string }>;
+    const display = artifactDisplay as Record<string, { id: string; name: string; tierName: string; tierNumber: number }>;
     const recipeMap = recipes as Record<string, unknown>;
 
     return Object.keys(recipeMap)
       .map((itemKey) => {
         const displayInfo = display[itemKey];
         const itemId = displayInfo?.id || itemKeyToId(itemKey);
-        const label = itemKeyToDisplayName(itemKey);
+        const label =
+          displayInfo && Number.isFinite(displayInfo.tierNumber)
+            ? `${displayInfo.name} (T${displayInfo.tierNumber})`
+            : itemKeyToDisplayName(itemKey);
         return { itemId, label };
       })
       .sort((a, b) => a.label.localeCompare(b.label));
   }, []);
 
   const missionTimeline = useMemo(() => (response ? buildMissionTimeline(response.plan) : null), [response]);
+
+  useEffect(() => {
+    try {
+      const savedEid = readFirstStoredString(SHARED_EID_KEYS);
+      if (savedEid) {
+        setEid(savedEid);
+      }
+      const savedIncludeSlotted = readStoredBoolean(SHARED_INCLUDE_SLOTTED_KEYS);
+      if (savedIncludeSlotted != null) {
+        setIncludeSlotted(savedIncludeSlotted);
+      }
+      const savedTarget = readFirstStoredString([LOCAL_PREF_KEYS.plannerTargetItemId]);
+      if (savedTarget && targetOptions.some((option) => option.itemId === savedTarget)) {
+        setTargetItemId(savedTarget);
+      }
+      const savedQuantity = readStoredInteger([LOCAL_PREF_KEYS.plannerQuantity], 1, 9999);
+      if (savedQuantity != null) {
+        setQuantity(savedQuantity);
+      }
+      const savedPriority = readStoredInteger([LOCAL_PREF_KEYS.plannerPriorityTimePct], 0, 100);
+      if (savedPriority != null) {
+        setPriorityTimePct(savedPriority);
+      }
+      const savedFastMode = readStoredBoolean([LOCAL_PREF_KEYS.plannerFastMode]);
+      if (savedFastMode != null) {
+        setFastMode(savedFastMode);
+      }
+    } catch {
+      // Ignore localStorage hydration errors.
+    }
+  }, [targetOptions]);
+
+  useEffect(() => {
+    try {
+      writeStoredString(SHARED_EID_KEYS, eid.trim());
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [eid]);
+
+  useEffect(() => {
+    try {
+      writeStoredBoolean(SHARED_INCLUDE_SLOTTED_KEYS, includeSlotted);
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [includeSlotted]);
+
+  useEffect(() => {
+    try {
+      writeStoredString([LOCAL_PREF_KEYS.plannerTargetItemId], targetItemId);
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [targetItemId]);
+
+  useEffect(() => {
+    try {
+      writeStoredString([LOCAL_PREF_KEYS.plannerQuantity], String(quantity));
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [quantity]);
+
+  useEffect(() => {
+    try {
+      writeStoredString([LOCAL_PREF_KEYS.plannerPriorityTimePct], String(priorityTimePct));
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [priorityTimePct]);
+
+  useEffect(() => {
+    try {
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerFastMode], fastMode);
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [fastMode]);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -872,7 +964,7 @@ export default function MissionCraftPlannerPage() {
                 <table>
                   <thead>
                     <tr>
-                      <th>Ship / Mission</th>
+                      <th>Ship / Launch</th>
                       <th>Target</th>
                       <th>Launches</th>
                       <th>Duration</th>
@@ -887,7 +979,7 @@ export default function MissionCraftPlannerPage() {
                         <tr key={`${mission.missionId}:${mission.targetAfxId}`}>
                           <td>
                             {titleCaseShip(mission.ship)}<br />
-                            <span className="muted">{mission.missionId}</span>
+                            <span className="muted">{durationTypeLabel(mission.durationType)}</span>
                           </td>
                           <td>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -902,11 +994,6 @@ export default function MissionCraftPlannerPage() {
                               )}
                               <div>
                                 <div>{afxIdToTargetFamilyName(mission.targetAfxId)}</div>
-                                {mission.targetAfxId !== 10000 && (
-                                  <div className="muted" style={{ fontSize: 12 }}>
-                                    target id: {mission.targetAfxId}
-                                  </div>
-                                )}
                               </div>
                             </div>
                           </td>

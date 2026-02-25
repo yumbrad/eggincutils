@@ -1,9 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import React, { JSX, useState } from "react";
+import React, { JSX, useEffect, useState } from "react";
 
+import { LOCAL_PREF_KEYS, readFirstStoredString, writeStoredString } from "../../../lib/local-preferences";
 import styles from "../page.module.css";
+
+const SHARED_EID_KEYS = [LOCAL_PREF_KEYS.sharedEid, LOCAL_PREF_KEYS.legacyEid] as const;
 
 export default function XpGeDiagnosticsPage(): JSX.Element {
   const [eid, setEID] = useState<string>("");
@@ -11,6 +14,17 @@ export default function XpGeDiagnosticsPage(): JSX.Element {
   const [responseText, setResponseText] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+
+  useEffect(() => {
+    const savedEid = readFirstStoredString(SHARED_EID_KEYS);
+    if (savedEid) {
+      setEID(savedEid);
+    }
+  }, []);
+
+  useEffect(() => {
+    writeStoredString(SHARED_EID_KEYS, eid.trim());
+  }, [eid]);
 
   async function runDiagnostics(): Promise<void> {
     if (!eid.trim()) {

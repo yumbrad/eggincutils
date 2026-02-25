@@ -22,6 +22,7 @@
   --error-border: #a94d4d;
   --error-ink: #f2b2b2;
   --theme-switch-bg: rgba(12, 20, 37, 0.86);
+  --brand-kicker-color: #ff1279;
   --sleep-bad-bg: color-mix(in oklab, #f58ca0, transparent 72%);
 }
 
@@ -49,6 +50,7 @@
   --error-border: #d59c84;
   --error-ink: #7a2d0c;
   --theme-switch-bg: rgba(255, 253, 247, 0.88);
+  --brand-kicker-color: #ff1279;
   --sleep-bad-bg: color-mix(in oklab, #b9a1f1, transparent 64%);
 }
 
@@ -270,7 +272,7 @@ button:disabled {
 
 .brand-kicker {
   margin: 0;
-  color: var(--accent-2);
+  color: var(--brand-kicker-color);
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
@@ -278,7 +280,7 @@ button:disabled {
 }
 
 .brand-title {
-  margin: 0;
+  margin: 0 10 0 0;
   font-size: 34px;
   line-height: 1.08;
   color: var(--navy);
@@ -308,7 +310,7 @@ button:disabled {
 }
 
 .brand-header[data-compact="1"] .brand-title {
-  font-size: 32px;
+  font-size: 28px;
 }
 
 .tool-card-title {

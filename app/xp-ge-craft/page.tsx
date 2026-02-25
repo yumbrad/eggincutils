@@ -5,6 +5,13 @@ import Image from "next/image";
 import React, { JSX, useEffect, useState } from "react";
 
 import { getArtifactDisplayData, getArtifactDisplayLabel } from "../../lib/artifact-display";
+import {
+  LOCAL_PREF_KEYS,
+  readFirstStoredString,
+  readStoredBoolean,
+  writeStoredBoolean,
+  writeStoredString,
+} from "../../lib/local-preferences";
 import useHighsClient from "../../lib/use-highs-client";
 import { Highs, Solution, optimizeCrafts } from "../../lib/xp-ge-optimize";
 import { XP_GE_CRAFT_COPY } from "../../lib/xp-ge-craft-copy";
@@ -27,6 +34,9 @@ type ModeComparisonRow = {
   cost: number;
   xpPerGe: number;
 };
+
+const SHARED_EID_KEYS = [LOCAL_PREF_KEYS.sharedEid, LOCAL_PREF_KEYS.legacyEid] as const;
+const SHARED_INCLUDE_SLOTTED_KEYS = [LOCAL_PREF_KEYS.sharedIncludeSlotted, LOCAL_PREF_KEYS.legacyIncludeSlotted] as const;
 
 async function getOptimalCrafts(highs: Highs, eid: string, includeSlotted: boolean): Promise<Solution> {
   const response = await fetch(
@@ -194,13 +204,23 @@ export default function XpGeCraftPage(): JSX.Element {
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
   useEffect(() => {
-    if (window.localStorage.eid) {
-      setEID(window.localStorage.eid);
+    const savedEid = readFirstStoredString(SHARED_EID_KEYS);
+    if (savedEid) {
+      setEID(savedEid);
     }
-    if (window.localStorage.includeSlottedStones != null) {
-      setIncludeSlotted(window.localStorage.includeSlottedStones !== "false");
+    const savedIncludeSlotted = readStoredBoolean(SHARED_INCLUDE_SLOTTED_KEYS);
+    if (savedIncludeSlotted != null) {
+      setIncludeSlotted(savedIncludeSlotted);
     }
   }, []);
+
+  useEffect(() => {
+    writeStoredString(SHARED_EID_KEYS, eid.trim());
+  }, [eid]);
+
+  useEffect(() => {
+    writeStoredBoolean(SHARED_INCLUDE_SLOTTED_KEYS, includeSlotted);
+  }, [includeSlotted]);
 
   async function runOptimize(): Promise<void> {
     if (!highs) {
@@ -216,8 +236,6 @@ export default function XpGeCraftPage(): JSX.Element {
     setSolution(null);
     setIsLoading(true);
     try {
-      window.localStorage.eid = eid;
-      window.localStorage.includeSlottedStones = includeSlotted ? "true" : "false";
       const result = await getOptimalCrafts(highs, eid, includeSlotted);
       setSolution(result);
     } catch (caughtError) {
