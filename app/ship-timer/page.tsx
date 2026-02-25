@@ -36,7 +36,7 @@ type MissionRow = {
 };
 
 const SHIP_IMAGE_SIZE = 128;
-const SHIP_PREVIEW_IMAGE_SIZE = 512;
+const SHIP_PREVIEW_IMAGE_SIZES = [256, 128];
 const SHIP_IMAGE_HOSTS = ["https://eggincassets.pages.dev", "https://eggincassets.tcl.sh"];
 
 const SHIPS: ShipConfig[] = [
@@ -230,6 +230,12 @@ function lerpColor(c1: [number, number, number], c2: [number, number, number], t
   return `rgb(${r},${g},${b})`;
 }
 
+function darkenColor(color: [number, number, number], amount: number): [number, number, number] {
+  const clamped = Math.max(0, Math.min(1, amount));
+  const scale = 1 - clamped;
+  return [Math.round(color[0] * scale), Math.round(color[1] * scale), Math.round(color[2] * scale)];
+}
+
 function awakeT(minOfDay: number, sleepStart: number, sleepEnd: number): number {
   const awakeStart = sleepEnd;
   const awakeEnd = sleepStart;
@@ -241,10 +247,11 @@ function awakeT(minOfDay: number, sleepStart: number, sleepEnd: number): number 
   return Math.max(0, Math.min(1, delta / awakeLen));
 }
 
-function timeColor(t: number): string {
-  const peach: [number, number, number] = [248, 205, 180];
-  const yellow: [number, number, number] = [255, 245, 160];
-  const blue: [number, number, number] = [170, 210, 255];
+function timeColor(t: number, darkMode: boolean): string {
+  const darkenAmount = darkMode ? 0.38 : 0;
+  const peach = darkenColor([246, 172, 158], darkenAmount);
+  const yellow = darkenColor([255, 245, 160], darkenAmount);
+  const blue = darkenColor([170, 210, 255], darkenAmount);
   if (t < 0.5) {
     return lerpColor(peach, yellow, t / 0.5);
   }
@@ -255,11 +262,15 @@ function toDeg(min: number): number {
   return (min / 1440) * 360;
 }
 
-function clockFaceColor(minOfDay: number, sleepStart: number, sleepEnd: number): string {
+function sleepColor(darkMode: boolean): string {
+  return darkMode ? "#ffb8d2" : "#d8ccff";
+}
+
+function clockFaceColor(minOfDay: number, sleepStart: number, sleepEnd: number, darkMode: boolean): string {
   if (inSleepWindow(minOfDay, sleepStart, sleepEnd)) {
-    return "#ffb8d2";
+    return sleepColor(darkMode);
   }
-  return timeColor(awakeT(minOfDay, sleepStart, sleepEnd));
+  return timeColor(awakeT(minOfDay, sleepStart, sleepEnd), darkMode);
 }
 
 function localDayStamp(d: Date): number {
@@ -307,12 +318,20 @@ function buildShipImageCandidates(ship: ShipConfig, size: number): string[] {
   return Array.from(new Set(urls));
 }
 
-function clockBackground(minOfDay: number, sleepStart: number, sleepEnd: number): string {
+function buildShipPreviewImageCandidates(ship: ShipConfig): string[] {
+  const urls: string[] = [];
+  for (const size of SHIP_PREVIEW_IMAGE_SIZES) {
+    urls.push(...buildShipImageCandidates(ship, size));
+  }
+  return Array.from(new Set(urls));
+}
+
+function clockBackground(minOfDay: number, sleepStart: number, sleepEnd: number, darkMode: boolean): string {
   const stepMin = 5;
   const stops: string[] = [];
   for (let m = 0; m <= 1440; m += stepMin) {
     const sampleMin = m === 1440 ? 0 : m;
-    stops.push(`${clockFaceColor(sampleMin, sleepStart, sleepEnd)} ${toDeg(m)}deg`);
+    stops.push(`${clockFaceColor(sampleMin, sleepStart, sleepEnd, darkMode)} ${toDeg(m)}deg`);
   }
   return `conic-gradient(from -90deg, ${stops.join(", ")})`;
 }
@@ -340,29 +359,44 @@ function clampFtl(value: number): number {
   return Math.max(0, Math.min(60, Math.round(value)));
 }
 
-function returnCellBackgroundColor(minOfDay: number, bad: boolean, sleepStart: number, sleepEnd: number): string | undefined {
+function returnCellBackgroundColor(
+  minOfDay: number,
+  bad: boolean,
+  sleepStart: number,
+  sleepEnd: number,
+  darkMode: boolean,
+): string | undefined {
   if (bad) {
     return undefined;
   }
-  return timeColor(awakeT(minOfDay, sleepStart, sleepEnd));
+  return timeColor(awakeT(minOfDay, sleepStart, sleepEnd), darkMode);
 }
 
 function ShipImage({ ship, flat }: { ship: ShipConfig; flat: boolean }): JSX.Element {
   const candidates = useMemo(() => buildShipImageCandidates(ship, SHIP_IMAGE_SIZE), [ship]);
-  const previewCandidates = useMemo(() => buildShipImageCandidates(ship, SHIP_PREVIEW_IMAGE_SIZE), [ship]);
+  const previewCandidates = useMemo(() => buildShipPreviewImageCandidates(ship), [ship]);
   const [candidateIndex, setCandidateIndex] = useState(0);
+  const [previewCandidateIndex, setPreviewCandidateIndex] = useState(0);
   const [fallback, setFallback] = useState(false);
+  const [previewFallback, setPreviewFallback] = useState(false);
 
   useEffect(() => {
     setCandidateIndex(0);
+    setPreviewCandidateIndex(0);
     setFallback(false);
+    setPreviewFallback(false);
   }, [ship.ship]);
 
   if (fallback || candidateIndex >= candidates.length) {
     return <span className={styles.shipFallback}>{shipInitials(ship.ship)}</span>;
   }
 
-  const previewSrc = previewCandidates[candidateIndex] || previewCandidates[0] || candidates[candidateIndex];
+  const previewSrc =
+    previewCandidates[previewCandidateIndex] ||
+    previewCandidates[0] ||
+    candidates[candidateIndex] ||
+    candidates[0] ||
+    "";
   const baseImage = (
     <img
       className={styles.shipImage}
@@ -388,9 +422,24 @@ function ShipImage({ ship, flat }: { ship: ShipConfig; flat: boolean }): JSX.Ele
   return (
     <span className={styles.shipImageWrap}>
       {baseImage}
-      <span className={styles.shipImagePreview} aria-hidden="true">
-        <img className={styles.shipImageLarge} src={previewSrc} alt="" loading="lazy" />
-      </span>
+      {!previewFallback && previewSrc && (
+        <span className={styles.shipImagePreview} aria-hidden="true">
+          <img
+            className={styles.shipImageLarge}
+            src={previewSrc}
+            alt=""
+            loading="lazy"
+            onError={() => {
+              const next = previewCandidateIndex + 1;
+              if (next < previewCandidates.length) {
+                setPreviewCandidateIndex(next);
+              } else {
+                setPreviewFallback(true);
+              }
+            }}
+          />
+        </span>
+      )}
     </span>
   );
 }
@@ -399,19 +448,29 @@ function ReturnClock({
   minOfDay,
   sleepStart,
   sleepEnd,
+  darkMode,
 }: {
   minOfDay: number;
   sleepStart: number;
   sleepEnd: number;
+  darkMode: boolean;
 }): JSX.Element {
   const angle = toDeg(minOfDay) - 90;
+  const asleep = inSleepWindow(minOfDay, sleepStart, sleepEnd);
   const style = {
-    background: clockBackground(minOfDay, sleepStart, sleepEnd),
-    borderColor: inSleepWindow(minOfDay, sleepStart, sleepEnd) ? "#e88fb2" : "#9fd18b",
+    background: clockBackground(minOfDay, sleepStart, sleepEnd, darkMode),
+    borderColor: asleep ? sleepColor(darkMode) : "#9fd18b",
     "--handAngle": `${angle}deg`,
-    "--handColor": inSleepWindow(minOfDay, sleepStart, sleepEnd) ? "#b30000" : "#222",
+    "--handColor": asleep ? "#b30000" : "#222",
   } as React.CSSProperties;
   return <div className={styles.clock} style={style} aria-hidden="true" />;
+}
+
+function isLightThemeRoot(): boolean {
+  if (typeof document === "undefined") {
+    return false;
+  }
+  return document.documentElement.dataset.theme === "light";
 }
 
 export default function ShipTimerPage(): JSX.Element {
@@ -422,6 +481,7 @@ export default function ShipTimerPage(): JSX.Element {
   const [viewMode, setViewMode] = useState<ViewMode>("grouped");
   const [sortMode, setSortMode] = useState<SortMode>("ship");
   const [copyStatus, setCopyStatus] = useState<string>("");
+  const [darkMode, setDarkMode] = useState<boolean>(() => !isLightThemeRoot());
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -450,6 +510,22 @@ export default function ShipTimerPage(): JSX.Element {
     if (sort === "ship" || sort === "return") {
       setSortMode(sort);
     }
+  }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const syncTheme = () => setDarkMode(!isLightThemeRoot());
+    syncTheme();
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === "attributes" && mutation.attributeName === "data-theme") {
+          syncTheme();
+          break;
+        }
+      }
+    });
+    observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
@@ -689,9 +765,9 @@ export default function ShipTimerPage(): JSX.Element {
                     </td>
                     <td>{row.setting}</td>
                     <td className="mono">{row.duration}</td>
-                    <td style={{ backgroundColor: returnCellBackgroundColor(row.retMinOfDay, row.bad, sleepStart, sleepEnd) }}>
+                    <td style={{ backgroundColor: returnCellBackgroundColor(row.retMinOfDay, row.bad, sleepStart, sleepEnd, darkMode) }}>
                       <div className={styles.returnWrap}>
-                        <ReturnClock minOfDay={row.retMinOfDay} sleepStart={sleepStart} sleepEnd={sleepEnd} />
+                        <ReturnClock minOfDay={row.retMinOfDay} sleepStart={sleepStart} sleepEnd={sleepEnd} darkMode={darkMode} />
                         <span>{fmtReturn(row.ret)}</span>
                       </div>
                     </td>
@@ -718,9 +794,9 @@ export default function ShipTimerPage(): JSX.Element {
                       )}
                       <td>{row.setting}</td>
                       <td className="mono">{row.duration}</td>
-                      <td style={{ backgroundColor: returnCellBackgroundColor(row.retMinOfDay, row.bad, sleepStart, sleepEnd) }}>
+                      <td style={{ backgroundColor: returnCellBackgroundColor(row.retMinOfDay, row.bad, sleepStart, sleepEnd, darkMode) }}>
                         <div className={styles.returnWrap}>
-                          <ReturnClock minOfDay={row.retMinOfDay} sleepStart={sleepStart} sleepEnd={sleepEnd} />
+                          <ReturnClock minOfDay={row.retMinOfDay} sleepStart={sleepStart} sleepEnd={sleepEnd} darkMode={darkMode} />
                           <span>{fmtReturn(row.ret)}</span>
                         </div>
                       </td>

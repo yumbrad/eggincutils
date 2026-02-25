@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 const DURATION_TYPES = ["TUTORIAL", "SHORT", "LONG", "EPIC"] as const;
-const RISK_PROFILES = ["balanced", "conservative", "optimistic"] as const;
 const FALSEY_STRINGS = new Set(["0", "false", "no", "off"]);
 
 const nonNegativeFiniteSchema = z.number().finite().min(0);
@@ -66,7 +65,6 @@ export const planRequestSchema = z
       .finite()
       .default(0.5)
       .transform((value) => Math.max(0, Math.min(1, value))),
-    riskProfile: z.enum(RISK_PROFILES).optional().default("balanced"),
     includeSlotted: z.union([z.boolean(), z.number(), z.string()]).optional(),
     fastMode: z.union([z.boolean(), z.number(), z.string()]).optional(),
   })
@@ -75,7 +73,6 @@ export const planRequestSchema = z
     targetItemId: value.targetItemId,
     quantity: value.quantity,
     priorityTime: value.priorityTime,
-    riskProfile: value.riskProfile,
     includeSlotted: parseIncludeSlotted(value.includeSlotted),
     fastMode: parseFastMode(value.fastMode),
   }));
@@ -147,7 +144,6 @@ export const replanRequestSchema = z.object({
     .finite()
     .default(0.5)
     .transform((value) => Math.max(0, Math.min(1, value))),
-  riskProfile: z.enum(RISK_PROFILES).optional().default("balanced"),
   fastMode: z.union([z.boolean(), z.number(), z.string()]).optional(),
   observedReturns: z.array(observedReturnSchema).optional().default([]),
   missionLaunches: z.array(missionLaunchUpdateSchema).optional().default([]),
@@ -212,7 +208,6 @@ export const plannerResultSchema = z.object({
   targetItemId: z.string().min(1),
   quantity: nonNegativeIntSchema,
   priorityTime: z.number().finite().min(0).max(1),
-  riskProfile: z.enum(RISK_PROFILES),
   geCost: nonNegativeFiniteSchema,
   expectedHours: nonNegativeFiniteSchema,
   weightedScore: nonNegativeFiniteSchema,

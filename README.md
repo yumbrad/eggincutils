@@ -45,6 +45,6 @@ Use `POST /api/plan/replan` to replan from a current snapshot without re-fetchin
 Request body fields:
 
 - `profile`: full profile object (same shape as `/api/profile` response payload)
-- `targetItemId`, `quantity`, `priorityTime`, `riskProfile`
+- `targetItemId`, `quantity`, `priorityTime`
 - `observedReturns`: optional item drops to add to inventory (`[{ itemId, quantity }]`)
 - `missionLaunches`: optional launches completed since snapshot (`[{ ship, durationType, launches }]`)

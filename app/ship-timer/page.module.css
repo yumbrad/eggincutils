@@ -223,7 +223,7 @@
 }
 
 .badRow td:not(.shipCell) {
-  background: color-mix(in oklab, #f58ca0, transparent 72%);
+  background: var(--sleep-bad-bg);
 }
 
 .pageLinks {

@@ -22,6 +22,7 @@
   --error-border: #a94d4d;
   --error-ink: #f2b2b2;
   --theme-switch-bg: rgba(12, 20, 37, 0.86);
+  --sleep-bad-bg: color-mix(in oklab, #f58ca0, transparent 72%);
 }
 
 :root[data-theme="light"] {
@@ -48,6 +49,7 @@
   --error-border: #d59c84;
   --error-ink: #7a2d0c;
   --theme-switch-bg: rgba(255, 253, 247, 0.88);
+  --sleep-bad-bg: color-mix(in oklab, #b9a1f1, transparent 64%);
 }
 
 * {

@@ -131,13 +131,13 @@ This is expected-value + greedy allocation. It is intentionally rerunnable after
 1. Replace greedy mission allocation with formal optimizer core:
    - HiGHS/MILP preferred for mission mix + craft decisions.
 2. Include horizon decisions where mission launches can raise star levels and unlock better mission options.
-3. Model slider as weighted objective with normalized terms and optional risk profile options.
+3. Model slider as weighted objective with normalized GE/time terms.
 4. Add rolling-horizon mode / replanning endpoint from current observed returns.
 
 ### Phase B status (updated 2026-02-25)
 - [x] 1. Craft + mission allocation now runs in a unified HiGHS model with exact craft-discount scheduling (plus heuristic fallback path for solver/runtime failures).
 - [x] 2. Added bounded horizon/star-progression search that can insert prep launches to unlock/level ships before final mission allocation.
-- [x] 3. Added slider-aware normalized objective references and risk profiles (`balanced`, `conservative`, `optimistic`) that adjust mission yield/time weighting in solver planning.
+- [x] 3. Added slider-aware normalized objective references in solver planning (now using statistically expected mission yields only).
 - [x] 4. Added `/api/plan/replan` endpoint that replans from a supplied profile snapshot plus observed returns/mission-launch updates.
 
 ## Phase C - Integrate old tools fully
@@ -154,6 +154,11 @@ This is expected-value + greedy allocation. It is intentionally rerunnable after
 1. Add ship + artifact images in planner results.
 2. Better mission recommendation presentation (timeline/gantt style for 3 slots).
 3. Add copyable/shareable plan state in URL.
+
+### Phase D status (updated 2026-02-25)
+- [ ] 1. Add ship + artifact images in planner results.
+- [x] 2. Added a 3-slot timeline/gantt-style mission visualization with lane balancing, per-block details, and prep-only workload visibility.
+- [ ] 3. Add copyable/shareable plan state in URL.
 
 ## 7) Technical Notes for Fresh Agent
 
@@ -213,8 +218,6 @@ Optional vars currently supported:
 ---
 
 Post handoff plan miscellaneous TODOs:
-1. Change (parenthesis) text in item dropdown change to (T1) or (T3) etc instead of (Fragment) or (Complex)...
+1. Change (parenthesis) text in item dropdown change to (T1) or (T3) etc instead of (Fragment) or (Complex)... Also, change "henerprise-short" style text underneath Ship name to just "Short" "Extended" etc. Also remove "target id: xx" under target name
 2. Local storage or cookie based saving of last selected options (and EID, shared across tools)
-3. "techyum's eggy tools" ... "🥚 Egg Inc. C2C (chicken-to-consumer) Premium Suite™ with Dilithium Enterprise Resource Planning (DERP™)" (replace title and subtitle above title, respectively)
-4. Do we really need the Risk Profile? Sounds like it is redundant to just bumping the slider up or down somewhat?
-5. 
+3. "techyum's eggy tools" ... "🥚 Egg Inc. C2C (chicken-to-consumer) Premium Suite™ with Dilithium Enterprise Resource Planning (DERP™)" (replace title and subtitle above title, respectively) ... plus, try making subtitle above title #ff1279 color in both light/dark modes (but keep or add ability to change per mode in case one needs tweaking)

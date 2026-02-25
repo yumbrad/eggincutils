@@ -16,6 +16,7 @@ import {
   itemKeyToIconUrl,
   itemKeyToId,
 } from "../../lib/item-utils";
+import styles from "./page.module.css";
 
 type ShipLevelInfo = {
   ship: string;
@@ -64,7 +65,6 @@ type PlanResponse = {
     targetItemId: string;
     quantity: number;
     priorityTime: number;
-    riskProfile: "balanced" | "conservative" | "optimistic";
     geCost: number;
     expectedHours: number;
     weightedScore: number;
@@ -101,7 +101,261 @@ type PlanResponse = {
   };
 };
 
+type PlanMissionRow = PlanResponse["plan"]["missions"][number];
+
+type TimelineSegment = {
+  id: string;
+  label: string;
+  subtitle: string;
+  launches: number;
+  durationSeconds: number;
+  totalSlotSeconds: number;
+  color: string;
+  phase: "mission" | "prep";
+};
+
+type TimelineLaneBlock = {
+  id: string;
+  label: string;
+  subtitle: string;
+  color: string;
+  phase: "mission" | "prep";
+  launches: number;
+  totalSeconds: number;
+  startSeconds: number;
+  endSeconds: number;
+};
+
+type MissionTimeline = {
+  lanes: TimelineLaneBlock[][];
+  segments: TimelineSegment[];
+  totalSeconds: number;
+  modelTotalSlotSeconds: number;
+  missionSlotSeconds: number;
+  hiddenPrepSlotSeconds: number;
+};
+
 const DURATION_TYPES: DurationType[] = ["TUTORIAL", "SHORT", "LONG", "EPIC"];
+
+function durationTypeLabel(durationType: string): string {
+  switch (durationType) {
+    case "TUTORIAL":
+      return "Tutorial";
+    case "SHORT":
+      return "Short";
+    case "LONG":
+      return "Standard";
+    case "EPIC":
+      return "Extended";
+    default:
+      return durationType;
+  }
+}
+
+function hashString(value: string): number {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash);
+}
+
+function timelineColor(seed: string, phase: "mission" | "prep"): string {
+  if (phase === "prep") {
+    return "color-mix(in oklab, #b9a1f1, var(--panel) 18%)";
+  }
+  const hue = hashString(seed) % 360;
+  return `hsla(${hue}, 70%, 56%, 0.58)`;
+}
+
+function laneOrderByLoad(loads: number[]): number[] {
+  return [0, 1, 2].sort((a, b) => {
+    const diff = loads[a] - loads[b];
+    if (Math.abs(diff) > 1e-9) {
+      return diff;
+    }
+    return a - b;
+  });
+}
+
+function distributeLaunchesAcrossLanes(launches: number, durationSeconds: number, laneLoads: number[]): number[] {
+  const allocations = [0, 0, 0];
+  const projected = [...laneLoads];
+  let remaining = Math.max(0, Math.round(launches));
+  const safeDuration = Math.max(0, Math.round(durationSeconds));
+  if (remaining <= 0 || safeDuration <= 0) {
+    return allocations;
+  }
+
+  while (remaining > 0) {
+    const order = laneOrderByLoad(projected);
+    const first = order[0];
+    const second = order[1];
+    const gap = projected[second] - projected[first];
+    let chunk = 1;
+    if (gap > 0) {
+      chunk = Math.ceil(gap / safeDuration);
+    } else {
+      const minLoad = projected[first];
+      const tiedCount = order.filter((lane) => Math.abs(projected[lane] - minLoad) < 1e-9).length;
+      chunk = Math.floor(remaining / Math.max(1, tiedCount));
+    }
+    const assign = Math.max(1, Math.min(remaining, chunk));
+    allocations[first] += assign;
+    projected[first] += assign * safeDuration;
+    remaining -= assign;
+  }
+
+  return allocations;
+}
+
+function distributeSecondsAcrossLanes(totalSlotSeconds: number, laneLoads: number[]): number[] {
+  const allocations = [0, 0, 0];
+  const projected = [...laneLoads];
+  let remaining = Math.max(0, Math.round(totalSlotSeconds));
+  if (remaining <= 0) {
+    return allocations;
+  }
+
+  while (remaining > 0) {
+    const order = laneOrderByLoad(projected);
+    const first = order[0];
+    const second = order[1];
+    const gap = Math.max(0, Math.round(projected[second] - projected[first]));
+    let chunk = 1;
+    if (gap > 0) {
+      chunk = gap;
+    } else {
+      const minLoad = projected[first];
+      const tiedCount = order.filter((lane) => Math.abs(projected[lane] - minLoad) < 1e-9).length;
+      chunk = Math.floor(remaining / Math.max(1, tiedCount));
+    }
+    const assign = Math.max(1, Math.min(remaining, chunk));
+    allocations[first] += assign;
+    projected[first] += assign;
+    remaining -= assign;
+  }
+
+  return allocations;
+}
+
+function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | null {
+  const missionSegments: TimelineSegment[] = plan.missions
+    .map((mission: PlanMissionRow, index) => {
+      const launches = Math.max(0, Math.round(mission.launches));
+      const durationSeconds = Math.max(0, Math.round(mission.durationSeconds));
+      const totalSlotSeconds = launches * durationSeconds;
+      if (launches <= 0 || totalSlotSeconds <= 0) {
+        return null;
+      }
+      const targetName = afxIdToTargetFamilyName(mission.targetAfxId);
+      const label = `${titleCaseShip(mission.ship)} ${durationTypeLabel(mission.durationType)}`;
+      return {
+        id: `mission:${index}:${mission.missionId}:${mission.targetAfxId}`,
+        label,
+        subtitle: targetName,
+        launches,
+        durationSeconds,
+        totalSlotSeconds,
+        color: timelineColor(`${mission.ship}|${mission.durationType}|${mission.targetAfxId}`, "mission"),
+        phase: "mission",
+      };
+    })
+    .filter((segment): segment is TimelineSegment => segment !== null)
+    .sort((a, b) => b.durationSeconds - a.durationSeconds || b.launches - a.launches || a.label.localeCompare(b.label));
+
+  const missionSlotSeconds = missionSegments.reduce((sum, segment) => sum + segment.totalSlotSeconds, 0);
+  const modelTotalSlotSeconds = Math.max(0, Math.round(plan.expectedHours * 3 * 3600));
+  let hiddenPrepSlotSeconds = Math.max(0, modelTotalSlotSeconds - missionSlotSeconds);
+  if (hiddenPrepSlotSeconds < 60) {
+    hiddenPrepSlotSeconds = 0;
+  }
+
+  const segments = [...missionSegments];
+  if (hiddenPrepSlotSeconds > 0) {
+    segments.unshift({
+      id: "prep-only",
+      label: "Progression-only prep",
+      subtitle: "No required-item drop coverage",
+      launches: 0,
+      durationSeconds: 0,
+      totalSlotSeconds: hiddenPrepSlotSeconds,
+      color: timelineColor("prep-only", "prep"),
+      phase: "prep",
+    });
+  }
+
+  if (segments.length === 0) {
+    return null;
+  }
+
+  const lanes: TimelineLaneBlock[][] = [[], [], []];
+  const laneLoads = [0, 0, 0];
+
+  for (const segment of segments) {
+    if (segment.phase === "mission") {
+      const launchAllocations = distributeLaunchesAcrossLanes(segment.launches, segment.durationSeconds, laneLoads);
+      for (let lane = 0; lane < 3; lane += 1) {
+        const launches = launchAllocations[lane];
+        if (launches <= 0) {
+          continue;
+        }
+        const blockSeconds = launches * segment.durationSeconds;
+        const startSeconds = laneLoads[lane];
+        const endSeconds = startSeconds + blockSeconds;
+        lanes[lane].push({
+          id: `${segment.id}:lane:${lane}`,
+          label: segment.label,
+          subtitle: segment.subtitle,
+          color: segment.color,
+          phase: segment.phase,
+          launches,
+          totalSeconds: blockSeconds,
+          startSeconds,
+          endSeconds,
+        });
+        laneLoads[lane] = endSeconds;
+      }
+      continue;
+    }
+
+    const secondAllocations = distributeSecondsAcrossLanes(segment.totalSlotSeconds, laneLoads);
+    for (let lane = 0; lane < 3; lane += 1) {
+      const blockSeconds = secondAllocations[lane];
+      if (blockSeconds <= 0) {
+        continue;
+      }
+      const startSeconds = laneLoads[lane];
+      const endSeconds = startSeconds + blockSeconds;
+      lanes[lane].push({
+        id: `${segment.id}:lane:${lane}`,
+        label: segment.label,
+        subtitle: segment.subtitle,
+        color: segment.color,
+        phase: segment.phase,
+        launches: 0,
+        totalSeconds: blockSeconds,
+        startSeconds,
+        endSeconds,
+      });
+      laneLoads[lane] = endSeconds;
+    }
+  }
+
+  const totalSeconds = Math.max(0, ...laneLoads);
+  if (totalSeconds <= 0) {
+    return null;
+  }
+
+  return {
+    lanes,
+    segments,
+    totalSeconds,
+    modelTotalSlotSeconds,
+    missionSlotSeconds,
+    hiddenPrepSlotSeconds,
+  };
+}
 
 function formatDurationFromHours(hours: number): string {
   const totalMinutes = Math.max(0, Math.round(hours * 60));
@@ -202,7 +456,6 @@ export default function MissionCraftPlannerPage() {
   const [targetItemId, setTargetItemId] = useState("soul-stone-2");
   const [quantity, setQuantity] = useState(1);
   const [priorityTimePct, setPriorityTimePct] = useState(50);
-  const [riskProfile, setRiskProfile] = useState<"balanced" | "conservative" | "optimistic">("balanced");
   const [includeSlotted, setIncludeSlotted] = useState(true);
   const [fastMode, setFastMode] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -226,6 +479,8 @@ export default function MissionCraftPlannerPage() {
       .sort((a, b) => a.label.localeCompare(b.label));
   }, []);
 
+  const missionTimeline = useMemo(() => (response ? buildMissionTimeline(response.plan) : null), [response]);
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
@@ -245,7 +500,6 @@ export default function MissionCraftPlannerPage() {
           targetItemId,
           quantity,
           priorityTime: priorityTimePct / 100,
-          riskProfile,
           includeSlotted,
           fastMode,
         }),
@@ -295,7 +549,6 @@ export default function MissionCraftPlannerPage() {
           targetItemId,
           quantity,
           priorityTime: priorityTimePct / 100,
-          riskProfile,
           fastMode,
           observedReturns: [],
           missionLaunches: [],
@@ -404,19 +657,6 @@ export default function MissionCraftPlannerPage() {
             />
           </div>
 
-          <div className="field" style={{ minWidth: 200 }}>
-            <label htmlFor="riskProfile">Risk profile</label>
-            <select
-              id="riskProfile"
-              value={riskProfile}
-              onChange={(event) => setRiskProfile(event.target.value as "balanced" | "conservative" | "optimistic")}
-            >
-              <option value="balanced">Balanced (expected)</option>
-              <option value="conservative">Conservative</option>
-              <option value="optimistic">Optimistic</option>
-            </select>
-          </div>
-
           <div className="field" style={{ minWidth: 220 }}>
             <label htmlFor="includeSlotted">Inventory handling</label>
             <select
@@ -492,7 +732,6 @@ export default function MissionCraftPlannerPage() {
               <div className="muted">Research levels</div>
               <div>FTL: <strong>{response.profile.epicResearchFTLLevel}</strong></div>
               <div>Zero-G: <strong>{response.profile.epicResearchZerogLevel}</strong></div>
-              <div>Risk: <strong>{response.plan.riskProfile}</strong></div>
             </div>
           </div>
 
@@ -551,6 +790,81 @@ export default function MissionCraftPlannerPage() {
 
           <div className="panel">
             <h2 style={{ marginTop: 0 }}>Mission plan</h2>
+            {missionTimeline && (
+              <div className={styles.timelinePanel}>
+                <p className={`muted ${styles.timelineIntro}`}>
+                  Heuristic 3-slot timeline view of recommended launches. Exact ordering can vary, but total workload matches the plan.
+                </p>
+                <div className={styles.timelineStats}>
+                  <span>
+                    Model total: <strong>{formatDurationFromHours(response.plan.expectedHours)}</strong>
+                  </span>
+                  <span>
+                    Timeline makespan: <strong>{formatDurationFromHours(missionTimeline.totalSeconds / 3600)}</strong>
+                  </span>
+                  <span>
+                    Mission-row workload: <strong>{formatDurationFromHours(missionTimeline.missionSlotSeconds / 3 / 3600)}</strong>
+                  </span>
+                  {missionTimeline.hiddenPrepSlotSeconds > 0 && (
+                    <span>
+                      Progression-only prep: <strong>{formatDurationFromHours(missionTimeline.hiddenPrepSlotSeconds / 3 / 3600)}</strong>
+                    </span>
+                  )}
+                </div>
+
+                <div className={styles.timelineLanes}>
+                  {missionTimeline.lanes.map((laneBlocks, laneIndex) => (
+                    <div key={`lane:${laneIndex}`} className={styles.timelineLaneRow}>
+                      <div className={styles.timelineLaneLabel}>Slot {laneIndex + 1}</div>
+                      <div className={styles.timelineTrack}>
+                        {laneBlocks.map((block) => {
+                          const leftPct = (block.startSeconds / missionTimeline.totalSeconds) * 100;
+                          const widthPct = Math.max((block.totalSeconds / missionTimeline.totalSeconds) * 100, 0.7);
+                          const titleLines = [
+                            block.label,
+                            block.subtitle,
+                            block.launches > 0 ? `${block.launches.toLocaleString()} launches` : "Progression-only slot workload",
+                            `Slot workload: ${formatDurationFromHours(block.totalSeconds / 3600)}`,
+                            `${formatDurationFromHours(block.startSeconds / 3600)} → ${formatDurationFromHours(block.endSeconds / 3600)}`,
+                          ];
+                          return (
+                            <div
+                              key={block.id}
+                              className={styles.timelineBlock}
+                              data-phase={block.phase}
+                              style={{
+                                left: `${leftPct}%`,
+                                width: `${widthPct}%`,
+                                background: block.color,
+                              }}
+                              title={titleLines.join("\n")}
+                            >
+                              <span className={styles.timelineBlockLabel}>
+                                {block.launches > 0 ? `${block.label} ×${block.launches}` : block.label}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className={styles.timelineLegend}>
+                  {missionTimeline.segments.map((segment) => (
+                    <div key={segment.id} className={styles.timelineLegendRow}>
+                      <span className={styles.timelineSwatch} style={{ background: segment.color }} aria-hidden="true" />
+                      <span>{segment.label}</span>
+                      <span className={styles.timelineLegendMuted}>{segment.subtitle}</span>
+                      <span className={styles.timelineLegendMeta}>
+                        {segment.launches > 0 ? `${segment.launches.toLocaleString()} launches` : "prep-only"} ·{" "}
+                        {formatDurationFromHours(segment.totalSlotSeconds / 3600)} slot-time
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             {response.plan.missions.length === 0 ? (
               <p className="muted" style={{ margin: 0 }}>No mission launches required by the current model.</p>
             ) : (

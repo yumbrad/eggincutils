@@ -1,0 +1,134 @@
+.timelinePanel {
+  margin-bottom: 14px;
+  padding: 10px;
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--card), transparent 20%);
+}
+
+.timelineIntro {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+.timelineStats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.timelineLanes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.timelineLaneRow {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.timelineLaneLabel {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.timelineTrack {
+  position: relative;
+  height: 34px;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  overflow: hidden;
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--panel), transparent 18%),
+    color-mix(in oklab, var(--bg-b), transparent 20%)
+  );
+}
+
+.timelineBlock {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  min-width: 2px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in oklab, var(--stroke), transparent 18%);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.24);
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  overflow: hidden;
+}
+
+.timelineBlock[data-phase="prep"] {
+  border-style: dashed;
+}
+
+.timelineBlockLabel {
+  font-size: 11px;
+  font-weight: 700;
+  color: color-mix(in oklab, var(--ink), #000 16%);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timelineLegend {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.timelineLegendRow {
+  display: grid;
+  grid-template-columns: 14px minmax(130px, 1.3fr) minmax(130px, 1.2fr) minmax(160px, auto);
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.timelineSwatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid color-mix(in oklab, var(--stroke), transparent 25%);
+}
+
+.timelineLegendMuted {
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timelineLegendMeta {
+  color: var(--muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, "Courier New", monospace;
+  font-size: 11px;
+  text-align: right;
+}
+
+@media (max-width: 900px) {
+  .timelineLaneRow {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .timelineLegendRow {
+    grid-template-columns: 14px 1fr;
+  }
+
+  .timelineLegendMuted,
+  .timelineLegendMeta {
+    grid-column: 2;
+    text-align: left;
+  }
+}

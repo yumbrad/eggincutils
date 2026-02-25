@@ -16,6 +16,7 @@ import { PlayerProfile } from "./profile";
 
 type MissionAction = {
   key: string;
+  optionKey: string;
   missionId: string;
   ship: string;
   durationType: DurationType;
@@ -47,6 +48,10 @@ type ProgressionLaunchRow = {
   reason: string;
 };
 
+type PrepProgressionStep = ProgressionLaunchRow & {
+  option: MissionOption;
+};
+
 type ProgressionShipRow = {
   ship: string;
   unlocked: boolean;
@@ -64,19 +69,10 @@ type TargetBreakdown = {
   shortfall: number;
 };
 
-export type RiskProfileName = "balanced" | "conservative" | "optimistic";
-
-type RiskProfileConfig = {
-  name: RiskProfileName;
-  missionYieldMultiplier: number;
-  missionTimeMultiplier: number;
-};
-
 export type PlannerResult = {
   targetItemId: string;
   quantity: number;
   priorityTime: number;
-  riskProfile: RiskProfileName;
   geCost: number;
   expectedHours: number;
   weightedScore: number;
@@ -118,27 +114,7 @@ const PROGRESSION_BEAM_WIDTH = 6;
 const PROGRESSION_MAX_LAUNCHES_PER_ACTION = 600;
 const FAST_MODE_MAX_CANDIDATES = 8;
 const MIN_MISSION_TIME_OBJECTIVE_WEIGHT = 1e-5;
-const RISK_PROFILE_SETTINGS: Record<RiskProfileName, RiskProfileConfig> = {
-  balanced: {
-    name: "balanced",
-    missionYieldMultiplier: 1,
-    missionTimeMultiplier: 1,
-  },
-  conservative: {
-    name: "conservative",
-    missionYieldMultiplier: 0.85,
-    missionTimeMultiplier: 1.15,
-  },
-  optimistic: {
-    name: "optimistic",
-    missionYieldMultiplier: 1.1,
-    missionTimeMultiplier: 0.9,
-  },
-};
-
-function resolveRiskProfile(name: RiskProfileName = "balanced"): RiskProfileConfig {
-  return RISK_PROFILE_SETTINGS[name] || RISK_PROFILE_SETTINGS.balanced;
-}
+const REFINEMENT_MAX_PHASES_PER_OPTION = 3;
 
 function getDiscountedCost(baseCost: number, craftCount: number): number {
   const progress = Math.min(1, craftCount / MAX_CRAFT_COUNT_FOR_DISCOUNT);
@@ -227,17 +203,26 @@ function pickLevel(levels: MissionLevelLootStore[], desiredLevel: number): Missi
   return levels[0];
 }
 
+function missionOptionKey(option: MissionOption): string {
+  return [
+    option.ship,
+    option.missionId,
+    option.durationType,
+    String(option.level),
+    String(option.durationSeconds),
+    String(option.capacity),
+  ].join("|");
+}
+
 function yieldsFromTarget(
   target: MissionTargetLootStore,
   items: Set<string>,
-  capacity: number,
-  yieldMultiplier: number
+  capacity: number
 ): Record<string, number> {
   const yields: Record<string, number> = {};
   if (target.totalDrops <= 0) {
     return yields;
   }
-  const safeMultiplier = Math.max(0.01, yieldMultiplier);
   for (const item of target.items) {
     const itemKey = itemIdToKey(item.itemId);
     if (!items.has(itemKey)) {
@@ -247,7 +232,7 @@ function yieldsFromTarget(
     if (totalItemDrops <= 0) {
       continue;
     }
-    yields[itemKey] = (totalItemDrops / target.totalDrops) * capacity * safeMultiplier;
+    yields[itemKey] = (totalItemDrops / target.totalDrops) * capacity;
   }
   return yields;
 }
@@ -255,7 +240,6 @@ function yieldsFromTarget(
 async function buildMissionActionsForOptions(
   missionOptions: MissionOption[],
   relevantItems: Set<string>,
-  missionYieldMultiplier: number,
   lootData?: LootJson
 ): Promise<MissionAction[]> {
   const loot = lootData || (await loadLootData());
@@ -264,6 +248,7 @@ async function buildMissionActionsForOptions(
   const actions: MissionAction[] = [];
 
   for (const option of missionOptions) {
+    const optionKey = missionOptionKey(option);
     const mission = byMissionId.get(option.missionId);
     if (!mission) {
       continue;
@@ -275,12 +260,13 @@ async function buildMissionActionsForOptions(
     }
 
     for (const target of levelLoot.targets) {
-      const yields = yieldsFromTarget(target, relevantItems, option.capacity, missionYieldMultiplier);
+      const yields = yieldsFromTarget(target, relevantItems, option.capacity);
       if (Object.keys(yields).length === 0) {
         continue;
       }
       actions.push({
-        key: `${option.missionId}|${target.targetAfxId}`,
+        key: `${optionKey}|${target.targetAfxId}`,
+        optionKey,
         missionId: option.missionId,
         ship: option.ship,
         durationType: option.durationType,
@@ -296,10 +282,9 @@ async function buildMissionActionsForOptions(
 
 async function buildMissionActions(
   profile: PlayerProfile,
-  relevantItems: Set<string>,
-  missionYieldMultiplier: number
+  relevantItems: Set<string>
 ): Promise<MissionAction[]> {
-  return buildMissionActionsForOptions(profile.missionOptions, relevantItems, missionYieldMultiplier);
+  return buildMissionActionsForOptions(profile.missionOptions, relevantItems);
 }
 
 function bestTimePerUnit(itemKey: string, actions: MissionAction[]): number {
@@ -358,6 +343,11 @@ type MissionAllocation = {
   totalSlotSeconds: number;
   remainingDemand: Record<string, number>;
   notes: string[];
+};
+
+type RequiredMissionLaunchConstraint = {
+  launches: number;
+  exact: boolean;
 };
 
 function formatLpNumber(value: number): string {
@@ -609,9 +599,23 @@ async function solveUnifiedCraftMissionPlan(options: {
   actions: MissionAction[];
   geRef: number;
   timeRef: number;
-  missionTimeMultiplier: number;
+  requiredMissionLaunches?: Record<string, RequiredMissionLaunchConstraint>;
+  maxMissionLaunchesByOption?: Record<string, number>;
+  optionLaunchPrecedenceChains?: string[][];
 }): Promise<UnifiedPlan> {
-  const { profile, targetKey, quantity, priorityTime, closure, actions, geRef, timeRef, missionTimeMultiplier } = options;
+  const {
+    profile,
+    targetKey,
+    quantity,
+    priorityTime,
+    closure,
+    actions,
+    geRef,
+    timeRef,
+    requiredMissionLaunches = {},
+    maxMissionLaunchesByOption = {},
+    optionLaunchPrecedenceChains = [],
+  } = options;
   const itemKeys = Array.from(closure).sort();
   const missionVars = actions.map((_, index) => `m_${index}`);
   const unmetVarByItem = new Map<string, string>();
@@ -711,7 +715,7 @@ async function solveUnifiedCraftMissionPlan(options: {
 
   const missionObjectiveWeight = Math.max(priorityTime, MIN_MISSION_TIME_OBJECTIVE_WEIGHT);
   for (let index = 0; index < actions.length; index += 1) {
-    const coefficient = (missionObjectiveWeight * (actions[index].durationSeconds / 3) * missionTimeMultiplier) / normalizedTimeRef;
+    const coefficient = (missionObjectiveWeight * (actions[index].durationSeconds / 3)) / normalizedTimeRef;
     objectiveTerms.push({
       coefficient,
       variable: missionVars[index],
@@ -757,6 +761,69 @@ async function solveUnifiedCraftMissionPlan(options: {
 
     const rhs = demandQty - inventoryQty;
     lines.push(`  b_${itemIndex}: ${formatLinearExpression(terms)} >= ${formatLpNumber(rhs)}`);
+  }
+
+  const actionIndexesByOption = new Map<string, number[]>();
+  for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
+    const optionKey = actions[actionIndex].optionKey;
+    const existing = actionIndexesByOption.get(optionKey) || [];
+    existing.push(actionIndex);
+    actionIndexesByOption.set(optionKey, existing);
+  }
+  let requiredConstraintIndex = 0;
+  for (const [optionKey, requirement] of Object.entries(requiredMissionLaunches)) {
+    const safeLaunches = Math.max(0, Math.round(requirement.launches));
+    if (safeLaunches <= 0) {
+      continue;
+    }
+    const actionIndexes = actionIndexesByOption.get(optionKey) || [];
+    if (actionIndexes.length === 0) {
+      throw new Error(`required prep mission option has no compatible actions: ${optionKey}`);
+    }
+    const lhs = actionIndexes.map((index) => missionVars[index]).join(" + ");
+    const operator = requirement.exact ? "=" : ">=";
+    lines.push(`  r_${requiredConstraintIndex}: ${lhs} ${operator} ${formatLpNumber(safeLaunches)}`);
+    requiredConstraintIndex += 1;
+  }
+
+  let optionMaxConstraintIndex = 0;
+  for (const [optionKey, launchCapRaw] of Object.entries(maxMissionLaunchesByOption)) {
+    const launchCap = Math.max(0, Math.round(launchCapRaw));
+    if (launchCap <= 0) {
+      continue;
+    }
+    const actionIndexes = actionIndexesByOption.get(optionKey) || [];
+    if (actionIndexes.length === 0) {
+      continue;
+    }
+    const lhs = actionIndexes.map((index) => missionVars[index]).join(" + ");
+    lines.push(`  mx_${optionMaxConstraintIndex}: ${lhs} <= ${formatLpNumber(launchCap)}`);
+    optionMaxConstraintIndex += 1;
+  }
+
+  let precedenceConstraintIndex = 0;
+  for (const chain of optionLaunchPrecedenceChains) {
+    if (chain.length <= 1) {
+      continue;
+    }
+    for (let phaseIndex = 1; phaseIndex < chain.length; phaseIndex += 1) {
+      const currentOptionKey = chain[phaseIndex];
+      const previousOptionKey = chain[phaseIndex - 1];
+      const currentIndexes = actionIndexesByOption.get(currentOptionKey) || [];
+      if (currentIndexes.length === 0) {
+        continue;
+      }
+      const previousIndexes = actionIndexesByOption.get(previousOptionKey) || [];
+      const terms: Array<{ coefficient: number; variable: string }> = [];
+      for (const index of currentIndexes) {
+        terms.push({ coefficient: 1, variable: missionVars[index] });
+      }
+      for (const index of previousIndexes) {
+        terms.push({ coefficient: -1, variable: missionVars[index] });
+      }
+      lines.push(`  pc_${precedenceConstraintIndex}: ${formatLinearExpression(terms)} <= 0`);
+      precedenceConstraintIndex += 1;
+    }
   }
 
   for (let modelIndex = 0; modelIndex < craftModels.length; modelIndex += 1) {
@@ -873,20 +940,20 @@ type ProgressionState = {
   launchCounts: ShipLaunchCounts;
   shipLevels: ShipLevelInfo[];
   missionOptions: MissionOption[];
-  prepSteps: ProgressionLaunchRow[];
+  prepSteps: PrepProgressionStep[];
   prepSlotSeconds: number;
 };
 
 type ProgressionAction = {
   nextLaunchCounts: ShipLaunchCounts;
   nextShipLevels: ShipLevelInfo[];
-  step: ProgressionLaunchRow;
+  step: PrepProgressionStep;
 };
 
 type ProgressionCandidate = {
   shipLevels: ShipLevelInfo[];
   missionOptions: MissionOption[];
-  prepSteps: ProgressionLaunchRow[];
+  prepSteps: PrepProgressionStep[];
   prepSlotSeconds: number;
 };
 
@@ -900,10 +967,7 @@ function missionOptionsFingerprint(options: MissionOption[]): string {
       }
       return a.durationType.localeCompare(b.durationType);
     })
-    .map(
-      (option) =>
-        `${option.ship}|${option.missionId}|${option.durationType}|${option.level}|${option.durationSeconds}|${option.capacity}`
-    )
+    .map((option) => missionOptionKey(option))
     .join("||");
 }
 
@@ -942,7 +1006,7 @@ function missionOptionsByShip(options: MissionOption[]): Map<string, MissionOpti
   return grouped;
 }
 
-function compactProgressionSteps(steps: ProgressionLaunchRow[]): ProgressionLaunchRow[] {
+function compactProgressionSteps(steps: PrepProgressionStep[]): ProgressionLaunchRow[] {
   const compacted = new Map<string, ProgressionLaunchRow>();
   for (const step of steps) {
     const key = `${step.ship}|${step.durationType}|${step.durationSeconds}|${step.reason}`;
@@ -951,7 +1015,13 @@ function compactProgressionSteps(steps: ProgressionLaunchRow[]): ProgressionLaun
       existing.launches += step.launches;
       continue;
     }
-    compacted.set(key, { ...step });
+    compacted.set(key, {
+      ship: step.ship,
+      durationType: step.durationType,
+      launches: step.launches,
+      durationSeconds: step.durationSeconds,
+      reason: step.reason,
+    });
   }
   return Array.from(compacted.values()).sort((a, b) => {
     const timeDiff = a.durationSeconds * a.launches - b.durationSeconds * b.launches;
@@ -1053,6 +1123,417 @@ function buildTargetBreakdown(options: {
   };
 }
 
+type PrepOptionRequirement = {
+  option: MissionOption;
+  launches: number;
+};
+
+function aggregatePrepOptionRequirements(steps: PrepProgressionStep[]): Map<string, PrepOptionRequirement> {
+  const requirements = new Map<string, PrepOptionRequirement>();
+  for (const step of steps) {
+    const key = missionOptionKey(step.option);
+    const existing = requirements.get(key);
+    if (existing) {
+      existing.launches += Math.max(0, Math.round(step.launches));
+      continue;
+    }
+    requirements.set(key, {
+      option: step.option,
+      launches: Math.max(0, Math.round(step.launches)),
+    });
+  }
+  return requirements;
+}
+
+function mergeMissionOptionsByKey(primary: MissionOption[], secondary: MissionOption[]): MissionOption[] {
+  const byKey = new Map<string, MissionOption>();
+  for (const option of primary) {
+    byKey.set(missionOptionKey(option), option);
+  }
+  for (const option of secondary) {
+    const key = missionOptionKey(option);
+    if (!byKey.has(key)) {
+      byKey.set(key, option);
+    }
+  }
+  return Array.from(byKey.values());
+}
+
+function addRequiredLaunchConstraint(
+  constraints: Record<string, RequiredMissionLaunchConstraint>,
+  optionKey: string,
+  launchesRaw: number,
+  exact: boolean
+): void {
+  const launches = Math.max(0, Math.round(launchesRaw));
+  if (launches <= 0) {
+    return;
+  }
+  const existing = constraints[optionKey];
+  if (!existing) {
+    constraints[optionKey] = { launches, exact };
+    return;
+  }
+  if (existing.exact || exact) {
+    constraints[optionKey] = { launches: Math.max(existing.launches, launches), exact: true };
+    return;
+  }
+  constraints[optionKey] = { launches: Math.max(existing.launches, launches), exact: false };
+}
+
+function aggregateMissionLaunchesByOption(
+  actions: MissionAction[],
+  missionCounts: Record<string, number>
+): Map<string, number> {
+  const launchesByOption = new Map<string, number>();
+  const actionsByKey = new Map(actions.map((action) => [action.key, action]));
+  for (const [actionKey, launchesRaw] of Object.entries(missionCounts)) {
+    const launches = Math.max(0, Math.round(launchesRaw));
+    if (launches <= 0) {
+      continue;
+    }
+    const action = actionsByKey.get(actionKey);
+    if (!action) {
+      continue;
+    }
+    launchesByOption.set(action.optionKey, (launchesByOption.get(action.optionKey) || 0) + launches);
+  }
+  return launchesByOption;
+}
+
+function findDominantFinalOptionKey(
+  finalOptionKeys: Set<string>,
+  launchesByOption: Map<string, number>
+): string | null {
+  let bestKey: string | null = null;
+  let bestLaunches = 0;
+  for (const [optionKey, launches] of launchesByOption.entries()) {
+    if (!finalOptionKeys.has(optionKey) || launches <= 0) {
+      continue;
+    }
+    if (!bestKey || launches > bestLaunches) {
+      bestKey = optionKey;
+      bestLaunches = launches;
+    }
+  }
+  return bestKey;
+}
+
+function findHighestTierExtendedOption(options: MissionOption[]): MissionOption | null {
+  const shipOrder = getShipOrder();
+  let best: MissionOption | null = null;
+  let bestTier = -1;
+  for (const option of options) {
+    if (option.durationType !== "EPIC") {
+      continue;
+    }
+    const tierIndex = shipOrder.indexOf(option.ship);
+    if (tierIndex < 0) {
+      continue;
+    }
+    if (!best || tierIndex > bestTier) {
+      best = option;
+      bestTier = tierIndex;
+    }
+  }
+  return best;
+}
+
+function launchesUntilShipLevelIncrease(
+  launchCounts: ShipLaunchCounts,
+  ship: string,
+  durationType: DurationType,
+  currentLevel: number,
+  maxLevel: number
+): number {
+  if (currentLevel >= maxLevel) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const probeCounts = cloneLaunchCounts(launchCounts);
+  for (let launches = 1; launches <= PROGRESSION_MAX_LAUNCHES_PER_ACTION; launches += 1) {
+    probeCounts[ship][durationType] += 1;
+    const projectedLevels = computeShipLevelsFromLaunchCounts(probeCounts);
+    const projectedInfo = projectedLevels.find((entry) => entry.ship === ship);
+    if (projectedInfo && projectedInfo.level > currentLevel) {
+      return launches;
+    }
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+function buildPhasedOptionPlan(options: {
+  profile: PlayerProfile;
+  baseLaunchCounts: ShipLaunchCounts;
+  ship: string;
+  durationType: DurationType;
+  budgetLaunches: number;
+}): Array<{ option: MissionOption; launches: number }> {
+  const { profile, baseLaunchCounts, ship, durationType, budgetLaunches } = options;
+  let remaining = Math.max(0, Math.round(budgetLaunches));
+  if (remaining <= 0) {
+    return [];
+  }
+
+  const phases: Array<{ option: MissionOption; launches: number }> = [];
+  const workingCounts = cloneLaunchCounts(baseLaunchCounts);
+  for (let phaseIndex = 0; phaseIndex < REFINEMENT_MAX_PHASES_PER_OPTION && remaining > 0; phaseIndex += 1) {
+    const shipLevels = computeShipLevelsFromLaunchCounts(workingCounts);
+    const missionOptions = buildMissionOptions(shipLevels, profile.epicResearchFTLLevel, profile.epicResearchZerogLevel);
+    const option = missionOptions.find((entry) => entry.ship === ship && entry.durationType === durationType);
+    if (!option) {
+      break;
+    }
+    const shipInfo = shipLevels.find((entry) => entry.ship === ship);
+    if (!shipInfo) {
+      break;
+    }
+
+    const launchesToNextLevel = launchesUntilShipLevelIncrease(
+      workingCounts,
+      ship,
+      durationType,
+      shipInfo.level,
+      shipInfo.maxLevel
+    );
+    const cappedLaunches = Number.isFinite(launchesToNextLevel) ? Math.max(1, Math.round(launchesToNextLevel)) : remaining;
+    const launches = phaseIndex + 1 >= REFINEMENT_MAX_PHASES_PER_OPTION
+      ? remaining
+      : Math.min(remaining, cappedLaunches);
+
+    phases.push({ option, launches });
+    workingCounts[ship][durationType] += launches;
+    remaining -= launches;
+  }
+
+  if (remaining > 0 && phases.length > 0) {
+    phases[phases.length - 1].launches += remaining;
+  }
+
+  return phases;
+}
+
+type PhasedYieldRefinementPlan = {
+  sourceOptionKey: string;
+  mode: "exact" | "cap";
+  phases: Array<{ option: MissionOption; launches: number }>;
+};
+
+async function runPhasedYieldRefinement(options: {
+  profile: PlayerProfile;
+  targetKey: string;
+  quantity: number;
+  priorityTime: number;
+  closure: Set<string>;
+  candidate: ProgressionCandidate;
+  baseActions: MissionAction[];
+  baseMissionCounts: Record<string, number>;
+  geRef: number;
+  timeRef: number;
+  lootData: LootJson;
+}): Promise<
+  | {
+      actions: MissionAction[];
+      unified: UnifiedPlan;
+      totalSlotSeconds: number;
+      weightedScore: number;
+      prepNoYieldSlotSeconds: number;
+      notes: string[];
+    }
+  | null
+> {
+  const {
+    profile,
+    targetKey,
+    quantity,
+    priorityTime,
+    closure,
+    candidate,
+    baseActions,
+    baseMissionCounts,
+    geRef,
+    timeRef,
+    lootData,
+  } = options;
+
+  const finalOptionKeys = new Set(candidate.missionOptions.map((option) => missionOptionKey(option)));
+  const optionByKey = new Map(candidate.missionOptions.map((option) => [missionOptionKey(option), option]));
+  const launchesByOption = aggregateMissionLaunchesByOption(baseActions, baseMissionCounts);
+
+  const dominantOptionKey = findDominantFinalOptionKey(finalOptionKeys, launchesByOption);
+  if (!dominantOptionKey) {
+    return null;
+  }
+  const dominantOption = optionByKey.get(dominantOptionKey);
+  if (!dominantOption) {
+    return null;
+  }
+  const dominantLaunchBudget = Math.max(0, Math.round(launchesByOption.get(dominantOptionKey) || 0));
+  if (dominantLaunchBudget <= 0) {
+    return null;
+  }
+
+  const highestTierExtended = findHighestTierExtendedOption(candidate.missionOptions);
+  const highestTierExtendedKey = highestTierExtended ? missionOptionKey(highestTierExtended) : null;
+
+  const baseLaunchCounts = shipLevelsToLaunchCounts(candidate.shipLevels);
+  const plans: PhasedYieldRefinementPlan[] = [];
+
+  const dominantPhases = buildPhasedOptionPlan({
+    profile,
+    baseLaunchCounts,
+    ship: dominantOption.ship,
+    durationType: dominantOption.durationType,
+    budgetLaunches: dominantLaunchBudget,
+  });
+  if (dominantPhases.length === 0) {
+    return null;
+  }
+  plans.push({
+    sourceOptionKey: dominantOptionKey,
+    mode: "exact",
+    phases: dominantPhases,
+  });
+
+  if (highestTierExtended && highestTierExtendedKey && highestTierExtendedKey !== dominantOptionKey) {
+    const baselineHighestBudget = Math.max(0, Math.round(launchesByOption.get(highestTierExtendedKey) || 0));
+    let highestBudget = baselineHighestBudget;
+    if (highestBudget <= 0) {
+      highestBudget = dominantLaunchBudget;
+    }
+    if (highestBudget > 0) {
+      const highestPhases = buildPhasedOptionPlan({
+        profile,
+        baseLaunchCounts,
+        ship: highestTierExtended.ship,
+        durationType: "EPIC",
+        budgetLaunches: highestBudget,
+      });
+      if (highestPhases.length > 0) {
+        plans.push({
+          sourceOptionKey: highestTierExtendedKey,
+          mode: "cap",
+          phases: highestPhases,
+        });
+      }
+    }
+  }
+
+  if (plans.length === 0) {
+    return null;
+  }
+
+  const sourceKeys = new Set(plans.map((plan) => plan.sourceOptionKey));
+  const remapToFirstPhase = new Map<string, string>();
+  const phasedOptions: MissionOption[] = [];
+  for (const plan of plans) {
+    if (plan.phases.length === 0) {
+      continue;
+    }
+    remapToFirstPhase.set(plan.sourceOptionKey, missionOptionKey(plan.phases[0].option));
+    for (const phase of plan.phases) {
+      phasedOptions.push(phase.option);
+    }
+  }
+
+  const baseOptions = candidate.missionOptions.filter((option) => !sourceKeys.has(missionOptionKey(option)));
+  const refinedMissionOptions = mergeMissionOptionsByKey(baseOptions, phasedOptions);
+  const refinedActions = await buildMissionActionsForOptions(refinedMissionOptions, closure, lootData);
+  const refinedActionOptionKeys = new Set(refinedActions.map((action) => action.optionKey));
+  const refinedFinalOptionKeys = new Set(refinedMissionOptions.map((option) => missionOptionKey(option)));
+
+  const prepRequirements = aggregatePrepOptionRequirements(candidate.prepSteps);
+  const requiredMissionLaunches: Record<string, RequiredMissionLaunchConstraint> = {};
+  let prepNoYieldSlotSeconds = 0;
+  for (const [optionKey, requirement] of prepRequirements.entries()) {
+    if (requirement.launches <= 0) {
+      continue;
+    }
+    const mappedOptionKey = remapToFirstPhase.get(optionKey) || optionKey;
+    if (!refinedActionOptionKeys.has(mappedOptionKey)) {
+      prepNoYieldSlotSeconds += requirement.launches * requirement.option.durationSeconds;
+      continue;
+    }
+    addRequiredLaunchConstraint(
+      requiredMissionLaunches,
+      mappedOptionKey,
+      requirement.launches,
+      !refinedFinalOptionKeys.has(mappedOptionKey)
+    );
+  }
+
+  const maxMissionLaunchesByOption: Record<string, number> = {};
+  const optionLaunchPrecedenceChains: string[][] = [];
+  for (const plan of plans) {
+    const phaseKeys = plan.phases.map((phase) => missionOptionKey(phase.option));
+    if (plan.mode === "exact") {
+      for (const phase of plan.phases) {
+        addRequiredLaunchConstraint(
+          requiredMissionLaunches,
+          missionOptionKey(phase.option),
+          phase.launches,
+          true
+        );
+      }
+      continue;
+    }
+    for (const phase of plan.phases) {
+      const phaseKey = missionOptionKey(phase.option);
+      const cap = Math.max(0, Math.round(phase.launches));
+      if (cap <= 0) {
+        continue;
+      }
+      maxMissionLaunchesByOption[phaseKey] = Math.max(maxMissionLaunchesByOption[phaseKey] || 0, cap);
+    }
+    if (phaseKeys.length > 1) {
+      optionLaunchPrecedenceChains.push(phaseKeys);
+    }
+  }
+
+  const unified = await solveUnifiedCraftMissionPlan({
+    profile,
+    targetKey,
+    quantity,
+    priorityTime,
+    closure,
+    actions: refinedActions,
+    geRef,
+    timeRef,
+    requiredMissionLaunches,
+    maxMissionLaunchesByOption,
+    optionLaunchPrecedenceChains,
+  });
+
+  const totalSlotSeconds = prepNoYieldSlotSeconds + unified.totalSlotSeconds;
+  const weightedScore = normalizedScore(
+    unified.geCost,
+    totalSlotSeconds / 3,
+    priorityTime,
+    geRef,
+    timeRef
+  );
+
+  const notes: string[] = [];
+  notes.push(
+    "Ran one phased-yield refinement pass on the best candidate (dominant launched option exact-phased; highest-tier unlocked extended ship cap-phased heuristic)."
+  );
+  if (prepNoYieldSlotSeconds > 0) {
+    notes.push(
+      `Refinement treated ${missionDurationLabel(
+        prepNoYieldSlotSeconds / 3
+      )} of prep launches as pure progression time (no required-item expected drops).`
+    );
+  }
+
+  return {
+    actions: refinedActions,
+    unified,
+    totalSlotSeconds,
+    weightedScore,
+    prepNoYieldSlotSeconds,
+    notes,
+  };
+}
+
 function findBestLevelUpAction(
   state: ProgressionState,
   ship: string,
@@ -1087,6 +1568,7 @@ function findBestLevelUpAction(
             launches,
             durationSeconds: option.durationSeconds,
             reason: `Raise ${ship} to level ${projectedInfo.level}`,
+            option,
           },
         };
       }
@@ -1143,6 +1625,7 @@ function findBestUnlockAction(
             launches,
             durationSeconds: option.durationSeconds,
             reason: `Unlock ${shipToUnlock} via ${previousShip} launches`,
+            option,
           },
         };
       }
@@ -1293,19 +1776,17 @@ async function planForTargetHeuristic(
   profile: PlayerProfile,
   targetItemId: string,
   quantity: number,
-  priorityTimeRaw: number,
-  riskProfileName: RiskProfileName
+  priorityTimeRaw: number
 ): Promise<PlannerResult> {
   const targetKey = itemIdToKey(targetItemId);
   const priorityTime = Math.max(0, Math.min(1, priorityTimeRaw));
   const effectivePriorityTime = Math.max(priorityTime, MIN_MISSION_TIME_OBJECTIVE_WEIGHT);
   const quantityInt = Math.max(1, Math.round(quantity));
-  const riskProfile = resolveRiskProfile(riskProfileName);
 
   const closure = new Set<string>();
   collectClosure(targetKey, closure);
 
-  const actions = await buildMissionActions(profile, closure, riskProfile.missionYieldMultiplier);
+  const actions = await buildMissionActions(profile, closure);
 
   const inventory: Record<string, number> = { ...profile.inventory };
   const craftCounts: Record<string, number> = { ...profile.craftCounts };
@@ -1351,7 +1832,7 @@ async function planForTargetHeuristic(
 
       const farmTpu = bestTimePerUnit(itemKey, actions);
       const farmScore = Number.isFinite(farmTpu)
-        ? normalizedScore(0, farmTpu * riskProfile.missionTimeMultiplier, effectivePriorityTime, geRef, timeRef)
+        ? normalizedScore(0, farmTpu, effectivePriorityTime, geRef, timeRef)
         : Number.POSITIVE_INFINITY;
 
       const chooseFarm = farmScore + SCORE_EPS < craftScore;
@@ -1389,7 +1870,7 @@ async function planForTargetHeuristic(
   const expectedHours = totalSlotSeconds / 3 / 3600;
   const weightedScore = normalizedScore(
     geCost,
-    (totalSlotSeconds / 3) * riskProfile.missionTimeMultiplier,
+    totalSlotSeconds / 3,
     priorityTime,
     geRef,
     timeRef
@@ -1444,11 +1925,6 @@ async function planForTargetHeuristic(
     "Planner currently uses expected-drop values with solver-backed mission allocation and 3 mission slots. Re-run after returns."
   );
   notes.push(
-    `Risk profile '${riskProfile.name}' uses mission yield multiplier ${riskProfile.missionYieldMultiplier.toFixed(
-      2
-    )}x and time weight multiplier ${riskProfile.missionTimeMultiplier.toFixed(2)}x.`
-  );
-  notes.push(
     "Rarity is treated as fungible for planning (shiny inventory counted toward craftable supply by item tier)."
   );
 
@@ -1456,7 +1932,6 @@ async function planForTargetHeuristic(
     targetItemId,
     quantity: quantityInt,
     priorityTime,
-    riskProfile: riskProfile.name,
     geCost,
     expectedHours,
     weightedScore,
@@ -1478,13 +1953,11 @@ export async function planForTarget(
   targetItemId: string,
   quantity: number,
   priorityTimeRaw: number,
-  riskProfileName: RiskProfileName = "balanced",
   plannerOptions: PlannerOptions = {}
 ): Promise<PlannerResult> {
   const targetKey = itemIdToKey(targetItemId);
   const priorityTime = Math.max(0, Math.min(1, priorityTimeRaw));
   const quantityInt = Math.max(1, Math.round(quantity));
-  const riskProfile = resolveRiskProfile(riskProfileName);
   const fastMode = Boolean(plannerOptions.fastMode);
 
   const closure = new Set<string>();
@@ -1500,7 +1973,6 @@ export async function planForTarget(
   const baseActions = await buildMissionActionsForOptions(
     referenceMissionOptions,
     closure,
-    riskProfile.missionYieldMultiplier,
     lootData
   );
   const { geRef, timeRef } = computeObjectiveReferences({
@@ -1514,6 +1986,7 @@ export async function planForTarget(
     const evaluatedCount = progressionCandidates.length;
     const actionCache = new Map<string, MissionAction[]>();
     const solverErrors: string[] = [];
+    const refinementNotes: string[] = [];
     let prunedCandidateCount = 0;
 
     let best:
@@ -1523,13 +1996,14 @@ export async function planForTarget(
           unified: UnifiedPlan;
           totalSlotSeconds: number;
           weightedScore: number;
+          prepNoYieldSlotSeconds: number;
         }
       | null = null;
 
     for (const candidate of progressionCandidates) {
       const prepOnlyLowerBound = normalizedScore(
         0,
-        (candidate.prepSlotSeconds / 3) * riskProfile.missionTimeMultiplier,
+        candidate.prepSlotSeconds / 3,
         priorityTime,
         geRef,
         timeRef
@@ -1539,18 +2013,40 @@ export async function planForTarget(
         continue;
       }
 
-      const candidateKey = missionOptionsFingerprint(candidate.missionOptions);
+      const prepRequirements = aggregatePrepOptionRequirements(candidate.prepSteps);
+      const prepOptions = Array.from(prepRequirements.values()).map((entry) => entry.option);
+      const combinedOptions = mergeMissionOptionsByKey(candidate.missionOptions, prepOptions);
+      const candidateKey = missionOptionsFingerprint(combinedOptions);
       let candidateActions = actionCache.get(candidateKey);
       if (!candidateActions) {
         candidateActions = await buildMissionActionsForOptions(
-          candidate.missionOptions,
+          combinedOptions,
           closure,
-          riskProfile.missionYieldMultiplier,
           lootData
         );
         actionCache.set(candidateKey, candidateActions);
       }
       try {
+        const finalOptionKeys = new Set(candidate.missionOptions.map((option) => missionOptionKey(option)));
+        const actionOptionKeys = new Set(candidateActions.map((action) => action.optionKey));
+        const requiredMissionLaunches: Record<string, RequiredMissionLaunchConstraint> = {};
+        let prepNoYieldSlotSeconds = 0;
+        for (const [optionKey, requirement] of prepRequirements.entries()) {
+          if (requirement.launches <= 0) {
+            continue;
+          }
+          if (!actionOptionKeys.has(optionKey)) {
+            prepNoYieldSlotSeconds += requirement.launches * requirement.option.durationSeconds;
+            continue;
+          }
+          addRequiredLaunchConstraint(
+            requiredMissionLaunches,
+            optionKey,
+            requirement.launches,
+            !finalOptionKeys.has(optionKey)
+          );
+        }
+
         const unified = await solveUnifiedCraftMissionPlan({
           profile,
           targetKey,
@@ -1560,12 +2056,12 @@ export async function planForTarget(
           actions: candidateActions,
           geRef,
           timeRef,
-          missionTimeMultiplier: riskProfile.missionTimeMultiplier,
+          requiredMissionLaunches,
         });
-        const totalSlotSeconds = candidate.prepSlotSeconds + unified.totalSlotSeconds;
+        const totalSlotSeconds = prepNoYieldSlotSeconds + unified.totalSlotSeconds;
         const weightedScore = normalizedScore(
           unified.geCost,
-          (totalSlotSeconds / 3) * riskProfile.missionTimeMultiplier,
+          totalSlotSeconds / 3,
           priorityTime,
           geRef,
           timeRef
@@ -1581,6 +2077,7 @@ export async function planForTarget(
             unified,
             totalSlotSeconds,
             weightedScore,
+            prepNoYieldSlotSeconds,
           };
         }
       } catch (error) {
@@ -1592,6 +2089,47 @@ export async function planForTarget(
     if (!best) {
       const details = solverErrors.length > 0 ? solverErrors[0] : "no feasible horizon candidate";
       throw new Error(`unified HiGHS solve failed across all horizon candidates (${details})`);
+    }
+
+    if (!fastMode) {
+      try {
+        const refined = await runPhasedYieldRefinement({
+          profile,
+          targetKey,
+          quantity: quantityInt,
+          priorityTime,
+          closure,
+          candidate: best.candidate,
+          baseActions: best.actions,
+          baseMissionCounts: best.unified.missionCounts,
+          geRef,
+          timeRef,
+          lootData,
+        });
+        if (refined) {
+          refinementNotes.push(...refined.notes);
+          if (
+            refined.weightedScore + SCORE_EPS < best.weightedScore ||
+            (Math.abs(refined.weightedScore - best.weightedScore) <= SCORE_EPS &&
+              refined.totalSlotSeconds < best.totalSlotSeconds)
+          ) {
+            best = {
+              ...best,
+              actions: refined.actions,
+              unified: refined.unified,
+              totalSlotSeconds: refined.totalSlotSeconds,
+              weightedScore: refined.weightedScore,
+              prepNoYieldSlotSeconds: refined.prepNoYieldSlotSeconds,
+            };
+            refinementNotes.push("Accepted phased-yield refinement result (improved weighted objective).");
+          } else {
+            refinementNotes.push("Phased-yield refinement did not improve weighted objective; kept baseline solve.");
+          }
+        }
+      } catch (error) {
+        const details = error instanceof Error ? error.message : String(error);
+        refinementNotes.push(`Phased-yield refinement skipped (${details}).`);
+      }
     }
 
     const missionRows = buildMissionRows(best.actions, best.unified.missionCounts);
@@ -1626,7 +2164,7 @@ export async function planForTarget(
 
     const compactedPrepLaunches = compactProgressionSteps(best.candidate.prepSteps);
     const prepHours = best.candidate.prepSlotSeconds / 3 / 3600;
-    const notes: string[] = [...best.unified.notes];
+    const notes: string[] = [...best.unified.notes, ...refinementNotes];
     if (fastMode) {
       notes.push(
         `Fast solve mode enabled: limited progression-state solves to ${progressionCandidates.length.toLocaleString()} candidates.`
@@ -1651,6 +2189,13 @@ export async function planForTarget(
         )} at 3-slot throughput) to unlock/level ships before target farming.`
       );
     }
+    if (best.prepNoYieldSlotSeconds > 0) {
+      notes.push(
+        `Some prep launches (${missionDurationLabel(
+          best.prepNoYieldSlotSeconds / 3
+        )} at 3-slot throughput) had no expected drops for required items and were treated as pure progression time.`
+      );
+    }
     if (best.actions.length === 0) {
       notes.push("No eligible mission loot actions were found for your current mission options and loot dataset.");
     }
@@ -1668,9 +2213,7 @@ export async function planForTarget(
       "Planner currently uses expected-drop values with unified solver-backed craft+mission allocation, bounded ship-progression horizon search, and 3 mission slots. Re-run after returns."
     );
     notes.push(
-      `Risk profile '${riskProfile.name}' uses mission yield multiplier ${riskProfile.missionYieldMultiplier.toFixed(
-        2
-      )}x and time weight multiplier ${riskProfile.missionTimeMultiplier.toFixed(2)}x.`
+      "Prep launches are credited with expected drops for required items when compatible mission-target coverage exists."
     );
     notes.push(
       "Rarity is treated as fungible for planning (shiny inventory counted toward craftable supply by item tier)."
@@ -1680,7 +2223,6 @@ export async function planForTarget(
       targetItemId,
       quantity: quantityInt,
       priorityTime,
-      riskProfile: riskProfile.name,
       geCost: best.unified.geCost,
       expectedHours: best.totalSlotSeconds / 3 / 3600,
       weightedScore: best.weightedScore,
@@ -1700,7 +2242,7 @@ export async function planForTarget(
       throw error;
     }
     const details = error instanceof Error ? error.message : String(error);
-    const fallback = await planForTargetHeuristic(profile, targetItemId, quantityInt, priorityTime, riskProfile.name);
+    const fallback = await planForTargetHeuristic(profile, targetItemId, quantityInt, priorityTime);
     fallback.notes.unshift(
       `Unified solver allocation unavailable (${details}); fell back to heuristic craft decomposition + mission solver allocation.`
     );

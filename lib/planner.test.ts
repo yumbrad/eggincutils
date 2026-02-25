@@ -111,7 +111,6 @@ describe("planForTarget coverage handling", () => {
     const result = await planForTarget(profile, "puzzle-cube-1", 2, 0.5);
     expect(result.missions).toHaveLength(1);
     expect(result.missions[0].launches).toBe(2);
-    expect(result.riskProfile).toBe("balanced");
     expect(result.targetBreakdown.requested).toBe(2);
     expect(result.targetBreakdown.fromMissionsExpected).toBe(2);
     expect(result.targetBreakdown.fromCraft).toBe(0);
@@ -177,13 +176,13 @@ describe("planForTarget coverage handling", () => {
     expect(objectiveLine).toContain("m_0");
   });
 
-  it("applies conservative risk profile to mission yield constraints", async () => {
+  it("adds required prep-launch constraints so prep drops can be credited", async () => {
     mockedLoadLootData.mockResolvedValue({
       missions: [
         {
           afxShip: 0,
           afxDurationType: 0,
-          missionId: "test-short",
+          missionId: "chicken-one-short",
           levels: [
             {
               level: 0,
@@ -204,41 +203,90 @@ describe("planForTarget coverage handling", () => {
             },
           ],
         },
+        {
+          afxShip: 1,
+          afxDurationType: 0,
+          missionId: "chicken-nine-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "puzzle-cube-1",
+                      counts: [1, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              level: 1,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "puzzle-cube-1",
+                      counts: [2, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
       ],
     });
+
+    const lpModels: string[] = [];
     mockedSolveWithHighs.mockImplementation(async (model) => {
-      if (model.includes("0.85 m_0")) {
+      lpModels.push(model);
+      if (model.includes("r_0:")) {
         return {
           Status: "Optimal",
           Columns: {
-            m_0: { Primal: 3 },
+            m_0: { Primal: 1 },
           },
         };
       }
       return {
         Status: "Optimal",
         Columns: {
-          m_0: { Primal: 2 },
+          m_0: { Primal: 1000 },
         },
       };
     });
 
     const profile = baseProfile();
-    profile.missionOptions = [
-      {
-        ship: "CHICKEN_ONE",
-        missionId: "test-short",
-        durationType: "SHORT",
-        level: 0,
-        durationSeconds: 1200,
-        capacity: 1,
+    const shipLevels = computeShipLevelsFromLaunchCounts({
+      CHICKEN_ONE: {
+        SHORT: 4,
       },
-    ];
+      CHICKEN_NINE: {
+        SHORT: 3,
+      },
+    });
+    profile.shipLevels = shipLevels;
+    profile.missionOptions = buildMissionOptions(shipLevels, 0, 0);
 
-    const result = await planForTarget(profile, "puzzle-cube-1", 2, 1, "conservative");
-    expect(result.riskProfile).toBe("conservative");
-    expect(result.missions[0].launches).toBe(3);
-    expect(result.notes.some((note) => note.includes("yield multiplier 0.85x"))).toBe(true);
+    const result = await planForTarget(profile, "puzzle-cube-1", 2, 1);
+    expect(result.progression.prepLaunches.length).toBeGreaterThan(0);
+
+    const hasRequiredPrepConstraint = lpModels.some((model) =>
+      model
+        .split("\n")
+        .some((line) => line.trimStart().startsWith("r_") && line.includes(" = "))
+    );
+    expect(hasRequiredPrepConstraint).toBe(true);
   });
 
   it("includes prep launches when horizon progression unlocks better mission options", async () => {
