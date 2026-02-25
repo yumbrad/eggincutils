@@ -557,6 +557,18 @@ function prepReasonLevel(reason: string): number | null {
   return Math.round(parsed);
 }
 
+function prepReasonLabel(reason: string): string {
+  const level = prepReasonLevel(reason);
+  if (level != null) {
+    return `Level ${level.toLocaleString()}`;
+  }
+  const unlockMatch = reason.match(/^Unlock\s+([A-Z_]+)\s+/);
+  if (unlockMatch) {
+    return `Unlock ${titleCaseShip(unlockMatch[1])}`;
+  }
+  return reason;
+}
+
 function titleCaseShip(ship: string): string {
   return ship
     .toLowerCase()
@@ -672,23 +684,83 @@ export default function MissionCraftPlannerPage() {
   }, []);
 
   const missionTimeline = useMemo(() => (response ? buildMissionTimeline(response.plan) : null), [response]);
-  const prepLevelByShipDuration = useMemo(() => {
-    const levels = new Map<string, number>();
+  const missionPrepTargetOverrideByIndex = useMemo(() => {
+    const overrides = new Map<number, string>();
     if (!response) {
-      return levels;
+      return overrides;
     }
+
+    type PrepReasonBucket = {
+      reason: string;
+      remainingLaunches: number;
+    };
+
+    const prepBucketsByMissionShape = new Map<string, PrepReasonBucket[]>();
     for (const prep of response.plan.progression.prepLaunches) {
-      const level = prepReasonLevel(prep.reason);
-      if (level == null) {
+      const launches = Math.max(0, Math.round(prep.launches));
+      if (launches <= 0) {
         continue;
       }
       const key = `${prep.ship}|${prep.durationType}`;
-      const previous = levels.get(key);
-      if (previous == null || level > previous) {
-        levels.set(key, level);
-      }
+      const buckets = prepBucketsByMissionShape.get(key) || [];
+      buckets.push({
+        reason: prep.reason,
+        remainingLaunches: launches,
+      });
+      prepBucketsByMissionShape.set(key, buckets);
     }
-    return levels;
+
+    response.plan.missions.forEach((mission, missionIndex) => {
+      const missionKey = `${mission.ship}|${mission.durationType}`;
+      const buckets = prepBucketsByMissionShape.get(missionKey);
+      if (!buckets || buckets.length === 0) {
+        return;
+      }
+      const missionLaunches = Math.max(0, Math.round(mission.launches));
+      if (missionLaunches <= 0) {
+        return;
+      }
+
+      let prepAssigned = 0;
+      let remainingToAssign = missionLaunches;
+      const reasons = new Set<string>();
+      for (const bucket of buckets) {
+        if (remainingToAssign <= 0) {
+          break;
+        }
+        if (bucket.remainingLaunches <= 0) {
+          continue;
+        }
+        const taken = Math.min(remainingToAssign, bucket.remainingLaunches);
+        if (taken <= 0) {
+          continue;
+        }
+        bucket.remainingLaunches -= taken;
+        remainingToAssign -= taken;
+        prepAssigned += taken;
+        reasons.add(bucket.reason);
+      }
+
+      if (prepAssigned <= 0) {
+        return;
+      }
+      const reasonList = Array.from(reasons);
+      if (prepAssigned >= missionLaunches && reasonList.length === 1) {
+        overrides.set(missionIndex, prepReasonLabel(reasonList[0]));
+        return;
+      }
+      if (prepAssigned >= missionLaunches && reasonList.length > 1) {
+        overrides.set(missionIndex, "Prep progression");
+        return;
+      }
+      if (reasonList.length === 1) {
+        overrides.set(missionIndex, `${prepReasonLabel(reasonList[0])} + target`);
+        return;
+      }
+      overrides.set(missionIndex, "Prep progression + target");
+    });
+
+    return overrides;
   }, [response]);
   useEffect(() => {
     if (!loading || planningStartedAtMs == null) {
@@ -1127,7 +1199,7 @@ export default function MissionCraftPlannerPage() {
             {loading ? "Planning..." : "Build plan"}
           </button>
           <button type="button" disabled={loading || refreshing || !response} onClick={onRefreshFromLive}>
-            {refreshing ? "Refreshing..." : "Refresh from live profile"}
+            {refreshing ? "Replanning..." : "Replan after ship returns"}
           </button>
         </div>
       </form>
@@ -1346,13 +1418,10 @@ export default function MissionCraftPlannerPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {response.plan.missions.map((mission) => {
-                      const missionKey = `${mission.ship}|${mission.durationType}`;
-                      const prepLevel = prepLevelByShipDuration.get(missionKey);
-                      const targetLabelRaw = afxIdToTargetFamilyName(mission.targetAfxId);
-                      const targetLabel =
-                        prepLevel != null && /^\d+$/.test(targetLabelRaw) ? `⭐ Level ${prepLevel.toLocaleString()}` : targetLabelRaw;
-                      const targetItemKey = afxIdToItemKey(mission.targetAfxId);
+                    {response.plan.missions.map((mission, missionIndex) => {
+                      const targetOverride = missionPrepTargetOverrideByIndex.get(missionIndex) || null;
+                      const targetLabel = targetOverride || afxIdToTargetFamilyName(mission.targetAfxId);
+                      const targetItemKey = targetOverride ? null : afxIdToItemKey(mission.targetAfxId);
                       const targetIconUrl = targetItemKey ? itemKeyToIconUrl(targetItemKey) : null;
                       return (
                         <tr key={`${mission.missionId}:${mission.targetAfxId}`}>

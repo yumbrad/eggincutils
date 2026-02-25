@@ -2087,7 +2087,7 @@ export async function planForTarget(
     : progressionDeduped.unique;
   reportProgress({
     phase: "candidates",
-    message: `Prepared ${progressionCandidates.length.toLocaleString()} progression candidates.`,
+    message: `Prepared ${progressionCandidates.length.toLocaleString()} progression candidates. Loading mission loot dataset...`,
     completed: 0,
     total: progressionCandidates.length,
   });
@@ -2096,7 +2096,7 @@ export async function planForTarget(
   const lootData = await loadLootData();
   reportProgress({
     phase: "init",
-    message: "Loaded loot data and building mission action models...",
+    message: "Loaded mission loot data. Building mission action models...",
   });
   await yieldForProgressFlush();
   const baseActions = await buildMissionActionsForOptions(
