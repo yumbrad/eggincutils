@@ -144,6 +144,7 @@ type MissionTimeline = {
 };
 
 const DURATION_TYPES: DurationType[] = ["TUTORIAL", "SHORT", "LONG", "EPIC"];
+const ARTIFACT_DISPLAY = artifactDisplay as Record<string, { id: string; name: string; tierName: string; tierNumber: number }>;
 const SHARED_EID_KEYS = [LOCAL_PREF_KEYS.sharedEid, LOCAL_PREF_KEYS.legacyEid] as const;
 const SHARED_INCLUDE_SLOTTED_KEYS = [LOCAL_PREF_KEYS.sharedIncludeSlotted, LOCAL_PREF_KEYS.legacyIncludeSlotted] as const;
 
@@ -394,7 +395,12 @@ function titleCaseShip(ship: string): string {
 }
 
 function itemIdToLabel(itemId: string): string {
-  return itemKeyToDisplayName(itemIdToKey(itemId));
+  const itemKey = itemIdToKey(itemId);
+  const displayInfo = ARTIFACT_DISPLAY[itemKey];
+  if (displayInfo && Number.isFinite(displayInfo.tierNumber)) {
+    return `${displayInfo.name} (T${displayInfo.tierNumber})`;
+  }
+  return itemKeyToDisplayName(itemKey);
 }
 
 function itemIdToIconUrl(itemId: string): string | null {
@@ -477,12 +483,11 @@ export default function MissionCraftPlannerPage() {
   const [prefsLoaded, setPrefsLoaded] = useState(false);
 
   const targetOptions = useMemo(() => {
-    const display = artifactDisplay as Record<string, { id: string; name: string; tierName: string; tierNumber: number }>;
     const recipeMap = recipes as Record<string, unknown>;
 
     return Object.keys(recipeMap)
       .map((itemKey) => {
-        const displayInfo = display[itemKey];
+        const displayInfo = ARTIFACT_DISPLAY[itemKey];
         const itemId = displayInfo?.id || itemKeyToId(itemKey);
         const label =
           displayInfo && Number.isFinite(displayInfo.tierNumber)
@@ -899,7 +904,6 @@ export default function MissionCraftPlannerPage() {
                               )}
                               <div>
                                 <div>{itemIdToLabel(craft.itemId)}</div>
-                                <div className="muted" style={{ fontSize: 12 }}>{craft.itemId}</div>
                               </div>
                             </div>
                           </td>
