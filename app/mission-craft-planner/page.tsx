@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 
 import artifactDisplay from "../../data/artifact-display.json";
 import recipes from "../../data/recipes.json";
@@ -109,6 +109,32 @@ type PlanResponse = {
   };
 };
 
+type PlannerProgressPhase = "init" | "candidates" | "candidate" | "refinement" | "finalize" | "fallback";
+
+type PlannerProgressState = {
+  phase: PlannerProgressPhase;
+  message: string;
+  elapsedMs: number;
+  completed: number | null;
+  total: number | null;
+  etaMs: number | null;
+};
+
+type PlanStreamMessage =
+  | {
+      type: "progress";
+      progress: {
+        phase: PlannerProgressPhase;
+        message: string;
+        elapsedMs: number;
+        completed?: number;
+        total?: number;
+        etaMs?: number | null;
+      };
+    }
+  | { type: "result"; data: PlanResponse }
+  | { type: "error"; error: string; details?: unknown };
+
 type PlanMissionRow = PlanResponse["plan"]["missions"][number];
 
 type TimelineSegment = {
@@ -120,6 +146,8 @@ type TimelineSegment = {
   totalSlotSeconds: number;
   color: string;
   phase: "mission" | "prep";
+  ship: string;
+  durationType: string;
 };
 
 type TimelineLaneBlock = {
@@ -140,6 +168,7 @@ type MissionTimeline = {
   totalSeconds: number;
   modelTotalSlotSeconds: number;
   missionSlotSeconds: number;
+  prepSlotSeconds: number;
   hiddenPrepSlotSeconds: number;
 };
 
@@ -171,12 +200,45 @@ function hashString(value: string): number {
   return Math.abs(hash);
 }
 
-function timelineColor(seed: string, phase: "mission" | "prep"): string {
-  if (phase === "prep") {
-    return "color-mix(in oklab, #b9a1f1, var(--panel) 18%)";
+function prepTimelineColor(seed: string): string {
+  return `color-mix(in oklab, hsl(${hashString(seed) % 360} 58% 62%), var(--panel) 20%)`;
+}
+
+const MISSION_COLOR_PALETTE: Array<[number, number, number]> = [
+  [10, 78, 55],
+  [26, 80, 54],
+  [42, 82, 53],
+  [58, 80, 50],
+  [88, 72, 47],
+  [114, 64, 45],
+  [140, 66, 45],
+  [164, 68, 43],
+  [188, 76, 49],
+  [206, 80, 52],
+  [224, 82, 57],
+  [242, 76, 60],
+  [260, 74, 62],
+  [278, 72, 58],
+  [296, 72, 56],
+  [314, 74, 58],
+  [332, 78, 56],
+  [350, 80, 54],
+];
+
+function missionTimelineColor(seed: string, usedPaletteIndexes: Set<number>): string {
+  const hash = hashString(seed);
+  const paletteLen = MISSION_COLOR_PALETTE.length;
+  for (let attempt = 0; attempt < paletteLen; attempt += 1) {
+    const index = (hash + attempt * 7) % paletteLen;
+    if (usedPaletteIndexes.has(index)) {
+      continue;
+    }
+    usedPaletteIndexes.add(index);
+    const [hue, saturation, lightness] = MISSION_COLOR_PALETTE[index];
+    return `hsl(${hue} ${saturation}% ${lightness}% / 0.66)`;
   }
-  const hue = hashString(seed) % 360;
-  return `hsla(${hue}, 70%, 56%, 0.58)`;
+  const [hue, saturation, lightness] = MISSION_COLOR_PALETTE[hash % paletteLen];
+  return `hsl(${hue} ${saturation}% ${lightness}% / 0.66)`;
 }
 
 function laneOrderByLoad(loads: number[]): number[] {
@@ -251,7 +313,8 @@ function distributeSecondsAcrossLanes(totalSlotSeconds: number, laneLoads: numbe
 }
 
 function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | null {
-  const missionSegments: TimelineSegment[] = plan.missions
+  const usedMissionPaletteIndexes = new Set<number>();
+  const rawMissionSegments: TimelineSegment[] = plan.missions
     .map((mission: PlanMissionRow, index) => {
       const launches = Math.max(0, Math.round(mission.launches));
       const durationSeconds = Math.max(0, Math.round(mission.durationSeconds));
@@ -268,31 +331,92 @@ function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | nul
         launches,
         durationSeconds,
         totalSlotSeconds,
-        color: timelineColor(`${mission.ship}|${mission.durationType}|${mission.targetAfxId}`, "mission"),
+        color: missionTimelineColor(
+          `${mission.ship}|${mission.durationType}|${mission.targetAfxId}`,
+          usedMissionPaletteIndexes
+        ),
         phase: "mission",
+        ship: mission.ship,
+        durationType: mission.durationType,
       };
     })
     .filter((segment): segment is TimelineSegment => segment !== null)
     .sort((a, b) => b.durationSeconds - a.durationSeconds || b.launches - a.launches || a.label.localeCompare(b.label));
 
+  const prepSegments: TimelineSegment[] = plan.progression.prepLaunches
+    .map((prep, index) => {
+      const launches = Math.max(0, Math.round(prep.launches));
+      const durationSeconds = Math.max(0, Math.round(prep.durationSeconds));
+      const totalSlotSeconds = launches * durationSeconds;
+      if (launches <= 0 || totalSlotSeconds <= 0) {
+        return null;
+      }
+      return {
+        id: `prep:${index}:${prep.ship}:${prep.durationType}`,
+        label: `${titleCaseShip(prep.ship)} ${durationTypeLabel(prep.durationType)}`,
+        subtitle: prep.reason,
+        launches,
+        durationSeconds,
+        totalSlotSeconds,
+        color: prepTimelineColor(`prep|${prep.ship}|${prep.durationType}|${prep.reason}`),
+        phase: "prep",
+        ship: prep.ship,
+        durationType: prep.durationType,
+      };
+    })
+    .filter((segment): segment is TimelineSegment => segment !== null);
+
+  const remainingPrepByShipDuration = new Map<string, number>();
+  for (const prepSegment of prepSegments) {
+    const key = `${prepSegment.ship}|${prepSegment.durationType}`;
+    remainingPrepByShipDuration.set(key, (remainingPrepByShipDuration.get(key) || 0) + prepSegment.launches);
+  }
+
+  const missionSegments: TimelineSegment[] = rawMissionSegments
+    .map((segment) => {
+      const key = `${segment.ship}|${segment.durationType}`;
+      const prepRemaining = remainingPrepByShipDuration.get(key) || 0;
+      if (prepRemaining <= 0) {
+        return segment;
+      }
+      const reduction = Math.min(prepRemaining, segment.launches);
+      if (reduction <= 0) {
+        return segment;
+      }
+      remainingPrepByShipDuration.set(key, prepRemaining - reduction);
+      const launches = segment.launches - reduction;
+      if (launches <= 0) {
+        return null;
+      }
+      return {
+        ...segment,
+        launches,
+        totalSlotSeconds: launches * segment.durationSeconds,
+      };
+    })
+    .filter((segment): segment is TimelineSegment => segment !== null);
+
   const missionSlotSeconds = missionSegments.reduce((sum, segment) => sum + segment.totalSlotSeconds, 0);
+  const prepSlotSeconds = prepSegments.reduce((sum, segment) => sum + segment.totalSlotSeconds, 0);
   const modelTotalSlotSeconds = Math.max(0, Math.round(plan.expectedHours * 3 * 3600));
-  let hiddenPrepSlotSeconds = Math.max(0, modelTotalSlotSeconds - missionSlotSeconds);
+  let hiddenPrepSlotSeconds = Math.max(0, modelTotalSlotSeconds - (missionSlotSeconds + prepSlotSeconds));
   if (hiddenPrepSlotSeconds < 60) {
     hiddenPrepSlotSeconds = 0;
   }
 
-  const segments = [...missionSegments];
+  const segments = [...prepSegments, ...missionSegments];
   if (hiddenPrepSlotSeconds > 0) {
-    segments.unshift({
-      id: "prep-only",
+    segments.push({
+      id: "prep-residual",
       label: "Progression-only prep",
-      subtitle: "No required-item drop coverage",
+      subtitle: "Unattributed prep slot-time",
       launches: 0,
       durationSeconds: 0,
       totalSlotSeconds: hiddenPrepSlotSeconds,
-      color: timelineColor("prep-only", "prep"),
+      color: prepTimelineColor("prep-only"),
       phase: "prep",
+      ship: "",
+      durationType: "",
     });
   }
 
@@ -304,7 +428,7 @@ function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | nul
   const laneLoads = [0, 0, 0];
 
   for (const segment of segments) {
-    if (segment.phase === "mission") {
+    if (segment.launches > 0 && segment.durationSeconds > 0) {
       const launchAllocations = distributeLaunchesAcrossLanes(segment.launches, segment.durationSeconds, laneLoads);
       for (let lane = 0; lane < 3; lane += 1) {
         const launches = launchAllocations[lane];
@@ -364,6 +488,7 @@ function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | nul
     totalSeconds,
     modelTotalSlotSeconds,
     missionSlotSeconds,
+    prepSlotSeconds,
     hiddenPrepSlotSeconds,
   };
 }
@@ -384,6 +509,52 @@ function formatDurationFromHours(hours: number): string {
     parts.push(`${mins}m`);
   }
   return parts.length > 0 ? parts.join(" ") : "0m";
+}
+
+function formatDurationFromMs(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hrs = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const mins = totalMinutes % 60;
+  const parts: string[] = [];
+  if (days) {
+    parts.push(`${days}d`);
+  }
+  if (hrs) {
+    parts.push(`${hrs}h`);
+  }
+  if (mins) {
+    parts.push(`${mins}m`);
+  }
+  return parts.length > 0 ? parts.join(" ") : "0m";
+}
+
+function detailsText(details: unknown): string {
+  if (typeof details === "string") {
+    return details;
+  }
+  if (Array.isArray(details)) {
+    return details
+      .filter((entry) => typeof entry === "string")
+      .join("; ");
+  }
+  return "";
+}
+
+function prepReasonLevel(reason: string): number | null {
+  const match = reason.match(/\blevel\s+(\d+)\b/i);
+  if (!match) {
+    return null;
+  }
+  const parsed = Number(match[1]);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+  return Math.round(parsed);
 }
 
 function titleCaseShip(ship: string): string {
@@ -478,6 +649,8 @@ export default function MissionCraftPlannerPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
+  const [plannerProgress, setPlannerProgress] = useState<PlannerProgressState | null>(null);
+  const [planningStartedAtMs, setPlanningStartedAtMs] = useState<number | null>(null);
   const [response, setResponse] = useState<PlanResponse | null>(null);
   const [profileSnapshot, setProfileSnapshot] = useState<ProfileSnapshot | null>(null);
   const [prefsLoaded, setPrefsLoaded] = useState(false);
@@ -499,6 +672,47 @@ export default function MissionCraftPlannerPage() {
   }, []);
 
   const missionTimeline = useMemo(() => (response ? buildMissionTimeline(response.plan) : null), [response]);
+  const prepLevelByShipDuration = useMemo(() => {
+    const levels = new Map<string, number>();
+    if (!response) {
+      return levels;
+    }
+    for (const prep of response.plan.progression.prepLaunches) {
+      const level = prepReasonLevel(prep.reason);
+      if (level == null) {
+        continue;
+      }
+      const key = `${prep.ship}|${prep.durationType}`;
+      const previous = levels.get(key);
+      if (previous == null || level > previous) {
+        levels.set(key, level);
+      }
+    }
+    return levels;
+  }, [response]);
+  useEffect(() => {
+    if (!loading || planningStartedAtMs == null) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setPlannerProgress((current) => {
+        if (!current) {
+          return current;
+        }
+        const localElapsed = Math.max(0, Date.now() - planningStartedAtMs);
+        if (localElapsed <= current.elapsedMs) {
+          return current;
+        }
+        return {
+          ...current,
+          elapsedMs: localElapsed,
+        };
+      });
+    }, 1000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [loading, planningStartedAtMs]);
 
   useEffect(() => {
     try {
@@ -603,6 +817,16 @@ export default function MissionCraftPlannerPage() {
     setError(null);
     setRefreshSummary(null);
     setLoading(true);
+    const startedAt = Date.now();
+    setPlanningStartedAtMs(startedAt);
+    setPlannerProgress({
+      phase: "init",
+      message: "Submitting planning request...",
+      elapsedMs: 0,
+      completed: null,
+      total: null,
+      etaMs: null,
+    });
 
     try {
       writeStoredString(SHARED_EID_KEYS, eid.trim());
@@ -612,32 +836,113 @@ export default function MissionCraftPlannerPage() {
       writeStoredString([LOCAL_PREF_KEYS.plannerPriorityTimePct], String(priorityTimePct));
       writeStoredBoolean([LOCAL_PREF_KEYS.plannerFastMode], fastMode);
 
-      const planResp = await fetch("/api/plan", {
+      const requestPayload = {
+        eid,
+        targetItemId,
+        quantity,
+        priorityTime: priorityTimePct / 100,
+        includeSlotted,
+        fastMode,
+      };
+
+      const planResp = await fetch("/api/plan/stream", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          eid,
-          targetItemId,
-          quantity,
-          priorityTime: priorityTimePct / 100,
-          includeSlotted,
-          fastMode,
-        }),
+        body: JSON.stringify(requestPayload),
       });
 
-      const data = (await planResp.json()) as PlanResponse & { error?: string; details?: unknown };
       if (!planResp.ok) {
-        const detailText =
-          typeof data.details === "string"
-            ? data.details
-            : Array.isArray(data.details)
-              ? data.details.join("; ")
-              : "";
-        throw new Error(detailText || data.error || "planning request failed");
+        const data = (await planResp.json()) as { error?: string; details?: unknown };
+        throw new Error(detailsText(data.details) || data.error || "planning request failed");
       }
-      setResponse(data);
+
+      let streamResult: PlanResponse | null = null;
+      if (planResp.body) {
+        const reader = planResp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffered = "";
+
+        const handleLine = (line: string) => {
+          if (!line) {
+            return;
+          }
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(line);
+          } catch {
+            return;
+          }
+
+          if (!parsed || typeof parsed !== "object" || !("type" in parsed)) {
+            return;
+          }
+          const message = parsed as PlanStreamMessage;
+          if (message.type === "progress") {
+            const progress = message.progress;
+            setPlannerProgress({
+              phase: progress.phase,
+              message: progress.message,
+              elapsedMs: Number.isFinite(progress.elapsedMs) ? Math.max(0, Math.round(progress.elapsedMs)) : 0,
+              completed: typeof progress.completed === "number" ? Math.max(0, Math.round(progress.completed)) : null,
+              total: typeof progress.total === "number" ? Math.max(0, Math.round(progress.total)) : null,
+              etaMs:
+                typeof progress.etaMs === "number"
+                  ? Math.max(0, Math.round(progress.etaMs))
+                  : progress.etaMs === null
+                    ? null
+                    : null,
+            });
+            return;
+          }
+          if (message.type === "result") {
+            streamResult = message.data;
+            return;
+          }
+          if (message.type === "error") {
+            throw new Error(detailsText(message.details) || message.error || "planning stream failed");
+          }
+        };
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            buffered += decoder.decode();
+            break;
+          }
+          buffered += decoder.decode(value, { stream: true });
+          let newlineIndex = buffered.indexOf("\n");
+          while (newlineIndex >= 0) {
+            const line = buffered.slice(0, newlineIndex).trim();
+            buffered = buffered.slice(newlineIndex + 1);
+            handleLine(line);
+            newlineIndex = buffered.indexOf("\n");
+          }
+        }
+        const trailing = buffered.trim();
+        if (trailing.length > 0) {
+          handleLine(trailing);
+        }
+      } else {
+        const fallbackResp = await fetch("/api/plan", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestPayload),
+        });
+        const fallbackData = (await fallbackResp.json()) as PlanResponse & { error?: string; details?: unknown };
+        if (!fallbackResp.ok) {
+          throw new Error(detailsText(fallbackData.details) || fallbackData.error || "planning request failed");
+        }
+        streamResult = fallbackData;
+      }
+
+      if (!streamResult) {
+        throw new Error("planning stream completed without a result");
+      }
+      setResponse(streamResult);
       const snapshot = await fetchProfileSnapshot(eid, includeSlotted);
       setProfileSnapshot(snapshot);
     } catch (caught) {
@@ -645,6 +950,8 @@ export default function MissionCraftPlannerPage() {
       setError(message);
     } finally {
       setLoading(false);
+      setPlannerProgress(null);
+      setPlanningStartedAtMs(null);
     }
   }
 
@@ -825,6 +1132,30 @@ export default function MissionCraftPlannerPage() {
         </div>
       </form>
 
+      {loading && plannerProgress && (
+        <div className="panel" style={{ marginTop: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+            <strong>{plannerProgress.message}</strong>
+            {plannerProgress.completed != null && plannerProgress.total != null && plannerProgress.total > 0 && (
+              <span className="muted">
+                {plannerProgress.completed.toLocaleString()} / {plannerProgress.total.toLocaleString()}
+              </span>
+            )}
+          </div>
+          <div className="muted" style={{ marginTop: 6 }}>
+            Elapsed {formatDurationFromMs(plannerProgress.elapsedMs)}
+            {plannerProgress.etaMs != null ? ` · ETA ${formatDurationFromMs(plannerProgress.etaMs)}` : ""}
+          </div>
+          {plannerProgress.completed != null && plannerProgress.total != null && plannerProgress.total > 0 && (
+            <progress
+              value={Math.min(plannerProgress.completed, plannerProgress.total)}
+              max={plannerProgress.total}
+              style={{ marginTop: 8, width: "100%" }}
+            />
+          )}
+        </div>
+      )}
+
       {error && (
         <div className="panel" style={{ marginTop: 12 }}>
           <div className="error">{error}</div>
@@ -932,11 +1263,15 @@ export default function MissionCraftPlannerPage() {
                     Timeline makespan: <strong>{formatDurationFromHours(missionTimeline.totalSeconds / 3600)}</strong>
                   </span>
                   <span>
-                    Mission-row workload: <strong>{formatDurationFromHours(missionTimeline.missionSlotSeconds / 3 / 3600)}</strong>
+                    Horizon prep workload: <strong>{formatDurationFromHours(missionTimeline.prepSlotSeconds / 3 / 3600)}</strong>
+                  </span>
+                  <span>
+                    Farming mission workload:{" "}
+                    <strong>{formatDurationFromHours(missionTimeline.missionSlotSeconds / 3 / 3600)}</strong>
                   </span>
                   {missionTimeline.hiddenPrepSlotSeconds > 0 && (
                     <span>
-                      Progression-only prep: <strong>{formatDurationFromHours(missionTimeline.hiddenPrepSlotSeconds / 3 / 3600)}</strong>
+                      Unattributed prep: <strong>{formatDurationFromHours(missionTimeline.hiddenPrepSlotSeconds / 3 / 3600)}</strong>
                     </span>
                   )}
                 </div>
@@ -961,15 +1296,17 @@ export default function MissionCraftPlannerPage() {
                               key={block.id}
                               className={styles.timelineBlock}
                               data-phase={block.phase}
-                              style={{
-                                left: `${leftPct}%`,
-                                width: `${widthPct}%`,
-                                background: block.color,
-                              }}
+                              style={
+                                {
+                                  left: `${leftPct}%`,
+                                  width: `${widthPct}%`,
+                                  "--timeline-block-color": block.color,
+                                } as CSSProperties
+                              }
                               title={titleLines.join("\n")}
                             >
                               <span className={styles.timelineBlockLabel}>
-                                {block.launches > 0 ? `${block.label} ×${block.launches}` : block.label}
+                                {block.launches > 0 ? `x${block.launches.toLocaleString()}` : "prep"}
                               </span>
                             </div>
                           );
@@ -1010,6 +1347,11 @@ export default function MissionCraftPlannerPage() {
                   </thead>
                   <tbody>
                     {response.plan.missions.map((mission) => {
+                      const missionKey = `${mission.ship}|${mission.durationType}`;
+                      const prepLevel = prepLevelByShipDuration.get(missionKey);
+                      const targetLabelRaw = afxIdToTargetFamilyName(mission.targetAfxId);
+                      const targetLabel =
+                        prepLevel != null && /^\d+$/.test(targetLabelRaw) ? `⭐ Level ${prepLevel.toLocaleString()}` : targetLabelRaw;
                       const targetItemKey = afxIdToItemKey(mission.targetAfxId);
                       const targetIconUrl = targetItemKey ? itemKeyToIconUrl(targetItemKey) : null;
                       return (
@@ -1030,7 +1372,7 @@ export default function MissionCraftPlannerPage() {
                                 />
                               )}
                               <div>
-                                <div>{afxIdToTargetFamilyName(mission.targetAfxId)}</div>
+                                <div>{targetLabel}</div>
                               </div>
                             </div>
                           </td>

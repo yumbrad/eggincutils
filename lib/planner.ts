@@ -90,6 +90,17 @@ export type PlannerResult = {
 
 export type PlannerOptions = {
   fastMode?: boolean;
+  maxSolveMs?: number;
+  onProgress?: (event: PlannerProgressEvent) => void;
+};
+
+export type PlannerProgressEvent = {
+  phase: "init" | "candidates" | "candidate" | "refinement" | "finalize" | "fallback";
+  message: string;
+  elapsedMs: number;
+  completed?: number;
+  total?: number;
+  etaMs?: number | null;
 };
 
 export class MissionCoverageError extends Error {
@@ -1959,6 +1970,37 @@ export async function planForTarget(
   const priorityTime = Math.max(0, Math.min(1, priorityTimeRaw));
   const quantityInt = Math.max(1, Math.round(quantity));
   const fastMode = Boolean(plannerOptions.fastMode);
+  const maxSolveMs = Math.max(0, Math.round(plannerOptions.maxSolveMs || 0));
+  const startedAtMs = Date.now();
+  const reportProgress = (
+    event: Omit<PlannerProgressEvent, "elapsedMs"> & { elapsedMs?: number }
+  ) => {
+    if (!plannerOptions.onProgress) {
+      return;
+    }
+    try {
+      plannerOptions.onProgress({
+        ...event,
+        elapsedMs: event.elapsedMs ?? Date.now() - startedAtMs,
+      });
+    } catch {
+      // Ignore progress callback errors.
+    }
+  };
+  const yieldForProgressFlush = async () => {
+    if (!plannerOptions.onProgress) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  };
+
+  reportProgress({
+    phase: "init",
+    message: "Building ingredient closure and progression candidates...",
+  });
+  await yieldForProgressFlush();
 
   const closure = new Set<string>();
   collectClosure(targetKey, closure);
@@ -1968,8 +2010,20 @@ export async function planForTarget(
   const progressionCandidates = fastMode
     ? progressionDeduped.unique.slice(0, FAST_MODE_MAX_CANDIDATES)
     : progressionDeduped.unique;
+  reportProgress({
+    phase: "candidates",
+    message: `Prepared ${progressionCandidates.length.toLocaleString()} progression candidates.`,
+    completed: 0,
+    total: progressionCandidates.length,
+  });
+  await yieldForProgressFlush();
   const referenceMissionOptions = progressionCandidates[0]?.missionOptions || profile.missionOptions;
   const lootData = await loadLootData();
+  reportProgress({
+    phase: "init",
+    message: "Loaded loot data and building mission action models...",
+  });
+  await yieldForProgressFlush();
   const baseActions = await buildMissionActionsForOptions(
     referenceMissionOptions,
     closure,
@@ -1983,11 +2037,33 @@ export async function planForTarget(
   });
 
   try {
-    const evaluatedCount = progressionCandidates.length;
+    const candidateTotal = progressionCandidates.length;
     const actionCache = new Map<string, MissionAction[]>();
     const solverErrors: string[] = [];
     const refinementNotes: string[] = [];
     let prunedCandidateCount = 0;
+    let completedCandidateCount = 0;
+    let timeBudgetExceeded = false;
+    const candidateLoopStartedAtMs = Date.now();
+    const estimateCandidateEtaMs = (): number | null => {
+      if (completedCandidateCount <= 0 || completedCandidateCount >= candidateTotal) {
+        return completedCandidateCount >= candidateTotal ? 0 : null;
+      }
+      const elapsed = Date.now() - candidateLoopStartedAtMs;
+      if (elapsed <= 0) {
+        return null;
+      }
+      const avgPerCandidateMs = elapsed / completedCandidateCount;
+      return Math.max(0, Math.round((candidateTotal - completedCandidateCount) * avgPerCandidateMs));
+    };
+    reportProgress({
+      phase: "candidates",
+      message: `Starting horizon search across ${candidateTotal.toLocaleString()} progression candidates...`,
+      completed: 0,
+      total: candidateTotal,
+      etaMs: null,
+    });
+    await yieldForProgressFlush();
 
     let best:
       | {
@@ -2000,7 +2076,29 @@ export async function planForTarget(
         }
       | null = null;
 
-    for (const candidate of progressionCandidates) {
+    for (let candidateIndex = 0; candidateIndex < candidateTotal; candidateIndex += 1) {
+      if (maxSolveMs > 0 && Date.now() - startedAtMs >= maxSolveMs) {
+        timeBudgetExceeded = true;
+        reportProgress({
+          phase: "candidates",
+          message: "Time budget reached; stopping horizon candidate search early.",
+          completed: completedCandidateCount,
+          total: candidateTotal,
+          etaMs: null,
+        });
+        break;
+      }
+
+      const candidate = progressionCandidates[candidateIndex];
+      reportProgress({
+        phase: "candidate",
+        message: `Evaluating candidate ${candidateIndex + 1} of ${candidateTotal}...`,
+        completed: completedCandidateCount,
+        total: candidateTotal,
+        etaMs: estimateCandidateEtaMs(),
+      });
+      await yieldForProgressFlush();
+
       const prepOnlyLowerBound = normalizedScore(
         0,
         candidate.prepSlotSeconds / 3,
@@ -2010,6 +2108,15 @@ export async function planForTarget(
       );
       if (best && prepOnlyLowerBound + SCORE_EPS >= best.weightedScore) {
         prunedCandidateCount += 1;
+        completedCandidateCount = candidateIndex + 1;
+        reportProgress({
+          phase: "candidates",
+          message: `Processed ${completedCandidateCount.toLocaleString()}/${candidateTotal.toLocaleString()} candidates (${prunedCandidateCount.toLocaleString()} pruned).`,
+          completed: completedCandidateCount,
+          total: candidateTotal,
+          etaMs: estimateCandidateEtaMs(),
+        });
+        await yieldForProgressFlush();
         continue;
       }
 
@@ -2084,6 +2191,16 @@ export async function planForTarget(
         const details = error instanceof Error ? error.message : String(error);
         solverErrors.push(details);
       }
+
+      completedCandidateCount = candidateIndex + 1;
+      reportProgress({
+        phase: "candidates",
+        message: `Processed ${completedCandidateCount.toLocaleString()}/${candidateTotal.toLocaleString()} candidates (${prunedCandidateCount.toLocaleString()} pruned, ${solverErrors.length.toLocaleString()} solve errors).`,
+        completed: completedCandidateCount,
+        total: candidateTotal,
+        etaMs: estimateCandidateEtaMs(),
+      });
+      await yieldForProgressFlush();
     }
 
     if (!best) {
@@ -2091,7 +2208,15 @@ export async function planForTarget(
       throw new Error(`unified HiGHS solve failed across all horizon candidates (${details})`);
     }
 
-    if (!fastMode) {
+    if (!fastMode && !timeBudgetExceeded) {
+      reportProgress({
+        phase: "refinement",
+        message: "Running phased-yield refinement pass...",
+        completed: 0,
+        total: 1,
+        etaMs: null,
+      });
+      await yieldForProgressFlush();
       try {
         const refined = await runPhasedYieldRefinement({
           profile,
@@ -2130,7 +2255,34 @@ export async function planForTarget(
         const details = error instanceof Error ? error.message : String(error);
         refinementNotes.push(`Phased-yield refinement skipped (${details}).`);
       }
+      reportProgress({
+        phase: "refinement",
+        message: "Phased-yield refinement finished.",
+        completed: 1,
+        total: 1,
+        etaMs: 0,
+      });
+      await yieldForProgressFlush();
+    } else if (!fastMode && timeBudgetExceeded) {
+      refinementNotes.push("Skipped phased-yield refinement due to solve-time budget cap.");
+      reportProgress({
+        phase: "refinement",
+        message: "Skipped phased-yield refinement due to solve-time budget.",
+        completed: 1,
+        total: 1,
+        etaMs: 0,
+      });
+      await yieldForProgressFlush();
     }
+
+    reportProgress({
+      phase: "finalize",
+      message: "Assembling final plan output...",
+      completed: completedCandidateCount,
+      total: candidateTotal,
+      etaMs: 0,
+    });
+    await yieldForProgressFlush();
 
     const missionRows = buildMissionRows(best.actions, best.unified.missionCounts);
     const craftRows = buildCraftRows(best.unified.crafts);
@@ -2175,11 +2327,17 @@ export async function planForTarget(
         `Collapsed ${progressionDeduped.dedupedCount} redundant progression states with identical mission options before solving.`
       );
     }
+    const evaluatedCount = completedCandidateCount;
     if (evaluatedCount > 1) {
       notes.push(`Horizon search evaluated ${evaluatedCount} projected ship progression states.`);
     }
     if (prunedCandidateCount > 0) {
       notes.push(`Pruned ${prunedCandidateCount} progression candidates using prep-time lower-bound screening.`);
+    }
+    if (timeBudgetExceeded && maxSolveMs > 0) {
+      notes.push(
+        `Horizon search stopped early at the ${Math.round(maxSolveMs / 1000).toLocaleString()}s solve-time budget.`
+      );
     }
     if (compactedPrepLaunches.length > 0) {
       const prepLaunchCount = compactedPrepLaunches.reduce((sum, row) => sum + row.launches, 0);
@@ -2219,6 +2377,15 @@ export async function planForTarget(
       "Rarity is treated as fungible for planning (shiny inventory counted toward craftable supply by item tier)."
     );
 
+    reportProgress({
+      phase: "finalize",
+      message: "Plan ready.",
+      completed: completedCandidateCount,
+      total: candidateTotal,
+      etaMs: 0,
+    });
+    await yieldForProgressFlush();
+
     return {
       targetItemId,
       quantity: quantityInt,
@@ -2242,10 +2409,22 @@ export async function planForTarget(
       throw error;
     }
     const details = error instanceof Error ? error.message : String(error);
+    reportProgress({
+      phase: "fallback",
+      message: `Primary solve path unavailable (${details}); running heuristic fallback...`,
+      etaMs: null,
+    });
+    await yieldForProgressFlush();
     const fallback = await planForTargetHeuristic(profile, targetItemId, quantityInt, priorityTime);
     fallback.notes.unshift(
       `Unified solver allocation unavailable (${details}); fell back to heuristic craft decomposition + mission solver allocation.`
     );
+    reportProgress({
+      phase: "fallback",
+      message: "Fallback plan ready.",
+      etaMs: 0,
+    });
+    await yieldForProgressFlush();
     return fallback;
   }
 }

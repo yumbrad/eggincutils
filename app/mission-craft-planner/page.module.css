@@ -61,11 +61,13 @@
   min-width: 2px;
   border-radius: 6px;
   border: 1px solid color-mix(in oklab, var(--stroke), transparent 18%);
+  background: var(--timeline-block-color);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.24);
   display: flex;
   align-items: center;
   padding: 0 6px;
   overflow: hidden;
+  container-type: inline-size;
 }
 
 .timelineBlock[data-phase="prep"] {
@@ -78,7 +80,22 @@
   color: color-mix(in oklab, var(--ink), #000 16%);
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
+}
+
+@container (max-width: 14px) {
+  .timelineBlockLabel {
+    display: none;
+  }
+}
+
+:global(:root[data-theme="dark"]) .timelineBlock {
+  background: color-mix(in oklab, var(--timeline-block-color), #04070d 34%);
+  border-color: color-mix(in oklab, var(--stroke), #000 22%);
+}
+
+:global(:root[data-theme="dark"]) .timelineBlockLabel {
+  color: color-mix(in oklab, #f8f9ff, var(--ink) 54%);
 }
 
 .timelineLegend {
@@ -89,7 +106,7 @@
 
 .timelineLegendRow {
   display: grid;
-  grid-template-columns: 14px minmax(130px, 1.3fr) minmax(130px, 1.2fr) minmax(160px, auto);
+  grid-template-columns: 14px minmax(130px, 1.25fr) minmax(220px, 1.5fr) 210px;
   gap: 8px;
   align-items: center;
   font-size: 12px;
@@ -107,6 +124,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  justify-self: start;
 }
 
 .timelineLegendMeta {
@@ -114,6 +132,8 @@
   font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, "Courier New", monospace;
   font-size: 11px;
   text-align: right;
+  width: 100%;
+  justify-self: end;
 }
 
 @media (max-width: 900px) {
