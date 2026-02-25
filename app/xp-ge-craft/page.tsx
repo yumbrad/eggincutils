@@ -202,6 +202,7 @@ export default function XpGeCraftPage(): JSX.Element {
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [prefsLoaded, setPrefsLoaded] = useState<boolean>(false);
 
   useEffect(() => {
     const savedEid = readFirstStoredString(SHARED_EID_KEYS);
@@ -212,15 +213,22 @@ export default function XpGeCraftPage(): JSX.Element {
     if (savedIncludeSlotted != null) {
       setIncludeSlotted(savedIncludeSlotted);
     }
+    setPrefsLoaded(true);
   }, []);
 
   useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
     writeStoredString(SHARED_EID_KEYS, eid.trim());
-  }, [eid]);
+  }, [eid, prefsLoaded]);
 
   useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
     writeStoredBoolean(SHARED_INCLUDE_SLOTTED_KEYS, includeSlotted);
-  }, [includeSlotted]);
+  }, [includeSlotted, prefsLoaded]);
 
   async function runOptimize(): Promise<void> {
     if (!highs) {

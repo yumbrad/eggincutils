@@ -14,17 +14,22 @@ export default function XpGeDiagnosticsPage(): JSX.Element {
   const [responseText, setResponseText] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [prefsLoaded, setPrefsLoaded] = useState<boolean>(false);
 
   useEffect(() => {
     const savedEid = readFirstStoredString(SHARED_EID_KEYS);
     if (savedEid) {
       setEID(savedEid);
     }
+    setPrefsLoaded(true);
   }, []);
 
   useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
     writeStoredString(SHARED_EID_KEYS, eid.trim());
-  }, [eid]);
+  }, [eid, prefsLoaded]);
 
   async function runDiagnostics(): Promise<void> {
     if (!eid.trim()) {

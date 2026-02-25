@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import artifactDisplay from "../../data/artifact-display.json";
 import recipes from "../../data/recipes.json";
@@ -474,6 +474,7 @@ export default function MissionCraftPlannerPage() {
   const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
   const [response, setResponse] = useState<PlanResponse | null>(null);
   const [profileSnapshot, setProfileSnapshot] = useState<ProfileSnapshot | null>(null);
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
 
   const targetOptions = useMemo(() => {
     const display = artifactDisplay as Record<string, { id: string; name: string; tierName: string; tierNumber: number }>;
@@ -522,66 +523,90 @@ export default function MissionCraftPlannerPage() {
       }
     } catch {
       // Ignore localStorage hydration errors.
+    } finally {
+      setPrefsLoaded(true);
     }
   }, [targetOptions]);
 
   useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
     try {
       writeStoredString(SHARED_EID_KEYS, eid.trim());
     } catch {
       // Ignore localStorage persistence errors.
     }
-  }, [eid]);
+  }, [eid, prefsLoaded]);
 
   useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
     try {
       writeStoredBoolean(SHARED_INCLUDE_SLOTTED_KEYS, includeSlotted);
     } catch {
       // Ignore localStorage persistence errors.
     }
-  }, [includeSlotted]);
+  }, [includeSlotted, prefsLoaded]);
 
   useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
     try {
       writeStoredString([LOCAL_PREF_KEYS.plannerTargetItemId], targetItemId);
     } catch {
       // Ignore localStorage persistence errors.
     }
-  }, [targetItemId]);
+  }, [targetItemId, prefsLoaded]);
 
   useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
     try {
       writeStoredString([LOCAL_PREF_KEYS.plannerQuantity], String(quantity));
     } catch {
       // Ignore localStorage persistence errors.
     }
-  }, [quantity]);
+  }, [quantity, prefsLoaded]);
 
   useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
     try {
       writeStoredString([LOCAL_PREF_KEYS.plannerPriorityTimePct], String(priorityTimePct));
     } catch {
       // Ignore localStorage persistence errors.
     }
-  }, [priorityTimePct]);
+  }, [priorityTimePct, prefsLoaded]);
 
   useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
     try {
       writeStoredBoolean([LOCAL_PREF_KEYS.plannerFastMode], fastMode);
     } catch {
       // Ignore localStorage persistence errors.
     }
-  }, [fastMode]);
+  }, [fastMode, prefsLoaded]);
 
-  async function onSubmit(event: FormEvent) {
-    event.preventDefault();
+  async function runBuildPlan() {
     setError(null);
-    setResponse(null);
-    setProfileSnapshot(null);
     setRefreshSummary(null);
     setLoading(true);
 
     try {
+      writeStoredString(SHARED_EID_KEYS, eid.trim());
+      writeStoredBoolean(SHARED_INCLUDE_SLOTTED_KEYS, includeSlotted);
+      writeStoredString([LOCAL_PREF_KEYS.plannerTargetItemId], targetItemId);
+      writeStoredString([LOCAL_PREF_KEYS.plannerQuantity], String(quantity));
+      writeStoredString([LOCAL_PREF_KEYS.plannerPriorityTimePct], String(priorityTimePct));
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerFastMode], fastMode);
+
       const planResp = await fetch("/api/plan", {
         method: "POST",
         headers: {
@@ -611,7 +636,8 @@ export default function MissionCraftPlannerPage() {
       const snapshot = await fetchProfileSnapshot(eid, includeSlotted);
       setProfileSnapshot(snapshot);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "unknown planner error");
+      const message = caught instanceof Error && caught.message ? caught.message : "planning request failed";
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -697,7 +723,14 @@ export default function MissionCraftPlannerPage() {
         </div>
       </div>
 
-      <form className="panel" onSubmit={onSubmit}>
+      <form
+        className="panel"
+        onSubmit={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void runBuildPlan();
+        }}
+      >
         <div className="row">
           <div className="field" style={{ minWidth: 320, flex: 2 }}>
             <label htmlFor="eid">EID</label>

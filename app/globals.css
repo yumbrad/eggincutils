@@ -214,15 +214,15 @@ button:disabled {
 
 .home-brand-panel {
   position: relative;
-  min-height: 164px;
+  min-height: clamp(126px, 22vw, 164px);
   overflow: hidden;
 }
 
 .home-hamster-accent {
   position: absolute;
-  left: 0px;
-  bottom: -122px;
-  width: 200px;
+  left: clamp(-12px, -1.2vw, 0px);
+  top: -15px;
+  width: clamp(132px, 18vw + 70px, 200px);
   pointer-events: none;
   user-select: none;
 }
@@ -237,7 +237,7 @@ button:disabled {
 .home-brand-copy {
   position: relative;
   z-index: 1;
-  margin-left: 190px;
+  margin-left: clamp(114px, 18vw + 32px, 190px);
 }
 
 .brand-header {
@@ -277,6 +277,8 @@ button:disabled {
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.07em;
+  padding-left: 0.5rem;
+  text-indent: -0.5rem;
 }
 
 .brand-title {
@@ -422,20 +424,6 @@ th {
 @media (max-width: 640px) {
   .page {
     padding: 12px;
-  }
-
-  .home-brand-panel {
-    min-height: 132px;
-  }
-
-  .home-hamster-accent {
-    width: 168px;
-    left: -18px;
-    bottom: -130px;
-  }
-
-  .home-brand-copy {
-    margin-left: 102px;
   }
 
   .brand-title {

@@ -34,8 +34,8 @@ export default function HomePage() {
           <Image src="/media/hamster_egg_poly.png" alt="" width={768} height={1024} className="home-hamster" priority />
         </div>
         <div className="home-brand-copy">
-          <p className="brand-kicker">Egg Inc. Chicken-to-consumer Layer Operations Layer (C2C-LOL)™ <br />
-                                      with Dilithium Enterprise Resource Planning (DERP™)</p>
+          <p className="brand-kicker">Egg Inc. Chicken-to-consumer Layer Operations Layer (C2C-LOL)™</p>
+          <p className="brand-kicker">with Dilithium Enterprise Resource Planning (DERP™)</p>
           <h1 className="brand-title">techyum&apos;s eggy tools</h1>
         </div>
       </div>

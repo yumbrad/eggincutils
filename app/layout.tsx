@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import InfoDisclosureDismiss from "./info-disclosure-dismiss";
 import ThemeSwitcher from "./theme-switcher";
 
 export const metadata: Metadata = {
@@ -20,6 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         {children}
+        <InfoDisclosureDismiss />
         <ThemeSwitcher />
       </body>
     </html>
