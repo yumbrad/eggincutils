@@ -23,6 +23,22 @@ function parseIncludeSlotted(raw: unknown): boolean {
   return true;
 }
 
+function parseFastMode(raw: unknown): boolean {
+  if (raw == null) {
+    return false;
+  }
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  if (typeof raw === "number") {
+    return raw !== 0;
+  }
+  if (typeof raw === "string") {
+    return !FALSEY_STRINGS.has(raw.trim().toLowerCase());
+  }
+  return false;
+}
+
 export const profileQuerySchema = z
   .object({
     eid: z.string().trim().min(1, "eid is required"),
@@ -52,6 +68,7 @@ export const planRequestSchema = z
       .transform((value) => Math.max(0, Math.min(1, value))),
     riskProfile: z.enum(RISK_PROFILES).optional().default("balanced"),
     includeSlotted: z.union([z.boolean(), z.number(), z.string()]).optional(),
+    fastMode: z.union([z.boolean(), z.number(), z.string()]).optional(),
   })
   .transform((value) => ({
     eid: value.eid,
@@ -60,6 +77,7 @@ export const planRequestSchema = z
     priorityTime: value.priorityTime,
     riskProfile: value.riskProfile,
     includeSlotted: parseIncludeSlotted(value.includeSlotted),
+    fastMode: parseFastMode(value.fastMode),
   }));
 
 export type PlanRequest = z.infer<typeof planRequestSchema>;
@@ -130,9 +148,13 @@ export const replanRequestSchema = z.object({
     .default(0.5)
     .transform((value) => Math.max(0, Math.min(1, value))),
   riskProfile: z.enum(RISK_PROFILES).optional().default("balanced"),
+  fastMode: z.union([z.boolean(), z.number(), z.string()]).optional(),
   observedReturns: z.array(observedReturnSchema).optional().default([]),
   missionLaunches: z.array(missionLaunchUpdateSchema).optional().default([]),
-});
+}).transform((value) => ({
+  ...value,
+  fastMode: parseFastMode(value.fastMode),
+}));
 
 export type ReplanRequest = z.infer<typeof replanRequestSchema>;
 

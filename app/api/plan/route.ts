@@ -41,7 +41,8 @@ export async function POST(request: Request): Promise<Response> {
       parsedPayload.data.targetItemId,
       parsedPayload.data.quantity,
       parsedPayload.data.priorityTime,
-      parsedPayload.data.riskProfile
+      parsedPayload.data.riskProfile,
+      { fastMode: parsedPayload.data.fastMode }
     );
 
     const responsePayload = {

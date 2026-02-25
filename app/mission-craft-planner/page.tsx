@@ -204,6 +204,7 @@ export default function MissionCraftPlannerPage() {
   const [priorityTimePct, setPriorityTimePct] = useState(50);
   const [riskProfile, setRiskProfile] = useState<"balanced" | "conservative" | "optimistic">("balanced");
   const [includeSlotted, setIncludeSlotted] = useState(true);
+  const [fastMode, setFastMode] = useState(false);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -246,6 +247,7 @@ export default function MissionCraftPlannerPage() {
           priorityTime: priorityTimePct / 100,
           riskProfile,
           includeSlotted,
+          fastMode,
         }),
       });
 
@@ -294,6 +296,7 @@ export default function MissionCraftPlannerPage() {
           quantity,
           priorityTime: priorityTimePct / 100,
           riskProfile,
+          fastMode,
           observedReturns: [],
           missionLaunches: [],
         }),
@@ -425,6 +428,23 @@ export default function MissionCraftPlannerPage() {
               <option value="no">Ignore slotted stones</option>
             </select>
           </div>
+
+          <label
+            className="field"
+            style={{ minWidth: 220, gap: 6, flexDirection: "row", alignItems: "center", marginBottom: 6 }}
+            htmlFor="fastMode"
+          >
+            <input
+              id="fastMode"
+              type="checkbox"
+              checked={fastMode}
+              onChange={(event) => setFastMode(event.target.checked)}
+              style={{ width: 16, height: 16, margin: 0 }}
+            />
+            <span className="muted" style={{ fontSize: 13 }}>
+              Faster, less optimal solve
+            </span>
+          </label>
 
           <button type="submit" disabled={loading}>
             {loading ? "Planning..." : "Build plan"}

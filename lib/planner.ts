@@ -92,6 +92,10 @@ export type PlannerResult = {
   notes: string[];
 };
 
+export type PlannerOptions = {
+  fastMode?: boolean;
+};
+
 export class MissionCoverageError extends Error {
   readonly itemIds: string[];
 
@@ -112,6 +116,7 @@ const SCORE_EPS = 1e-9;
 const PROGRESSION_MAX_DEPTH = 2;
 const PROGRESSION_BEAM_WIDTH = 6;
 const PROGRESSION_MAX_LAUNCHES_PER_ACTION = 600;
+const FAST_MODE_MAX_CANDIDATES = 8;
 const MIN_MISSION_TIME_OBJECTIVE_WEIGHT = 1e-5;
 const RISK_PROFILE_SETTINGS: Record<RiskProfileName, RiskProfileConfig> = {
   balanced: {
@@ -885,6 +890,23 @@ type ProgressionCandidate = {
   prepSlotSeconds: number;
 };
 
+function missionOptionsFingerprint(options: MissionOption[]): string {
+  return options
+    .slice()
+    .sort((a, b) => {
+      const missionCompare = a.missionId.localeCompare(b.missionId);
+      if (missionCompare !== 0) {
+        return missionCompare;
+      }
+      return a.durationType.localeCompare(b.durationType);
+    })
+    .map(
+      (option) =>
+        `${option.ship}|${option.missionId}|${option.durationType}|${option.level}|${option.durationSeconds}|${option.capacity}`
+    )
+    .join("||");
+}
+
 function cloneLaunchCounts(launchCounts: ShipLaunchCounts): ShipLaunchCounts {
   const clone: ShipLaunchCounts = {};
   for (const [ship, byDuration] of Object.entries(launchCounts)) {
@@ -952,9 +974,10 @@ function progressionShipRows(shipLevels: ShipLevelInfo[]): ProgressionShipRow[] 
 }
 
 function buildMissionRows(actions: MissionAction[], missionCounts: Record<string, number>): PlanMissionRow[] {
+  const actionByKey = new Map(actions.map((action) => [action.key, action]));
   return Object.entries(missionCounts)
     .map(([key, launches]) => {
-      const action = actions.find((candidate) => candidate.key === key);
+      const action = actionByKey.get(key);
       if (!action) {
         return null;
       }
@@ -1242,6 +1265,30 @@ function buildProgressionCandidates(profile: PlayerProfile): ProgressionCandidat
   return candidates;
 }
 
+function dedupeProgressionCandidatesByMissionOptions(candidates: ProgressionCandidate[]): {
+  unique: ProgressionCandidate[];
+  dedupedCount: number;
+} {
+  if (candidates.length <= 1) {
+    return { unique: candidates, dedupedCount: 0 };
+  }
+
+  const bestByOptions = new Map<string, ProgressionCandidate>();
+  for (const candidate of candidates) {
+    const key = missionOptionsFingerprint(candidate.missionOptions);
+    const existing = bestByOptions.get(key);
+    if (!existing || candidate.prepSlotSeconds < existing.prepSlotSeconds) {
+      bestByOptions.set(key, candidate);
+    }
+  }
+
+  const unique = Array.from(bestByOptions.values()).sort((a, b) => a.prepSlotSeconds - b.prepSlotSeconds);
+  return {
+    unique,
+    dedupedCount: Math.max(0, candidates.length - unique.length),
+  };
+}
+
 async function planForTargetHeuristic(
   profile: PlayerProfile,
   targetItemId: string,
@@ -1431,17 +1478,23 @@ export async function planForTarget(
   targetItemId: string,
   quantity: number,
   priorityTimeRaw: number,
-  riskProfileName: RiskProfileName = "balanced"
+  riskProfileName: RiskProfileName = "balanced",
+  plannerOptions: PlannerOptions = {}
 ): Promise<PlannerResult> {
   const targetKey = itemIdToKey(targetItemId);
   const priorityTime = Math.max(0, Math.min(1, priorityTimeRaw));
   const quantityInt = Math.max(1, Math.round(quantity));
   const riskProfile = resolveRiskProfile(riskProfileName);
+  const fastMode = Boolean(plannerOptions.fastMode);
 
   const closure = new Set<string>();
   collectClosure(targetKey, closure);
 
-  const progressionCandidates = buildProgressionCandidates(profile);
+  const progressionCandidatesRaw = buildProgressionCandidates(profile);
+  const progressionDeduped = dedupeProgressionCandidatesByMissionOptions(progressionCandidatesRaw);
+  const progressionCandidates = fastMode
+    ? progressionDeduped.unique.slice(0, FAST_MODE_MAX_CANDIDATES)
+    : progressionDeduped.unique;
   const referenceMissionOptions = progressionCandidates[0]?.missionOptions || profile.missionOptions;
   const lootData = await loadLootData();
   const baseActions = await buildMissionActionsForOptions(
@@ -1459,7 +1512,9 @@ export async function planForTarget(
 
   try {
     const evaluatedCount = progressionCandidates.length;
+    const actionCache = new Map<string, MissionAction[]>();
     const solverErrors: string[] = [];
+    let prunedCandidateCount = 0;
 
     let best:
       | {
@@ -1472,12 +1527,29 @@ export async function planForTarget(
       | null = null;
 
     for (const candidate of progressionCandidates) {
-      const candidateActions = await buildMissionActionsForOptions(
-        candidate.missionOptions,
-        closure,
-        riskProfile.missionYieldMultiplier,
-        lootData
+      const prepOnlyLowerBound = normalizedScore(
+        0,
+        (candidate.prepSlotSeconds / 3) * riskProfile.missionTimeMultiplier,
+        priorityTime,
+        geRef,
+        timeRef
       );
+      if (best && prepOnlyLowerBound + SCORE_EPS >= best.weightedScore) {
+        prunedCandidateCount += 1;
+        continue;
+      }
+
+      const candidateKey = missionOptionsFingerprint(candidate.missionOptions);
+      let candidateActions = actionCache.get(candidateKey);
+      if (!candidateActions) {
+        candidateActions = await buildMissionActionsForOptions(
+          candidate.missionOptions,
+          closure,
+          riskProfile.missionYieldMultiplier,
+          lootData
+        );
+        actionCache.set(candidateKey, candidateActions);
+      }
       try {
         const unified = await solveUnifiedCraftMissionPlan({
           profile,
@@ -1555,8 +1627,21 @@ export async function planForTarget(
     const compactedPrepLaunches = compactProgressionSteps(best.candidate.prepSteps);
     const prepHours = best.candidate.prepSlotSeconds / 3 / 3600;
     const notes: string[] = [...best.unified.notes];
+    if (fastMode) {
+      notes.push(
+        `Fast solve mode enabled: limited progression-state solves to ${progressionCandidates.length.toLocaleString()} candidates.`
+      );
+    }
+    if (progressionDeduped.dedupedCount > 0) {
+      notes.push(
+        `Collapsed ${progressionDeduped.dedupedCount} redundant progression states with identical mission options before solving.`
+      );
+    }
     if (evaluatedCount > 1) {
       notes.push(`Horizon search evaluated ${evaluatedCount} projected ship progression states.`);
+    }
+    if (prunedCandidateCount > 0) {
+      notes.push(`Pruned ${prunedCandidateCount} progression candidates using prep-time lower-bound screening.`);
     }
     if (compactedPrepLaunches.length > 0) {
       const prepLaunchCount = compactedPrepLaunches.reduce((sum, row) => sum + row.launches, 0);
