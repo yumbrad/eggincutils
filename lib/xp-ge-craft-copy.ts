@@ -1,5 +1,5 @@
 export const XP_GE_CRAFT_COPY = {
-  title: "XP + GE Craft Optimizer",
+  title: "Craft XP Efficiency Planner",
   subtitle:
     "Compute the most efficient crafting plan for your current inventory and craft history to maximize crafting XP for your Golden Eggs, including recursive ingredient requirements and craft-cost discounts.",
   longDescription:

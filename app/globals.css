@@ -336,11 +336,13 @@ button:disabled {
   top: calc(100% + 8px);
   left: 0;
   width: min(620px, 86vw);
+  max-width: calc(100vw - 16px);
   padding: 10px 12px;
   border-radius: 12px;
   border: 1px solid var(--stroke);
   background: color-mix(in oklab, var(--panel), black 4%);
   box-shadow: var(--panel-shadow);
+  transform: translateX(var(--info-disclosure-shift, 0px));
   z-index: 80;
 }
 

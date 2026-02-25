@@ -1439,7 +1439,7 @@ export default function MissionCraftPlannerPage() {
           </div>
 
           <div className="panel">
-            <h2 style={{ marginTop: 0 }}>Ship progression snapshot</h2>
+            <h2 style={{ marginTop: 0 }}>Ship progression snapshot (after planned launches)</h2>
             <div className="table-wrap">
               <table>
                 <thead>

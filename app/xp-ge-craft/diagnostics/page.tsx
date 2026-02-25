@@ -64,7 +64,7 @@ export default function XpGeDiagnosticsPage(): JSX.Element {
   return (
     <main className="page">
       <div className="panel">
-        <h1 style={{ margin: "0 0 6px" }}>XP + GE Craft Optimizer Diagnostics</h1>
+        <h1 style={{ margin: "0 0 6px" }}>Craft XP Efficiency Planner Diagnostics</h1>
         <p className="muted" style={{ margin: 0 }}>
           Calls the native `/api/inventory` endpoint and shows raw response payload.
         </p>

@@ -1212,6 +1212,72 @@ function aggregateMissionLaunchesByOption(
   return launchesByOption;
 }
 
+function incrementLaunchCounts(
+  launchCounts: ShipLaunchCounts,
+  ship: string,
+  durationType: DurationType,
+  launchesRaw: number
+): void {
+  const launches = Math.max(0, Math.round(launchesRaw));
+  if (launches <= 0) {
+    return;
+  }
+  const byDuration = launchCounts[ship];
+  if (!byDuration) {
+    return;
+  }
+  byDuration[durationType] = Math.max(0, Math.round(byDuration[durationType] || 0)) + launches;
+}
+
+function projectShipLevelsAfterPlannedLaunches(options: {
+  baseShipLevels: ShipLevelInfo[];
+  prepSteps: PrepProgressionStep[];
+  actions: MissionAction[];
+  missionCounts: Record<string, number>;
+}): ShipLevelInfo[] {
+  const { baseShipLevels, prepSteps, actions, missionCounts } = options;
+  const launchCounts = shipLevelsToLaunchCounts(baseShipLevels);
+
+  for (const step of prepSteps) {
+    incrementLaunchCounts(launchCounts, step.ship, step.durationType, step.launches);
+  }
+
+  const prepRequirements = aggregatePrepOptionRequirements(prepSteps);
+  const launchesByOption = aggregateMissionLaunchesByOption(actions, missionCounts);
+  const optionShapeByKey = new Map<string, { ship: string; durationType: DurationType }>();
+  for (const action of actions) {
+    if (!optionShapeByKey.has(action.optionKey)) {
+      optionShapeByKey.set(action.optionKey, {
+        ship: action.ship,
+        durationType: action.durationType,
+      });
+    }
+  }
+  for (const [optionKey, requirement] of prepRequirements.entries()) {
+    if (!optionShapeByKey.has(optionKey)) {
+      optionShapeByKey.set(optionKey, {
+        ship: requirement.option.ship,
+        durationType: requirement.option.durationType,
+      });
+    }
+  }
+
+  for (const [optionKey, totalLaunches] of launchesByOption.entries()) {
+    const prepLaunches = prepRequirements.get(optionKey)?.launches || 0;
+    const postPrepLaunches = Math.max(0, totalLaunches - prepLaunches);
+    if (postPrepLaunches <= 0) {
+      continue;
+    }
+    const shape = optionShapeByKey.get(optionKey);
+    if (!shape) {
+      continue;
+    }
+    incrementLaunchCounts(launchCounts, shape.ship, shape.durationType, postPrepLaunches);
+  }
+
+  return computeShipLevelsFromLaunchCounts(launchCounts);
+}
+
 function findDominantFinalOptionKey(
   finalOptionKeys: Set<string>,
   launchesByOption: Map<string, number>
@@ -1917,6 +1983,12 @@ async function planForTargetHeuristic(
   if (uncoveredItemKeys.length > 0 && missionRows.length === 0) {
     throw new MissionCoverageError(uncoveredItemKeys);
   }
+  const projectedShipLevels = projectShipLevelsAfterPlannedLaunches({
+    baseShipLevels: profile.shipLevels,
+    prepSteps: [],
+    actions,
+    missionCounts,
+  });
 
   const notes: string[] = [...missionAllocation.notes];
   if (actions.length === 0) {
@@ -1938,6 +2010,9 @@ async function planForTargetHeuristic(
   notes.push(
     "Rarity is treated as fungible for planning (shiny inventory counted toward craftable supply by item tier)."
   );
+  notes.push(
+    "Ship progression snapshot reflects projected levels after applying all launches in this plan (prep + farming), and is not persisted."
+  );
 
   return {
     targetItemId,
@@ -1953,7 +2028,7 @@ async function planForTargetHeuristic(
     progression: {
       prepHours: 0,
       prepLaunches: [],
-      projectedShipLevels: progressionShipRows(profile.shipLevels),
+      projectedShipLevels: progressionShipRows(projectedShipLevels),
     },
     notes,
   };
@@ -2376,6 +2451,16 @@ export async function planForTarget(
     notes.push(
       "Rarity is treated as fungible for planning (shiny inventory counted toward craftable supply by item tier)."
     );
+    notes.push(
+      "Ship progression snapshot reflects projected levels after applying all launches in this plan (prep + farming), and is not persisted."
+    );
+
+    const projectedShipLevels = projectShipLevelsAfterPlannedLaunches({
+      baseShipLevels: profile.shipLevels,
+      prepSteps: best.candidate.prepSteps,
+      actions: best.actions,
+      missionCounts: best.unified.missionCounts,
+    });
 
     reportProgress({
       phase: "finalize",
@@ -2400,7 +2485,7 @@ export async function planForTarget(
       progression: {
         prepHours,
         prepLaunches: compactedPrepLaunches,
-        projectedShipLevels: progressionShipRows(best.candidate.shipLevels),
+        projectedShipLevels: progressionShipRows(projectedShipLevels),
       },
       notes,
     };

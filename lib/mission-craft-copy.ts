@@ -1,5 +1,5 @@
 export const MISSION_CRAFT_COPY = {
-  title: "Artifact Farming + Craft Planner",
+  title: "Artifact Attainment Planner",
   subtitle:
     "Plan the fastest and cheapest path to a target item by combining your live profile, mission target drop expectations, full ingredient crafting chains, ship progression options, and your selected time-versus-Golden-Egg tradeoff.",
   longDescription:
