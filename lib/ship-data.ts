@@ -18,6 +18,8 @@ export type ShipLevelInfo = {
   launchesByDuration: Record<DurationType, number>;
 };
 
+export type ShipLaunchCounts = Record<string, Record<DurationType, number>>;
+
 export type MissionOption = {
   ship: string;
   missionId: string;
@@ -44,6 +46,7 @@ const shipConfig = (eiafxConfig as { missionParameters: MissionShipConfig[] }).m
 
 const SHIP_ORDER = shipConfig.map((entry) => entry.ship);
 
+const ALL_DURATIONS: DurationType[] = ["TUTORIAL", "SHORT", "LONG", "EPIC"];
 const DURATIONS: DurationType[] = ["SHORT", "LONG", "EPIC"];
 
 const DURATION_SUFFIX: Record<DurationType, string> = {
@@ -104,38 +107,46 @@ function isLaunchedStatus(status: string): boolean {
   return ["EXPLORING", "RETURNED", "ANALYZING", "COMPLETE", "ARCHIVED"].includes(status);
 }
 
-export function getShipOrder(): string[] {
-  return SHIP_ORDER;
+function emptyDurationCounts(): Record<DurationType, number> {
+  return {
+    TUTORIAL: 0,
+    SHORT: 0,
+    LONG: 0,
+    EPIC: 0,
+  };
 }
 
-export function computeShipLevels(missions: MissionRecord[]): ShipLevelInfo[] {
-  const launchesByShip = new Map<string, number>();
-  const launchesByShipDuration = new Map<string, Record<DurationType, number>>();
-
+function initializeLaunchCounts(): ShipLaunchCounts {
+  const launchCounts: ShipLaunchCounts = {};
   for (const ship of SHIP_ORDER) {
-    launchesByShip.set(ship, 0);
-    launchesByShipDuration.set(ship, {
-      TUTORIAL: 0,
-      SHORT: 0,
-      LONG: 0,
-      EPIC: 0,
-    });
+    launchCounts[ship] = emptyDurationCounts();
   }
+  return launchCounts;
+}
 
-  for (const mission of missions) {
-    if (!SHIP_ORDER.includes(mission.ship)) {
-      continue;
-    }
-    if (!isLaunchedStatus(mission.status)) {
-      continue;
-    }
-    const durationType = mission.durationType as DurationType;
-    if (!["TUTORIAL", "SHORT", "LONG", "EPIC"].includes(durationType)) {
-      continue;
-    }
-    launchesByShip.set(mission.ship, (launchesByShip.get(mission.ship) || 0) + 1);
-    const byDuration = launchesByShipDuration.get(mission.ship)!;
-    byDuration[durationType] += 1;
+function cloneDurationCounts(counts: Record<DurationType, number>): Record<DurationType, number> {
+  return {
+    TUTORIAL: counts.TUTORIAL,
+    SHORT: counts.SHORT,
+    LONG: counts.LONG,
+    EPIC: counts.EPIC,
+  };
+}
+
+function normalizeCount(value: unknown): number {
+  const asNumber = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(asNumber)) {
+    return 0;
+  }
+  return Math.max(0, Math.round(asNumber));
+}
+
+function buildLevelInfoFromLaunchCounts(launchCounts: ShipLaunchCounts): ShipLevelInfo[] {
+  const launchesByShip = new Map<string, number>();
+  for (const ship of SHIP_ORDER) {
+    const byDuration = launchCounts[ship] || emptyDurationCounts();
+    const launches = ALL_DURATIONS.reduce((sum, durationType) => sum + normalizeCount(byDuration[durationType]), 0);
+    launchesByShip.set(ship, launches);
   }
 
   const unlocked = new Map<string, boolean>();
@@ -148,7 +159,8 @@ export function computeShipLevels(missions: MissionRecord[]): ShipLevelInfo[] {
   }
 
   return shipConfig.map((shipEntry) => {
-    const byDuration = launchesByShipDuration.get(shipEntry.ship)!;
+    const byDurationRaw = launchCounts[shipEntry.ship] || emptyDurationCounts();
+    const byDuration = cloneDurationCounts(byDurationRaw);
     const launchPoints =
       byDuration.TUTORIAL * DURATION_LAUNCH_POINTS.TUTORIAL +
       byDuration.SHORT * DURATION_LAUNCH_POINTS.SHORT +
@@ -170,6 +182,61 @@ export function computeShipLevels(missions: MissionRecord[]): ShipLevelInfo[] {
       launchesByDuration: byDuration,
     };
   });
+}
+
+export function getShipOrder(): string[] {
+  return SHIP_ORDER;
+}
+
+export function shipLevelsToLaunchCounts(shipLevels: ShipLevelInfo[]): ShipLaunchCounts {
+  const launchCounts = initializeLaunchCounts();
+  const byShip = new Map(shipLevels.map((entry) => [entry.ship, entry]));
+
+  for (const ship of SHIP_ORDER) {
+    const info = byShip.get(ship);
+    for (const durationType of ALL_DURATIONS) {
+      launchCounts[ship][durationType] = normalizeCount(info?.launchesByDuration?.[durationType]);
+    }
+  }
+
+  return launchCounts;
+}
+
+export function computeShipLevelsFromLaunchCounts(
+  launchCountsInput: Partial<Record<string, Partial<Record<DurationType, number>>>>
+): ShipLevelInfo[] {
+  const launchCounts = initializeLaunchCounts();
+  for (const ship of SHIP_ORDER) {
+    const shipCounts = launchCountsInput[ship];
+    if (!shipCounts) {
+      continue;
+    }
+    for (const durationType of ALL_DURATIONS) {
+      launchCounts[ship][durationType] = normalizeCount(shipCounts[durationType]);
+    }
+  }
+
+  return buildLevelInfoFromLaunchCounts(launchCounts);
+}
+
+export function computeShipLevels(missions: MissionRecord[]): ShipLevelInfo[] {
+  const launchCounts = initializeLaunchCounts();
+
+  for (const mission of missions) {
+    if (!SHIP_ORDER.includes(mission.ship)) {
+      continue;
+    }
+    if (!isLaunchedStatus(mission.status)) {
+      continue;
+    }
+    const durationType = mission.durationType as DurationType;
+    if (!["TUTORIAL", "SHORT", "LONG", "EPIC"].includes(durationType)) {
+      continue;
+    }
+    launchCounts[mission.ship][durationType] += 1;
+  }
+
+  return buildLevelInfoFromLaunchCounts(launchCounts);
 }
 
 export function buildMissionOptions(shipLevels: ShipLevelInfo[], epicResearchFTLLevel: number, epicResearchZerogLevel: number): MissionOption[] {

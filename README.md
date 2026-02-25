@@ -6,8 +6,9 @@ Unified Egg, Inc. utility app (Next.js).
 
 - `/` menu
 - `/mission-craft-planner` new planner (EID + target + quantity + GE/time slider)
-- `/xp-ge-craft` migration placeholder
-- `/ship-timer` migration placeholder
+- `/xp-ge-craft` native XP + GE craft optimizer
+- `/xp-ge-craft/diagnostics` inventory/API diagnostics for the optimizer
+- `/ship-timer` native ship return planner
 
 ## Development
 
@@ -36,3 +37,14 @@ You can override with:
 
 The planner combines recursive crafting (with craft-count GE discounts) and expected mission drops, with a 3-slot mission-time model.
 It is an initial greedy/expected-value model and should be rerun after returns.
+
+## Replanning Endpoint
+
+Use `POST /api/plan/replan` to replan from a current snapshot without re-fetching from EID.
+
+Request body fields:
+
+- `profile`: full profile object (same shape as `/api/profile` response payload)
+- `targetItemId`, `quantity`, `priorityTime`, `riskProfile`
+- `observedReturns`: optional item drops to add to inventory (`[{ itemId, quantity }]`)
+- `missionLaunches`: optional launches completed since snapshot (`[{ ship, durationType, launches }]`)

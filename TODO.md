@@ -134,16 +134,21 @@ This is expected-value + greedy allocation. It is intentionally rerunnable after
 3. Model slider as weighted objective with normalized terms and optional risk profile options.
 4. Add rolling-horizon mode / replanning endpoint from current observed returns.
 
-### Phase B status (updated 2026-02-24)
+### Phase B status (updated 2026-02-25)
 - [x] 1. Craft + mission allocation now runs in a unified HiGHS model with exact craft-discount scheduling (plus heuristic fallback path for solver/runtime failures).
-- [ ] 2. Horizon/star-progression optimization not started.
-- [ ] 3. Slider-aware normalized objective for full solver model not started.
-- [ ] 4. Rolling-horizon/replanning endpoint not started.
+- [x] 2. Added bounded horizon/star-progression search that can insert prep launches to unlock/level ships before final mission allocation.
+- [x] 3. Added slider-aware normalized objective references and risk profiles (`balanced`, `conservative`, `optimistic`) that adjust mission yield/time weighting in solver planning.
+- [x] 4. Added `/api/plan/replan` endpoint that replans from a supplied profile snapshot plus observed returns/mission-launch updates.
 
 ## Phase C - Integrate old tools fully
 1. Port `../xp-ge-craft` UI/features into `/xp-ge-craft` route in this repo.
 2. Port `../egginc-ship-timer` UI/features into `/ship-timer` route in this repo.
 3. Remove external links and make all utilities native in one deploy.
+
+### Phase C status (updated 2026-02-25)
+- [x] 1. Ported XP/GE optimizer into native `/xp-ge-craft` route with solver-backed client UI and native `/api/inventory`.
+- [x] 2. Ported ship timer into native `/ship-timer` route with launch/FTL/sleep controls, grouped/flat views, sorting, and shareable URL state.
+- [x] 3. Removed migration-style external-link dependency on both utility routes.
 
 ## Phase D - UX quality
 1. Add ship + artifact images in planner results.
@@ -206,4 +211,10 @@ Optional vars currently supported:
 - Basic test coverage and reproducible build.
 
 ---
-This file is temporary handoff context for restart and can be deleted after migration stabilizes.
+
+Post handoff plan miscellaneous TODOs:
+1. Change (parenthesis) text in item dropdown change to (T1) or (T3) etc instead of (Fragment) or (Complex)...
+2. Local storage or cookie based saving of last selected options (and EID, shared across tools)
+3. "techyum's eggy tools" ... "🥚 Egg Inc. C2C (chicken-to-consumer) Premium Suite™ with Dilithium Enterprise Resource Planning (DERP™)" (replace title and subtitle above title, respectively)
+4. Do we really need the Risk Profile? Sounds like it is redundant to just bumping the slider up or down somewhat?
+5. 

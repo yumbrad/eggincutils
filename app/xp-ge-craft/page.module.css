@@ -1,0 +1,209 @@
+.inputSection {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.inputSection label {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.inputSection input[type="text"] {
+  width: 280px;
+}
+
+.inputCheckbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.errorBox {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--error-border);
+  border-radius: 10px;
+  background: var(--error-bg);
+  color: var(--error-ink);
+}
+
+.summary {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.summaryCard {
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: color-mix(in oklab, var(--card), white 20%);
+  min-width: 180px;
+}
+
+.summaryLabel {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.summaryValue {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--accent);
+}
+
+.sortSection {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sortSection span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sortSection button.active {
+  background: linear-gradient(135deg, var(--accent-2), var(--accent));
+  border-color: var(--accent-2);
+  color: var(--button-ink);
+  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--accent-2), transparent 55%);
+}
+
+.activeButton {
+  background: linear-gradient(135deg, var(--accent-2), var(--accent));
+  border-color: var(--accent-2);
+  color: var(--button-ink);
+  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--accent-2), transparent 55%);
+}
+
+.tableSection {
+  margin-top: 14px;
+}
+
+.tableSection h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  color: var(--navy);
+}
+
+.resultsTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.resultsTable thead th {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--stroke);
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.resultsTable thead th.num {
+  text-align: right;
+}
+
+.resultsTable tbody tr:hover {
+  background: color-mix(in oklab, var(--accent), transparent 93%);
+}
+
+.resultsTable tbody tr {
+  border-bottom: 1px solid var(--stroke);
+}
+
+.resultsTable tbody td {
+  padding: 6px 8px;
+}
+
+.resultsTable tbody td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.artifactCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  position: relative;
+}
+
+.artifactIconWrap {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+}
+
+.artifactIconThumb {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.artifactIconPreview {
+  position: absolute;
+  left: 24px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--stroke);
+  background: var(--card);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+  display: none;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.artifactIconLarge {
+  width: 92px;
+  height: 92px;
+  object-fit: contain;
+  display: block;
+}
+
+.artifactIconWrap:hover .artifactIconPreview {
+  display: block;
+}
+
+.artifactText {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.artifactMode {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.valueTooltip {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
+.footnote {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.pageLinks {
+  margin-top: 10px;
+  display: flex;
+  gap: 12px;
+}

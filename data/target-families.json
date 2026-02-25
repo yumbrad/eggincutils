@@ -1,0 +1,247 @@
+{
+  "0": {
+    "afxId": 0,
+    "id": "lunar-totem",
+    "name": "Lunar totem",
+    "type": "Artifact",
+    "representativeItemId": "lunar-totem-1"
+  },
+  "1": {
+    "afxId": 1,
+    "id": "tachyon-stone",
+    "name": "Tachyon stone",
+    "type": "Stone",
+    "representativeItemId": "tachyon-stone-1"
+  },
+  "3": {
+    "afxId": 3,
+    "id": "neodymium-medallion",
+    "name": "Neodymium medallion",
+    "type": "Artifact",
+    "representativeItemId": "neodymium-medallion-1"
+  },
+  "4": {
+    "afxId": 4,
+    "id": "beak-of-midas",
+    "name": "Beak of Midas",
+    "type": "Artifact",
+    "representativeItemId": "beak-of-midas-1"
+  },
+  "5": {
+    "afxId": 5,
+    "id": "light-of-eggendil",
+    "name": "Light of Eggendil",
+    "type": "Artifact",
+    "representativeItemId": "light-of-eggendil-1"
+  },
+  "6": {
+    "afxId": 6,
+    "id": "demeters-necklace",
+    "name": "Demeters necklace",
+    "type": "Artifact",
+    "representativeItemId": "demeters-necklace-1"
+  },
+  "7": {
+    "afxId": 7,
+    "id": "vial-martian-dust",
+    "name": "Vial of Martian dust",
+    "type": "Artifact",
+    "representativeItemId": "vial-martian-dust-1"
+  },
+  "8": {
+    "afxId": 8,
+    "id": "ornate-gusset",
+    "name": "Gusset",
+    "type": "Artifact",
+    "representativeItemId": "ornate-gusset-1"
+  },
+  "9": {
+    "afxId": 9,
+    "id": "the-chalice",
+    "name": "The chalice",
+    "type": "Artifact",
+    "representativeItemId": "the-chalice-1"
+  },
+  "10": {
+    "afxId": 10,
+    "id": "book-of-basan",
+    "name": "Book of Basan",
+    "type": "Artifact",
+    "representativeItemId": "book-of-basan-1"
+  },
+  "11": {
+    "afxId": 11,
+    "id": "phoenix-feather",
+    "name": "Phoenix feather",
+    "type": "Artifact",
+    "representativeItemId": "phoenix-feather-1"
+  },
+  "12": {
+    "afxId": 12,
+    "id": "tungsten-ankh",
+    "name": "Tungsten ankh",
+    "type": "Artifact",
+    "representativeItemId": "tungsten-ankh-1"
+  },
+  "17": {
+    "afxId": 17,
+    "id": "gold-meteorite",
+    "name": "Gold meteorite",
+    "type": "Ingredient",
+    "representativeItemId": "gold-meteorite-1"
+  },
+  "18": {
+    "afxId": 18,
+    "id": "tau-ceti-geode",
+    "name": "Tau Ceti geode",
+    "type": "Ingredient",
+    "representativeItemId": "tau-ceti-geode-1"
+  },
+  "21": {
+    "afxId": 21,
+    "id": "aurelian-brooch",
+    "name": "Aurelian brooch",
+    "type": "Artifact",
+    "representativeItemId": "aurelian-brooch-1"
+  },
+  "22": {
+    "afxId": 22,
+    "id": "carved-rainstick",
+    "name": "Carved rainstick",
+    "type": "Artifact",
+    "representativeItemId": "carved-rainstick-1"
+  },
+  "23": {
+    "afxId": 23,
+    "id": "puzzle-cube",
+    "name": "Puzzle cube",
+    "type": "Artifact",
+    "representativeItemId": "puzzle-cube-1"
+  },
+  "24": {
+    "afxId": 24,
+    "id": "quantum-metronome",
+    "name": "Quantum metronome",
+    "type": "Artifact",
+    "representativeItemId": "quantum-metronome-1"
+  },
+  "25": {
+    "afxId": 25,
+    "id": "ship-in-a-bottle",
+    "name": "Ship in a bottle",
+    "type": "Artifact",
+    "representativeItemId": "ship-in-a-bottle-1"
+  },
+  "26": {
+    "afxId": 26,
+    "id": "tachyon-deflector",
+    "name": "Tachyon deflector",
+    "type": "Artifact",
+    "representativeItemId": "tachyon-deflector-1"
+  },
+  "27": {
+    "afxId": 27,
+    "id": "interstellar-compass",
+    "name": "Interstellar compass",
+    "type": "Artifact",
+    "representativeItemId": "interstellar-compass-1"
+  },
+  "28": {
+    "afxId": 28,
+    "id": "dilithium-monocle",
+    "name": "Dilithium monocle",
+    "type": "Artifact",
+    "representativeItemId": "dilithium-monocle-1"
+  },
+  "29": {
+    "afxId": 29,
+    "id": "titanium-actuator",
+    "name": "Titanium actuator",
+    "type": "Artifact",
+    "representativeItemId": "titanium-actuator-1"
+  },
+  "30": {
+    "afxId": 30,
+    "id": "mercurys-lens",
+    "name": "Mercury's lens",
+    "type": "Artifact",
+    "representativeItemId": "mercurys-lens-1"
+  },
+  "31": {
+    "afxId": 31,
+    "id": "dilithium-stone",
+    "name": "Dilithium stone",
+    "type": "Stone",
+    "representativeItemId": "dilithium-stone-1"
+  },
+  "32": {
+    "afxId": 32,
+    "id": "shell-stone",
+    "name": "Shell stone",
+    "type": "Stone",
+    "representativeItemId": "shell-stone-1"
+  },
+  "33": {
+    "afxId": 33,
+    "id": "lunar-stone",
+    "name": "Lunar stone",
+    "type": "Stone",
+    "representativeItemId": "lunar-stone-1"
+  },
+  "34": {
+    "afxId": 34,
+    "id": "soul-stone",
+    "name": "Soul stone",
+    "type": "Stone",
+    "representativeItemId": "soul-stone-1"
+  },
+  "36": {
+    "afxId": 36,
+    "id": "quantum-stone",
+    "name": "Quantum stone",
+    "type": "Stone",
+    "representativeItemId": "quantum-stone-1"
+  },
+  "37": {
+    "afxId": 37,
+    "id": "terra-stone",
+    "name": "Terra stone",
+    "type": "Stone",
+    "representativeItemId": "terra-stone-1"
+  },
+  "38": {
+    "afxId": 38,
+    "id": "life-stone",
+    "name": "Life stone",
+    "type": "Stone",
+    "representativeItemId": "life-stone-1"
+  },
+  "39": {
+    "afxId": 39,
+    "id": "prophecy-stone",
+    "name": "Prophecy stone",
+    "type": "Stone",
+    "representativeItemId": "prophecy-stone-1"
+  },
+  "40": {
+    "afxId": 40,
+    "id": "clarity-stone",
+    "name": "Clarity stone",
+    "type": "Stone",
+    "representativeItemId": "clarity-stone-1"
+  },
+  "43": {
+    "afxId": 43,
+    "id": "solar-titanium",
+    "name": "Solar titanium",
+    "type": "Ingredient",
+    "representativeItemId": "solar-titanium-1"
+  },
+  "10000": {
+    "afxId": 10000,
+    "id": "untargeted",
+    "name": "Untargeted",
+    "type": "Special",
+    "representativeItemId": null
+  }
+}

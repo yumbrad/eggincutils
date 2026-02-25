@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const DURATION_TYPES = ["TUTORIAL", "SHORT", "LONG", "EPIC"] as const;
+const RISK_PROFILES = ["balanced", "conservative", "optimistic"] as const;
 const FALSEY_STRINGS = new Set(["0", "false", "no", "off"]);
 
 const nonNegativeFiniteSchema = z.number().finite().min(0);
@@ -49,6 +50,7 @@ export const planRequestSchema = z
       .finite()
       .default(0.5)
       .transform((value) => Math.max(0, Math.min(1, value))),
+    riskProfile: z.enum(RISK_PROFILES).optional().default("balanced"),
     includeSlotted: z.union([z.boolean(), z.number(), z.string()]).optional(),
   })
   .transform((value) => ({
@@ -56,6 +58,7 @@ export const planRequestSchema = z
     targetItemId: value.targetItemId,
     quantity: value.quantity,
     priorityTime: value.priorityTime,
+    riskProfile: value.riskProfile,
     includeSlotted: parseIncludeSlotted(value.includeSlotted),
   }));
 
@@ -97,6 +100,42 @@ export const playerProfileSchema = z.object({
   missionOptions: z.array(missionOptionSchema),
 });
 
+const observedReturnSchema = z.object({
+  itemId: z.string().trim().min(1),
+  quantity: z.coerce.number().finite().min(0),
+});
+
+const missionLaunchUpdateSchema = z.object({
+  ship: z.string().trim().min(1),
+  durationType: z.enum(DURATION_TYPES),
+  launches: z.coerce
+    .number()
+    .finite()
+    .transform((value) => Math.max(0, Math.round(value)))
+    .pipe(nonNegativeIntSchema.max(100_000)),
+});
+
+export const replanRequestSchema = z.object({
+  profile: playerProfileSchema,
+  targetItemId: z.string().trim().min(1, "targetItemId is required"),
+  quantity: z.coerce
+    .number()
+    .finite()
+    .default(1)
+    .transform((value) => Math.max(1, Math.round(value)))
+    .pipe(nonNegativeIntSchema.max(1_000_000)),
+  priorityTime: z.coerce
+    .number()
+    .finite()
+    .default(0.5)
+    .transform((value) => Math.max(0, Math.min(1, value))),
+  riskProfile: z.enum(RISK_PROFILES).optional().default("balanced"),
+  observedReturns: z.array(observedReturnSchema).optional().default([]),
+  missionLaunches: z.array(missionLaunchUpdateSchema).optional().default([]),
+});
+
+export type ReplanRequest = z.infer<typeof replanRequestSchema>;
+
 const planCraftRowSchema = z.object({
   itemId: z.string().min(1),
   count: nonNegativeIntSchema,
@@ -122,16 +161,48 @@ const planUnmetItemSchema = z.object({
   quantity: nonNegativeFiniteSchema,
 });
 
+const planTargetBreakdownSchema = z.object({
+  requested: nonNegativeFiniteSchema,
+  fromInventory: nonNegativeFiniteSchema,
+  fromCraft: nonNegativeFiniteSchema,
+  fromMissionsExpected: nonNegativeFiniteSchema,
+  shortfall: nonNegativeFiniteSchema,
+});
+
+const planProgressionLaunchSchema = z.object({
+  ship: z.string().min(1),
+  durationType: z.enum(DURATION_TYPES),
+  launches: nonNegativeIntSchema,
+  durationSeconds: nonNegativeIntSchema,
+  reason: z.string().min(1),
+});
+
+const planProgressionShipSchema = z.object({
+  ship: z.string().min(1),
+  unlocked: z.boolean(),
+  level: nonNegativeIntSchema,
+  maxLevel: nonNegativeIntSchema,
+  launches: nonNegativeIntSchema,
+  launchPoints: nonNegativeFiniteSchema,
+});
+
 export const plannerResultSchema = z.object({
   targetItemId: z.string().min(1),
   quantity: nonNegativeIntSchema,
   priorityTime: z.number().finite().min(0).max(1),
+  riskProfile: z.enum(RISK_PROFILES),
   geCost: nonNegativeFiniteSchema,
   expectedHours: nonNegativeFiniteSchema,
   weightedScore: nonNegativeFiniteSchema,
   crafts: z.array(planCraftRowSchema),
   missions: z.array(planMissionRowSchema),
   unmetItems: z.array(planUnmetItemSchema),
+  targetBreakdown: planTargetBreakdownSchema,
+  progression: z.object({
+    prepHours: nonNegativeFiniteSchema,
+    prepLaunches: z.array(planProgressionLaunchSchema),
+    projectedShipLevels: z.array(planProgressionShipSchema),
+  }),
   notes: z.array(z.string()),
 });
 

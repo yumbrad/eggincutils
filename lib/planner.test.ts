@@ -12,6 +12,7 @@ vi.mock("./highs", () => ({
 import { loadLootData } from "./loot-data";
 import { solveWithHighs } from "./highs";
 import { MissionCoverageError, missionDurationLabel, planForTarget, summarizeCraftRows } from "./planner";
+import { buildMissionOptions, computeShipLevelsFromLaunchCounts } from "./ship-data";
 
 const mockedLoadLootData = vi.mocked(loadLootData);
 const mockedSolveWithHighs = vi.mocked(solveWithHighs);
@@ -110,7 +111,219 @@ describe("planForTarget coverage handling", () => {
     const result = await planForTarget(profile, "puzzle-cube-1", 2, 0.5);
     expect(result.missions).toHaveLength(1);
     expect(result.missions[0].launches).toBe(2);
+    expect(result.riskProfile).toBe("balanced");
+    expect(result.targetBreakdown.requested).toBe(2);
+    expect(result.targetBreakdown.fromMissionsExpected).toBe(2);
+    expect(result.targetBreakdown.fromCraft).toBe(0);
+    expect(result.targetBreakdown.shortfall).toBe(0);
     expect(result.notes.some((note) => note.includes("unified HiGHS model"))).toBe(true);
+  });
+
+  it("keeps a tiny mission-time tie-break even at 0% time priority", async () => {
+    mockedLoadLootData.mockResolvedValue({
+      missions: [
+        {
+          afxShip: 0,
+          afxDurationType: 0,
+          missionId: "test-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "puzzle-cube-1",
+                      counts: [1, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    let lpModel = "";
+    mockedSolveWithHighs.mockImplementation(async (model) => {
+      lpModel = model;
+      return {
+        Status: "Optimal",
+        Columns: {
+          m_0: { Primal: 2 },
+        },
+      };
+    });
+
+    const profile = baseProfile();
+    profile.missionOptions = [
+      {
+        ship: "CHICKEN_ONE",
+        missionId: "test-short",
+        durationType: "SHORT",
+        level: 0,
+        durationSeconds: 1200,
+        capacity: 1,
+      },
+    ];
+
+    await planForTarget(profile, "puzzle-cube-1", 2, 0);
+    const objectiveLine = lpModel.split("\n").find((line) => line.trimStart().startsWith("obj:")) || "";
+    expect(objectiveLine).toContain("m_0");
+  });
+
+  it("applies conservative risk profile to mission yield constraints", async () => {
+    mockedLoadLootData.mockResolvedValue({
+      missions: [
+        {
+          afxShip: 0,
+          afxDurationType: 0,
+          missionId: "test-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "puzzle-cube-1",
+                      counts: [1, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    mockedSolveWithHighs.mockImplementation(async (model) => {
+      if (model.includes("0.85 m_0")) {
+        return {
+          Status: "Optimal",
+          Columns: {
+            m_0: { Primal: 3 },
+          },
+        };
+      }
+      return {
+        Status: "Optimal",
+        Columns: {
+          m_0: { Primal: 2 },
+        },
+      };
+    });
+
+    const profile = baseProfile();
+    profile.missionOptions = [
+      {
+        ship: "CHICKEN_ONE",
+        missionId: "test-short",
+        durationType: "SHORT",
+        level: 0,
+        durationSeconds: 1200,
+        capacity: 1,
+      },
+    ];
+
+    const result = await planForTarget(profile, "puzzle-cube-1", 2, 1, "conservative");
+    expect(result.riskProfile).toBe("conservative");
+    expect(result.missions[0].launches).toBe(3);
+    expect(result.notes.some((note) => note.includes("yield multiplier 0.85x"))).toBe(true);
+  });
+
+  it("includes prep launches when horizon progression unlocks better mission options", async () => {
+    mockedLoadLootData.mockResolvedValue({
+      missions: [
+        {
+          afxShip: 0,
+          afxDurationType: 0,
+          missionId: "chicken-one-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "puzzle-cube-1",
+                      counts: [1, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          afxShip: 1,
+          afxDurationType: 0,
+          missionId: "chicken-nine-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "puzzle-cube-1",
+                      counts: [1, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    mockedSolveWithHighs.mockImplementation(async (model) => {
+      if (model.includes("m_1")) {
+        return {
+          Status: "Optimal",
+          Columns: {
+            m_1: { Primal: 2 },
+          },
+        };
+      }
+      return {
+        Status: "Optimal",
+        Columns: {
+          m_0: { Primal: 10 },
+        },
+      };
+    });
+
+    const profile = baseProfile();
+    const shipLevels = computeShipLevelsFromLaunchCounts({
+      CHICKEN_ONE: {
+        SHORT: 3,
+      },
+    });
+    profile.shipLevels = shipLevels;
+    profile.missionOptions = buildMissionOptions(shipLevels, 0, 0);
+
+    const result = await planForTarget(profile, "puzzle-cube-1", 10, 1);
+    expect(result.progression.prepLaunches.length).toBeGreaterThan(0);
+    expect(result.progression.prepLaunches.some((step) => step.reason.includes("Unlock CHICKEN_NINE"))).toBe(true);
+    expect(result.missions.some((mission) => mission.ship === "CHICKEN_NINE")).toBe(true);
   });
 
   it("builds binary craft discount variables for craftable targets in unified solve", async () => {

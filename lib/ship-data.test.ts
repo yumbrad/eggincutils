@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMissionOptions, computeShipLevels, ShipLevelInfo } from "./ship-data";
+import {
+  buildMissionOptions,
+  computeShipLevels,
+  computeShipLevelsFromLaunchCounts,
+  shipLevelsToLaunchCounts,
+  ShipLevelInfo,
+} from "./ship-data";
 
 function shipLevel(ship: string, unlocked: boolean, level = 0): ShipLevelInfo {
   return {
@@ -67,5 +73,26 @@ describe("buildMissionOptions", () => {
     expect((boostedMilleniumShort?.durationSeconds || 0)).toBeLessThan(baseMilleniumShort?.durationSeconds || 0);
 
     expect((boostedMilleniumShort?.capacity || 0)).toBeGreaterThan(baseMilleniumShort?.capacity || 0);
+  });
+});
+
+describe("ship launch count helpers", () => {
+  it("round-trips ship launch counts through ship level snapshots", () => {
+    const fromMissions = computeShipLevels([
+      { ship: "CHICKEN_ONE", durationType: "SHORT", status: "RETURNED" },
+      { ship: "CHICKEN_ONE", durationType: "SHORT", status: "RETURNED" },
+      { ship: "CHICKEN_ONE", durationType: "LONG", status: "RETURNED" },
+      { ship: "CHICKEN_NINE", durationType: "SHORT", status: "RETURNED" },
+    ]);
+
+    const launchCounts = shipLevelsToLaunchCounts(fromMissions);
+    const fromLaunchCounts = computeShipLevelsFromLaunchCounts(launchCounts);
+
+    const chickenOne = fromLaunchCounts.find((entry) => entry.ship === "CHICKEN_ONE");
+    const chickenNine = fromLaunchCounts.find((entry) => entry.ship === "CHICKEN_NINE");
+
+    expect(chickenOne?.launchesByDuration.SHORT).toBe(2);
+    expect(chickenOne?.launchesByDuration.LONG).toBe(1);
+    expect(chickenNine?.launchesByDuration.SHORT).toBe(1);
   });
 });

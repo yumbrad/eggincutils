@@ -1,0 +1,265 @@
+.controlsCard {
+  margin-bottom: 12px;
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.launchInline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.launchInput {
+  min-width: 240px;
+}
+
+.ftlInput {
+  width: 92px;
+}
+
+.mutedSmall {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.toggleGroup {
+  display: inline-flex;
+  overflow: hidden;
+  border-radius: 999px;
+  border: 1px solid var(--stroke);
+}
+
+.toggleGroup button {
+  border: none;
+  border-right: 1px solid var(--stroke);
+  border-radius: 0;
+  padding: 6px 12px;
+  background: color-mix(in oklab, var(--card), var(--bg-a) 22%);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.toggleGroup button:last-child {
+  border-right: none;
+}
+
+.toggleGroup button.active {
+  background: var(--button-bg);
+  color: var(--button-ink);
+}
+
+.actionsRow {
+  align-items: center;
+}
+
+.summary {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.resultsTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.resultsTable th,
+.resultsTable td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--stroke);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.resultsTable th {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.shipCell {
+  width: 25%;
+  min-width: 220px;
+}
+
+.shipGrouped {
+  border-bottom: 2px solid color-mix(in oklab, var(--stroke), var(--navy) 35%) !important;
+}
+
+.shipBox {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.flat .shipBox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.shipTitle {
+  line-height: 1.2;
+  white-space: normal;
+}
+
+.shipImage {
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  border: 1px solid var(--stroke);
+  border-radius: 8px;
+  background: var(--card);
+  padding: 4px;
+}
+
+.flat .shipImage {
+  width: 28px;
+  height: 28px;
+}
+
+.shipImageWrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.shipImagePreview {
+  position: absolute;
+  left: 34px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 6px;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+  display: none;
+  pointer-events: none;
+  z-index: 30;
+}
+
+.shipImageLarge {
+  width: 108px;
+  height: 108px;
+  object-fit: contain;
+  display: block;
+}
+
+.flat .shipImageWrap:hover .shipImagePreview {
+  display: block;
+}
+
+.shipFallback {
+  width: 72px;
+  height: 72px;
+  text-align: center;
+  border: 1px dashed color-mix(in oklab, var(--stroke), var(--navy) 25%);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+}
+
+.flat .shipFallback {
+  width: 28px;
+  height: 28px;
+  font-size: 9px;
+}
+
+.shipSep td {
+  border-bottom: 2px solid color-mix(in oklab, var(--stroke), var(--navy) 35%);
+}
+
+.returnWrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.clock {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--stroke);
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.clock::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1px;
+  height: 9px;
+  background: var(--handColor, #222);
+  transform-origin: bottom center;
+  transform: translate(-50%, -100%) rotate(var(--handAngle, 0deg));
+  border-radius: 2px;
+}
+
+.badRow td:not(.shipCell) {
+  background: color-mix(in oklab, #f58ca0, transparent 72%);
+}
+
+.pageLinks {
+  margin-top: 10px;
+  display: flex;
+  gap: 12px;
+}
+
+@media (max-width: 700px) {
+  .launchInput {
+    min-width: 0;
+  }
+
+  .shipImage,
+  .shipFallback {
+    width: 44px;
+    height: 44px;
+  }
+
+  .flat .shipImage,
+  .flat .shipFallback {
+    width: 28px;
+    height: 28px;
+  }
+
+  .shipImageLarge {
+    width: 84px;
+    height: 84px;
+  }
+
+  .clock {
+    width: 18px;
+    height: 18px;
+  }
+
+  .clock::after {
+    height: 7px;
+  }
+}
