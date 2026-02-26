@@ -494,7 +494,7 @@ describe("planForTarget coverage handling", () => {
     expect(result.missions.some((mission) => mission.ship === "CHICKEN_NINE")).toBe(true);
   });
 
-  it("builds binary craft discount variables for craftable targets in unified solve", async () => {
+  it("builds integer piecewise craft discount variables for craftable targets in unified solve", async () => {
     mockedLoadLootData.mockResolvedValue({
       missions: [],
     });
@@ -511,7 +511,9 @@ describe("planForTarget coverage handling", () => {
     });
 
     const result = await planForTarget(baseProfile(), "soul-stone-2", 1, 0.5);
-    expect(lpModel).toContain("Binary");
+    expect(lpModel).toContain("General");
+    expect(lpModel).toContain("cs_0");
+    expect(lpModel).not.toContain("\nBinary\n");
     expect(result.crafts.length).toBeGreaterThan(0);
     expect(result.notes.some((note) => note.includes("exact craft discount scheduling"))).toBe(true);
   });
