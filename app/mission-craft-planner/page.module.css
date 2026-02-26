@@ -6,6 +6,125 @@
   background: color-mix(in oklab, var(--card), transparent 20%);
 }
 
+.targetPicker {
+  position: relative;
+}
+
+.targetPickerInput {
+  width: 100%;
+  padding-left: 40px;
+  padding-right: 34px;
+}
+
+.targetPickerIconWrap {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.targetPickerIcon {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+
+.targetPickerFallbackIcon {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--stroke), transparent 24%);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.targetPickerChevron {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.targetPickerDropdown {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  border-radius: 12px;
+  border: 1px solid color-mix(in oklab, var(--stroke), transparent 12%);
+  background: color-mix(in oklab, var(--panel), #fff 6%);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24);
+  z-index: 30;
+  max-height: 22rem;
+  overflow: auto;
+}
+
+.targetPickerOption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  cursor: default;
+  color: var(--ink);
+  user-select: none;
+}
+
+.targetPickerOption[data-active="1"] {
+  background: color-mix(in oklab, var(--accent), transparent 22%);
+  color: var(--button-ink);
+}
+
+.targetPickerOptionIcon {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+.targetPickerOptionLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.targetPickerCheck {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.targetPickerOption[data-active="1"] .targetPickerCheck {
+  color: var(--button-ink);
+}
+
+.targetPickerOption[data-selected="1"]:not([data-active="1"]) .targetPickerOptionLabel {
+  font-weight: 700;
+}
+
+.targetPickerEmpty {
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .timelineIntro {
   margin: 0 0 8px;
   font-size: 12px;

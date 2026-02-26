@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import artifactDisplay from "../../data/artifact-display.json";
 import recipes from "../../data/recipes.json";
@@ -160,6 +160,16 @@ type TimelineLaneBlock = {
   totalSeconds: number;
   startSeconds: number;
   endSeconds: number;
+};
+
+type TargetOption = {
+  itemId: string;
+  itemKey: string;
+  label: string;
+  familyKey: string;
+  tierNumber: number;
+  iconUrl: string | null;
+  searchText: string;
 };
 
 type MissionTimeline = {
@@ -590,6 +600,23 @@ function itemIdToIconUrl(itemId: string): string | null {
   return itemKeyToIconUrl(itemIdToKey(itemId));
 }
 
+function targetFamilyKey(itemKey: string): string {
+  const match = itemKey.match(/^(.*)_\d+$/);
+  return match ? match[1] : itemKey;
+}
+
+function targetTierNumber(itemKey: string, displayTierNumber?: number): number {
+  if (displayTierNumber != null && Number.isFinite(displayTierNumber)) {
+    return displayTierNumber;
+  }
+  const match = itemKey.match(/_(\d+)$/);
+  if (!match) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
+}
+
 function profileUrl(eid: string, includeSlotted: boolean): string {
   const params = new URLSearchParams({
     eid,
@@ -653,6 +680,9 @@ function buildReplanDeltas(previous: ProfileSnapshot, current: ProfileSnapshot):
 export default function MissionCraftPlannerPage() {
   const [eid, setEid] = useState("");
   const [targetItemId, setTargetItemId] = useState("soul-stone-2");
+  const [targetPickerOpen, setTargetPickerOpen] = useState(false);
+  const [targetFilter, setTargetFilter] = useState("");
+  const [targetActiveIndex, setTargetActiveIndex] = useState(0);
   const [quantity, setQuantity] = useState(1);
   const [priorityTimePct, setPriorityTimePct] = useState(50);
   const [includeSlotted, setIncludeSlotted] = useState(true);
@@ -666,6 +696,7 @@ export default function MissionCraftPlannerPage() {
   const [response, setResponse] = useState<PlanResponse | null>(null);
   const [profileSnapshot, setProfileSnapshot] = useState<ProfileSnapshot | null>(null);
   const [prefsLoaded, setPrefsLoaded] = useState(false);
+  const targetPickerRef = useRef<HTMLDivElement | null>(null);
 
   const targetOptions = useMemo(() => {
     const recipeMap = recipes as Record<string, unknown>;
@@ -674,14 +705,45 @@ export default function MissionCraftPlannerPage() {
       .map((itemKey) => {
         const displayInfo = ARTIFACT_DISPLAY[itemKey];
         const itemId = displayInfo?.id || itemKeyToId(itemKey);
+        const tierNumber = targetTierNumber(itemKey, displayInfo?.tierNumber);
+        const familyKey = targetFamilyKey(itemKey);
         const label =
           displayInfo && Number.isFinite(displayInfo.tierNumber)
             ? `${displayInfo.name} (T${displayInfo.tierNumber})`
             : itemKeyToDisplayName(itemKey);
-        return { itemId, label };
+        const iconUrl = itemKeyToIconUrl(itemKey);
+        const searchText = [label, itemId, itemKey, familyKey].join(" ").toLowerCase();
+        return { itemId, itemKey, label, familyKey, tierNumber, iconUrl, searchText } satisfies TargetOption;
       })
-      .sort((a, b) => a.label.localeCompare(b.label));
+      .sort((a, b) => {
+        const familyCompare = a.familyKey.localeCompare(b.familyKey);
+        if (familyCompare !== 0) {
+          return familyCompare;
+        }
+        if (a.tierNumber !== b.tierNumber) {
+          return a.tierNumber - b.tierNumber;
+        }
+        return a.label.localeCompare(b.label);
+      });
   }, []);
+  const selectedTargetOption = useMemo(
+    () => targetOptions.find((option) => option.itemId === targetItemId) || null,
+    [targetItemId, targetOptions]
+  );
+  const filteredTargetOptions = useMemo(() => {
+    if (!targetPickerOpen) {
+      return targetOptions;
+    }
+    const query = targetFilter.trim().toLowerCase();
+    if (!query) {
+      return targetOptions;
+    }
+    const terms = query.split(/\s+/).filter((term) => term.length > 0);
+    if (terms.length === 0) {
+      return targetOptions;
+    }
+    return targetOptions.filter((option) => terms.every((term) => option.searchText.includes(term)));
+  }, [targetFilter, targetOptions, targetPickerOpen]);
 
   const missionTimeline = useMemo(() => (response ? buildMissionTimeline(response.plan) : null), [response]);
   const missionPrepTargetOverrideByIndex = useMemo(() => {
@@ -818,6 +880,53 @@ export default function MissionCraftPlannerPage() {
       setPrefsLoaded(true);
     }
   }, [targetOptions]);
+
+  useEffect(() => {
+    if (targetPickerOpen) {
+      return;
+    }
+    setTargetFilter(selectedTargetOption?.label || "");
+  }, [selectedTargetOption, targetPickerOpen]);
+
+  useEffect(() => {
+    if (!targetPickerOpen) {
+      return;
+    }
+    const selectedIndex = filteredTargetOptions.findIndex((option) => option.itemId === targetItemId);
+    if (selectedIndex >= 0) {
+      setTargetActiveIndex(selectedIndex);
+      return;
+    }
+    setTargetActiveIndex(filteredTargetOptions.length > 0 ? 0 : -1);
+  }, [filteredTargetOptions, targetItemId, targetPickerOpen]);
+
+  useEffect(() => {
+    if (!targetPickerOpen || targetActiveIndex < 0) {
+      return;
+    }
+    const activeNode = targetPickerRef.current?.querySelector<HTMLElement>(
+      `[data-target-option-index="${targetActiveIndex}"]`
+    );
+    activeNode?.scrollIntoView({ block: "nearest" });
+  }, [targetActiveIndex, targetPickerOpen, filteredTargetOptions]);
+
+  useEffect(() => {
+    if (!targetPickerOpen) {
+      return;
+    }
+    const handleMouseDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (targetPickerRef.current?.contains(target)) {
+        return;
+      }
+      setTargetPickerOpen(false);
+      setTargetFilter(selectedTargetOption?.label || "");
+    };
+    window.addEventListener("mousedown", handleMouseDown);
+    return () => {
+      window.removeEventListener("mousedown", handleMouseDown);
+    };
+  }, [selectedTargetOption, targetPickerOpen]);
 
   useEffect(() => {
     if (!prefsLoaded) {
@@ -1089,6 +1198,85 @@ export default function MissionCraftPlannerPage() {
     }
   }
 
+  function openTargetPicker(): void {
+    setTargetPickerOpen(true);
+    setTargetFilter("");
+  }
+
+  function closeTargetPicker(): void {
+    setTargetPickerOpen(false);
+    setTargetFilter(selectedTargetOption?.label || "");
+  }
+
+  function selectTargetOption(option: TargetOption): void {
+    setTargetItemId(option.itemId);
+    setTargetPickerOpen(false);
+    setTargetFilter(option.label);
+  }
+
+  function onTargetInputKeyDown(event: ReactKeyboardEvent<HTMLInputElement>): void {
+    if (event.key === "Escape") {
+      if (!targetPickerOpen) {
+        return;
+      }
+      event.preventDefault();
+      closeTargetPicker();
+      return;
+    }
+    if (event.key === "Tab") {
+      if (targetPickerOpen) {
+        closeTargetPicker();
+      }
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!targetPickerOpen) {
+        openTargetPicker();
+        return;
+      }
+      if (filteredTargetOptions.length === 0) {
+        return;
+      }
+      setTargetActiveIndex((current) => {
+        const base = current < 0 ? 0 : current;
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        const next = (base + delta + filteredTargetOptions.length) % filteredTargetOptions.length;
+        return next;
+      });
+      return;
+    }
+    if (event.key === "Home" || event.key === "PageUp") {
+      if (!targetPickerOpen || filteredTargetOptions.length === 0) {
+        return;
+      }
+      event.preventDefault();
+      setTargetActiveIndex(0);
+      return;
+    }
+    if (event.key === "End" || event.key === "PageDown") {
+      if (!targetPickerOpen || filteredTargetOptions.length === 0) {
+        return;
+      }
+      event.preventDefault();
+      setTargetActiveIndex(filteredTargetOptions.length - 1);
+      return;
+    }
+    if (event.key === "Enter") {
+      if (!targetPickerOpen) {
+        return;
+      }
+      event.preventDefault();
+      if (filteredTargetOptions.length === 0) {
+        return;
+      }
+      const selected = filteredTargetOptions[Math.max(0, targetActiveIndex)];
+      if (selected) {
+        selectTargetOption(selected);
+      }
+    }
+  }
+
   return (
     <main className="page">
       <div className="panel brand-panel" style={{ marginBottom: 12 }}>
@@ -1129,15 +1317,93 @@ export default function MissionCraftPlannerPage() {
             />
           </div>
 
-          <div className="field" style={{ minWidth: 260, flex: 2 }}>
-            <label htmlFor="targetItem">Target artifact/stone</label>
-            <select id="targetItem" value={targetItemId} onChange={(event) => setTargetItemId(event.target.value)}>
-              {targetOptions.map((option) => (
-                <option key={option.itemId} value={option.itemId}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+          <div className="field" style={{ minWidth: 280, flex: 2 }} ref={targetPickerRef}>
+            <label htmlFor="targetItemFilter">Target artifact/stone</label>
+            <div className={styles.targetPicker}>
+              <div className={styles.targetPickerIconWrap}>
+                {selectedTargetOption?.iconUrl ? (
+                  <img
+                    src={selectedTargetOption.iconUrl}
+                    alt=""
+                    width={22}
+                    height={22}
+                    className={styles.targetPickerIcon}
+                    loading="lazy"
+                  />
+                ) : (
+                  <span className={styles.targetPickerFallbackIcon} aria-hidden="true">
+                    ?
+                  </span>
+                )}
+              </div>
+              <input
+                id="targetItemFilter"
+                type="text"
+                value={targetFilter}
+                onFocus={openTargetPicker}
+                onChange={(event) => {
+                  if (!targetPickerOpen) {
+                    setTargetPickerOpen(true);
+                  }
+                  setTargetFilter(event.target.value);
+                }}
+                onKeyDown={onTargetInputKeyDown}
+                placeholder="Select artifact (type to filter)"
+                autoComplete="off"
+                className={styles.targetPickerInput}
+                role="combobox"
+                aria-expanded={targetPickerOpen}
+                aria-controls="targetItemDropdown"
+              />
+              <span className={styles.targetPickerChevron} aria-hidden="true">
+                ▾
+              </span>
+              {targetPickerOpen && (
+                <ul id="targetItemDropdown" className={styles.targetPickerDropdown} role="listbox">
+                  {filteredTargetOptions.length === 0 ? (
+                    <li className={styles.targetPickerEmpty}>No match</li>
+                  ) : (
+                    filteredTargetOptions.map((option, index) => {
+                      const selected = option.itemId === targetItemId;
+                      const active = index === targetActiveIndex;
+                      return (
+                        <li
+                          key={option.itemId}
+                          data-target-option-index={index}
+                          className={styles.targetPickerOption}
+                          data-active={active ? "1" : "0"}
+                          data-selected={selected ? "1" : "0"}
+                          role="option"
+                          aria-selected={selected}
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            selectTargetOption(option);
+                          }}
+                          onMouseEnter={() => setTargetActiveIndex(index)}
+                        >
+                          {option.iconUrl ? (
+                            <img
+                              src={option.iconUrl}
+                              alt=""
+                              width={22}
+                              height={22}
+                              className={styles.targetPickerOptionIcon}
+                              loading="lazy"
+                            />
+                          ) : (
+                            <span className={styles.targetPickerFallbackIcon} aria-hidden="true">
+                              ?
+                            </span>
+                          )}
+                          <span className={styles.targetPickerOptionLabel}>{option.label}</span>
+                          {selected && <span className={styles.targetPickerCheck}>✓</span>}
+                        </li>
+                      );
+                    })
+                  )}
+                </ul>
+              )}
+            </div>
           </div>
 
           <div className="field" style={{ minWidth: 120 }}>
