@@ -121,7 +121,7 @@ This is expected-value + greedy allocation. It is intentionally rerunnable after
 5. Add tests for `lib/ship-data.ts`, `lib/profile.ts`, `lib/planner.ts`.
 
 ### Phase A status (updated 2026-02-24)
-- [x] 1. Real-EID validation pass completed using `EI_REDACTED_B` and `EI_REDACTED_A`.
+- [x] 1. Real-EID validation pass completed using redacted test EIDs.
 - [x] 2. Planner tables now render item display names and icon URLs instead of raw IDs.
 - [x] 3. Loot-data schema/empty checks added; planner no-coverage now returns explicit 422 errors.
 - [x] 4. Zod request/response validation added to `/api/plan` and `/api/profile`.

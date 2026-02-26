@@ -92,6 +92,7 @@ export type PlannerOptions = {
   fastMode?: boolean;
   maxSolveMs?: number;
   onProgress?: (event: PlannerProgressEvent) => void;
+  onBenchmarkSample?: (sample: PlannerBenchmarkSample) => void;
 };
 
 export type PlannerProgressEvent = {
@@ -101,6 +102,17 @@ export type PlannerProgressEvent = {
   completed?: number;
   total?: number;
   etaMs?: number | null;
+};
+
+export type PlannerBenchmarkSample = {
+  targetItemId: string;
+  quantity: number;
+  priorityTime: number;
+  fastMode: boolean;
+  wallMs: number;
+  expectedHours: number;
+  geCost: number;
+  path: "primary" | "fallback";
 };
 
 export class MissionCoverageError extends Error {
@@ -2045,6 +2057,27 @@ export async function planForTarget(
   const priorityTime = Math.max(0, Math.min(1, priorityTimeRaw));
   const quantityInt = Math.max(1, Math.round(quantity));
   const fastMode = Boolean(plannerOptions.fastMode);
+  const benchmarkStartedAtMs = Date.now();
+  let benchmarkExcludedMs = 0;
+  const reportBenchmark = (result: PlannerResult, path: "primary" | "fallback") => {
+    if (!plannerOptions.onBenchmarkSample) {
+      return;
+    }
+    try {
+      plannerOptions.onBenchmarkSample({
+        targetItemId,
+        quantity: quantityInt,
+        priorityTime,
+        fastMode,
+        wallMs: Math.max(0, Date.now() - benchmarkStartedAtMs - benchmarkExcludedMs),
+        expectedHours: result.expectedHours,
+        geCost: result.geCost,
+        path,
+      });
+    } catch {
+      // Ignore benchmark callback errors.
+    }
+  };
   const maxSolveMs = Math.max(0, Math.round(plannerOptions.maxSolveMs || 0));
   const startedAtMs = Date.now();
   const reportProgress = (
@@ -2093,7 +2126,9 @@ export async function planForTarget(
   });
   await yieldForProgressFlush();
   const referenceMissionOptions = progressionCandidates[0]?.missionOptions || profile.missionOptions;
+  const lootLoadStartedAtMs = Date.now();
   const lootData = await loadLootData();
+  benchmarkExcludedMs += Math.max(0, Date.now() - lootLoadStartedAtMs);
   reportProgress({
     phase: "init",
     message: "Loaded mission loot data. Building mission action models...",
@@ -2471,7 +2506,7 @@ export async function planForTarget(
     });
     await yieldForProgressFlush();
 
-    return {
+    const result: PlannerResult = {
       targetItemId,
       quantity: quantityInt,
       priorityTime,
@@ -2489,6 +2524,8 @@ export async function planForTarget(
       },
       notes,
     };
+    reportBenchmark(result, "primary");
+    return result;
   } catch (error) {
     if (error instanceof MissionCoverageError) {
       throw error;
@@ -2510,6 +2547,7 @@ export async function planForTarget(
       etaMs: 0,
     });
     await yieldForProgressFlush();
+    reportBenchmark(fallback, "fallback");
     return fallback;
   }
 }
