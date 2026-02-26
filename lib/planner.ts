@@ -129,6 +129,7 @@ export class MissionCoverageError extends Error {
 
 const MAX_GREEDY_ITERATIONS = 3000;
 const MAX_CRAFT_COUNT_FOR_DISCOUNT = 300;
+const CRAFT_DISCOUNT_PIECEWISE_STEPS = 10;
 const MAX_DISCOUNT_FACTOR = 0.9;
 const DISCOUNT_CURVE_EXPONENT = 0.2;
 const MISSION_SOLVER_UNMET_PENALTY_FACTOR = 1000;
@@ -136,7 +137,8 @@ const SCORE_EPS = 1e-9;
 const PROGRESSION_MAX_DEPTH = 2;
 const PROGRESSION_BEAM_WIDTH = 6;
 const PROGRESSION_MAX_LAUNCHES_PER_ACTION = 600;
-const FAST_MODE_MAX_CANDIDATES = 8;
+const FAST_MODE_MAX_CANDIDATES = 4;
+const NORMAL_MODE_MAX_CANDIDATES = 12;
 const MIN_MISSION_TIME_OBJECTIVE_WEIGHT = 1e-5;
 const REFINEMENT_MAX_PHASES_PER_OPTION = 3;
 
@@ -146,7 +148,7 @@ function getDiscountedCost(baseCost: number, craftCount: number): number {
   return Math.floor(baseCost * multiplier);
 }
 
-function normalizedScore(ge: number, timeSec: number, priorityTime: number, geRef: number, timeRef: number): number {
+export function normalizedScore(ge: number, timeSec: number, priorityTime: number, geRef: number, timeRef: number): number {
   const safeGeRef = Math.max(1, geRef);
   const safeTimeRef = Math.max(1, timeRef);
   return (1 - priorityTime) * (ge / safeGeRef) + priorityTime * (timeSec / safeTimeRef);
@@ -742,18 +744,24 @@ function formatLinearExpression(terms: Array<{ coefficient: number; variable: st
     return "0";
   }
 
-  let expression = "";
+  const parts: string[] = [];
   for (let index = 0; index < filtered.length; index += 1) {
     const term = filtered[index];
     const absCoeff = Math.abs(term.coefficient);
     const coeffText = formatLpNumber(absCoeff);
+    const op = term.coefficient < 0 ? "-" : "+";
+    
     if (index === 0) {
-      expression += term.coefficient < 0 ? `- ${coeffText} ${term.variable}` : `${coeffText} ${term.variable}`;
-      continue;
+      if (term.coefficient < 0) {
+        parts.push(`- ${coeffText} ${term.variable}`);
+      } else {
+        parts.push(`${coeffText} ${term.variable}`);
+      }
+    } else {
+      parts.push(`${op} ${coeffText} ${term.variable}`);
     }
-    expression += term.coefficient < 0 ? ` - ${coeffText} ${term.variable}` : ` + ${coeffText} ${term.variable}`;
   }
-  return expression;
+  return parts.join(" ");
 }
 
 async function solveUnifiedCraftMissionPlan(options: {
@@ -795,8 +803,9 @@ async function solveUnifiedCraftMissionPlan(options: {
     craftBound: number;
     baseCost: number;
     initialCraftCount: number;
-    preDiscountUnitVars: string[];
-    preDiscountUnitCosts: number[];
+    preDiscountStepVars: string[];
+    preDiscountStepCosts: number[];
+    preDiscountStepSizes: number[];
     tailVar: string | null;
     tailCap: number;
   };
@@ -806,7 +815,7 @@ async function solveUnifiedCraftMissionPlan(options: {
   const craftModelByItem = new Map<string, CraftCostModel>();
 
   let craftVarCounter = 0;
-  let craftUnitCounter = 0;
+  let craftStepCounter = 0;
   let craftTailCounter = 0;
   for (const itemKey of itemKeys) {
     const recipe = getRecipe(itemKey);
@@ -818,18 +827,32 @@ async function solveUnifiedCraftMissionPlan(options: {
       continue;
     }
     const initialCraftCount = Math.max(0, profile.craftCounts[itemKey] || 0);
-    const preDiscountSlots = Math.max(
+    const preDiscountCapacity = Math.max(
       0,
-      Math.min(craftBound, MAX_CRAFT_COUNT_FOR_DISCOUNT - initialCraftCount)
+      MAX_CRAFT_COUNT_FOR_DISCOUNT - initialCraftCount
     );
-    const preDiscountUnitVars: string[] = [];
-    const preDiscountUnitCosts: number[] = [];
-    for (let slot = 0; slot < preDiscountSlots; slot += 1) {
-      preDiscountUnitVars.push(`cy_${craftUnitCounter}`);
-      preDiscountUnitCosts.push(getDiscountedCost(recipe.cost, initialCraftCount + slot));
-      craftUnitCounter += 1;
+    const preDiscountLimit = Math.min(craftBound, preDiscountCapacity);
+
+    const preDiscountStepVars: string[] = [];
+    const preDiscountStepCosts: number[] = [];
+    const preDiscountStepSizes: number[] = [];
+
+    if (preDiscountLimit > 0) {
+      const stepSize = Math.max(1, Math.ceil(preDiscountLimit / CRAFT_DISCOUNT_PIECEWISE_STEPS));
+      let processed = 0;
+      while (processed < preDiscountLimit) {
+        const currentStepSize = Math.min(stepSize, preDiscountLimit - processed);
+        preDiscountStepVars.push(`cs_${craftStepCounter}`);
+        const avgCost = getBatchDiscountedCost(recipe.cost, initialCraftCount + processed, currentStepSize) / currentStepSize;
+        preDiscountStepCosts.push(avgCost);
+        preDiscountStepSizes.push(currentStepSize);
+        
+        craftStepCounter += 1;
+        processed += currentStepSize;
+      }
     }
-    const tailCap = Math.max(0, craftBound - preDiscountSlots);
+
+    const tailCap = Math.max(0, craftBound - preDiscountLimit);
     const tailVar = tailCap > 0 ? `ct_${craftTailCounter++}` : null;
 
     const model: CraftCostModel = {
@@ -838,8 +861,9 @@ async function solveUnifiedCraftMissionPlan(options: {
       craftBound,
       baseCost: recipe.cost,
       initialCraftCount,
-      preDiscountUnitVars,
-      preDiscountUnitCosts,
+      preDiscountStepVars,
+      preDiscountStepCosts,
+      preDiscountStepSizes,
       tailVar,
       tailCap,
     };
@@ -857,18 +881,18 @@ async function solveUnifiedCraftMissionPlan(options: {
   let maxObjectiveCoeff = 1;
 
   for (const model of craftModels) {
-    for (let index = 0; index < model.preDiscountUnitVars.length; index += 1) {
-      const coefficient = ((1 - priorityTime) * model.preDiscountUnitCosts[index]) / normalizedGeRef;
+    for (let index = 0; index < model.preDiscountStepVars.length; index += 1) {
+      const coefficient = ((1 - priorityTime) * model.preDiscountStepCosts[index]) / normalizedGeRef;
       objectiveTerms.push({
         coefficient,
-        variable: model.preDiscountUnitVars[index],
+        variable: model.preDiscountStepVars[index],
       });
       maxObjectiveCoeff = Math.max(maxObjectiveCoeff, Math.abs(coefficient));
     }
     if (model.tailVar && model.tailCap > 0) {
       const tailCost = getDiscountedCost(
         model.baseCost,
-        model.initialCraftCount + model.preDiscountUnitVars.length
+        model.initialCraftCount + model.preDiscountStepSizes.reduce((a, b) => a + b, 0)
       );
       const coefficient = ((1 - priorityTime) * tailCost) / normalizedGeRef;
       objectiveTerms.push({
@@ -997,29 +1021,34 @@ async function solveUnifiedCraftMissionPlan(options: {
     const model = craftModels[modelIndex];
     const relationTerms: Array<{ coefficient: number; variable: string }> = [
       { coefficient: 1, variable: model.craftVar },
-      ...model.preDiscountUnitVars.map((variable) => ({ coefficient: -1, variable })),
     ];
+    for (let stepIndex = 0; stepIndex < model.preDiscountStepVars.length; stepIndex += 1) {
+      relationTerms.push({ coefficient: -1, variable: model.preDiscountStepVars[stepIndex] });
+    }
     if (model.tailVar) {
       relationTerms.push({ coefficient: -1, variable: model.tailVar });
     }
     lines.push(`  cl_${modelIndex}: ${formatLinearExpression(relationTerms)} = 0`);
 
-    for (let unitIndex = 0; unitIndex + 1 < model.preDiscountUnitVars.length; unitIndex += 1) {
+    for (let stepIndex = 0; stepIndex + 1 < model.preDiscountStepVars.length; stepIndex += 1) {
+      const sizeN = model.preDiscountStepSizes[stepIndex];
+      const sizeNext = model.preDiscountStepSizes[stepIndex + 1];
       lines.push(
-        `  cm_${modelIndex}_${unitIndex}: ${model.preDiscountUnitVars[unitIndex]} - ${model.preDiscountUnitVars[unitIndex + 1]} >= 0`
+        `  cm_${modelIndex}_${stepIndex}: ${formatLpNumber(sizeNext)} ${model.preDiscountStepVars[stepIndex]} - ${formatLpNumber(sizeN)} ${model.preDiscountStepVars[stepIndex + 1]} >= 0`
       );
     }
-    if (model.tailVar && model.preDiscountUnitVars.length > 0) {
-      const lastUnitVar = model.preDiscountUnitVars[model.preDiscountUnitVars.length - 1];
-      lines.push(`  ctg_${modelIndex}: ${model.tailVar} - ${formatLpNumber(model.tailCap)} ${lastUnitVar} <= 0`);
+    if (model.tailVar && model.preDiscountStepVars.length > 0) {
+      const lastStepVar = model.preDiscountStepVars[model.preDiscountStepVars.length - 1];
+      const lastStepSize = model.preDiscountStepSizes[model.preDiscountStepSizes.length - 1];
+      lines.push(`  ctg_${modelIndex}: ${formatLpNumber(lastStepSize)} ${model.tailVar} - ${formatLpNumber(model.tailCap)} ${lastStepVar} <= 0`);
     }
   }
 
   lines.push("Bounds");
   for (const model of craftModels) {
     lines.push(`  0 <= ${model.craftVar} <= ${formatLpNumber(model.craftBound)}`);
-    for (const unitVar of model.preDiscountUnitVars) {
-      lines.push(`  0 <= ${unitVar} <= 1`);
+    for (let stepIndex = 0; stepIndex < model.preDiscountStepVars.length; stepIndex += 1) {
+      lines.push(`  0 <= ${model.preDiscountStepVars[stepIndex]} <= ${formatLpNumber(model.preDiscountStepSizes[stepIndex])}`);
     }
     if (model.tailVar) {
       lines.push(`  0 <= ${model.tailVar} <= ${formatLpNumber(model.tailCap)}`);
@@ -1034,6 +1063,7 @@ async function solveUnifiedCraftMissionPlan(options: {
 
   const integerVars = [
     ...craftModels.map((model) => model.craftVar),
+    ...craftModels.flatMap((model) => model.preDiscountStepVars),
     ...craftModels.flatMap((model) => (model.tailVar ? [model.tailVar] : [])),
     ...missionVars,
   ];
@@ -1042,14 +1072,6 @@ async function solveUnifiedCraftMissionPlan(options: {
     const chunkSize = 24;
     for (let index = 0; index < integerVars.length; index += chunkSize) {
       lines.push(`  ${integerVars.slice(index, index + chunkSize).join(" ")}`);
-    }
-  }
-  const binaryVars = craftModels.flatMap((model) => model.preDiscountUnitVars);
-  if (binaryVars.length > 0) {
-    lines.push("Binary");
-    const chunkSize = 24;
-    for (let index = 0; index < binaryVars.length; index += chunkSize) {
-      lines.push(`  ${binaryVars.slice(index, index + chunkSize).join(" ")}`);
     }
   }
   lines.push("End");
@@ -2267,9 +2289,9 @@ export async function planForTarget(
 
   const progressionCandidatesRaw = buildProgressionCandidates(profile);
   const progressionDeduped = dedupeProgressionCandidatesByMissionOptions(progressionCandidatesRaw);
-  const progressionCandidates = fastMode
-    ? progressionDeduped.unique.slice(0, FAST_MODE_MAX_CANDIDATES)
-    : progressionDeduped.unique;
+
+  const candidateLimit = fastMode ? FAST_MODE_MAX_CANDIDATES : NORMAL_MODE_MAX_CANDIDATES;
+  const progressionCandidates = progressionDeduped.unique.slice(0, candidateLimit);
   reportProgress({
     phase: "candidates",
     message: `Prepared ${progressionCandidates.length.toLocaleString()} progression candidates. Loading mission loot dataset...`,
@@ -2286,11 +2308,81 @@ export async function planForTarget(
     message: "Loaded mission loot data. Building mission action models...",
   });
   await yieldForProgressFlush();
-  const baseActions = await buildMissionActionsForOptions(
-    referenceMissionOptions,
-    closure,
-    lootData
-  );
+  const baseActions = await buildMissionActionsForOptions(referenceMissionOptions, closure, lootData);
+
+  if (fastMode) {
+    reportProgress({
+      phase: "candidate",
+      message: "Fast mode: Solving unified craft+mission plan for current ship levels...",
+    });
+    const { geRef, timeRef } = computeObjectiveReferences({
+      profile,
+      targetKey,
+      quantity: quantityInt,
+      actions: baseActions,
+    });
+    const unified = await solveUnifiedCraftMissionPlan({
+      profile,
+      targetKey,
+      quantity: quantityInt,
+      priorityTime,
+      closure,
+      actions: baseActions,
+      geRef,
+      timeRef,
+    });
+    const missionRows = buildMissionRows(baseActions, unified.missionCounts);
+    const craftRows = buildCraftRows(unified.crafts);
+    const targetBreakdown = buildTargetBreakdown({
+      quantity: quantityInt,
+      targetKey,
+      crafts: unified.crafts,
+      actions: baseActions,
+      missionCounts: unified.missionCounts,
+      remainingDemand: unified.remainingDemand,
+    });
+    const unmetItems = Object.entries(unified.remainingDemand)
+      .filter(([, qty]) => qty > 1e-6)
+      .map(([itemKey, qty]) => ({ itemId: itemKeyToId(itemKey), quantity: qty }))
+      .sort((a, b) => b.quantity - a.quantity);
+
+    const projectedShipLevels = projectShipLevelsAfterPlannedLaunches({
+      baseShipLevels: profile.shipLevels,
+      prepSteps: [],
+      actions: baseActions,
+      missionCounts: unified.missionCounts,
+    });
+
+    const expectedHours = estimateThreeSlotExpectedHours({
+      actions: baseActions,
+      missionCounts: unified.missionCounts,
+    });
+
+    const fastResult: PlannerResult = {
+      targetItemId,
+      quantity: quantityInt,
+      priorityTime,
+      geCost: unified.geCost,
+      totalSlotSeconds: unified.totalSlotSeconds,
+      expectedHours,
+      weightedScore: normalizedScore(unified.geCost, unified.totalSlotSeconds / 3, priorityTime, geRef, timeRef),
+      crafts: craftRows,
+      missions: missionRows,
+      unmetItems,
+      targetBreakdown,
+      progression: {
+        prepHours: 0,
+        prepLaunches: [],
+        projectedShipLevels: progressionShipRows(projectedShipLevels),
+      },
+      notes: [
+        ...unified.notes,
+        "Fast mode: skipped progression horizon search; solved for current ships only."
+      ],
+    };
+    reportBenchmark(fastResult, "primary");
+    return fastResult;
+  }
   const { geRef, timeRef } = computeObjectiveReferences({
     profile,
     targetKey,
