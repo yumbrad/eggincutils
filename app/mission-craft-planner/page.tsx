@@ -162,6 +162,15 @@ type TimelineLaneBlock = {
   endSeconds: number;
 };
 
+type CraftPlanDetailRow = {
+  itemId: string;
+  plannedCraftCount: number;
+  have: number | null;
+  requiredForChain: number;
+  additionalNeeded: number | null;
+  expectedMission: number;
+};
+
 type TargetOption = {
   itemId: string;
   itemKey: string;
@@ -746,6 +755,52 @@ export default function MissionCraftPlannerPage() {
   }, [targetFilter, targetOptions, targetPickerOpen]);
 
   const missionTimeline = useMemo(() => (response ? buildMissionTimeline(response.plan) : null), [response]);
+  const craftPlanDetailRows = useMemo(() => {
+    if (!response) {
+      return [] as CraftPlanDetailRow[];
+    }
+
+    const recipeMap = recipes as Record<string, { ingredients: Record<string, number> } | null>;
+    const requiredByItemKey: Record<string, number> = {};
+    const targetKey = itemIdToKey(response.plan.targetItemId);
+    requiredByItemKey[targetKey] = (requiredByItemKey[targetKey] || 0) + response.plan.quantity;
+
+    for (const craft of response.plan.crafts) {
+      const craftKey = itemIdToKey(craft.itemId);
+      const recipe = recipeMap[craftKey];
+      if (!recipe) {
+        continue;
+      }
+      for (const [ingredientKey, ingredientQty] of Object.entries(recipe.ingredients)) {
+        requiredByItemKey[ingredientKey] = (requiredByItemKey[ingredientKey] || 0) + craft.count * ingredientQty;
+      }
+    }
+
+    const missionExpectedByItemId = new Map<string, number>();
+    for (const mission of response.plan.missions) {
+      for (const yieldRow of mission.expectedYields) {
+        missionExpectedByItemId.set(
+          yieldRow.itemId,
+          (missionExpectedByItemId.get(yieldRow.itemId) || 0) + yieldRow.quantity
+        );
+      }
+    }
+
+    return response.plan.crafts.map((craft) => {
+      const itemKey = itemIdToKey(craft.itemId);
+      const have = profileSnapshot ? Math.max(0, profileSnapshot.inventory[itemKey] || 0) : null;
+      const requiredForChain = Math.max(0, requiredByItemKey[itemKey] || 0);
+      const additionalNeeded = have == null ? null : Math.max(0, requiredForChain - have);
+      return {
+        itemId: craft.itemId,
+        plannedCraftCount: craft.count,
+        have,
+        requiredForChain,
+        additionalNeeded,
+        expectedMission: Math.max(0, missionExpectedByItemId.get(craft.itemId) || 0),
+      };
+    });
+  }, [profileSnapshot, response]);
   const missionPrepTargetOverrideByIndex = useMemo(() => {
     const overrides = new Map<number, string>();
     if (!response) {
@@ -1536,14 +1591,6 @@ export default function MissionCraftPlannerPage() {
 
           <div className="panel">
             <h2 style={{ marginTop: 0 }}>Craft plan</h2>
-            <p className="muted" style={{ marginTop: 0 }}>
-              Requested {response.plan.targetBreakdown.requested.toFixed(0)} = Inventory{" "}
-              {response.plan.targetBreakdown.fromInventory.toFixed(2)} + Craft {response.plan.targetBreakdown.fromCraft.toFixed(2)} +
-              Mission expected {response.plan.targetBreakdown.fromMissionsExpected.toFixed(2)}
-              {response.plan.targetBreakdown.shortfall > 1e-6
-                ? ` + Shortfall ${response.plan.targetBreakdown.shortfall.toFixed(2)}`
-                : ""}
-            </p>
             {response.plan.crafts.length === 0 ? (
               <p className="muted" style={{ margin: 0 }}>No crafting needed.</p>
             ) : (
@@ -1552,11 +1599,14 @@ export default function MissionCraftPlannerPage() {
                   <thead>
                     <tr>
                       <th>Item</th>
-                      <th>Count</th>
+                      <th>Have</th>
+                      <th>Addl. needed</th>
+                      <th>Planned craft</th>
+                      <th>Expected mission</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {response.plan.crafts.map((craft) => {
+                    {craftPlanDetailRows.map((craft) => {
                       const iconUrl = itemIdToIconUrl(craft.itemId);
                       return (
                         <tr key={craft.itemId}>
@@ -1576,7 +1626,14 @@ export default function MissionCraftPlannerPage() {
                               </div>
                             </div>
                           </td>
-                          <td>{craft.count.toLocaleString()}</td>
+                          <td>{craft.have == null ? "—" : craft.have.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                          <td>
+                            {craft.additionalNeeded == null
+                              ? "—"
+                              : craft.additionalNeeded.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                          </td>
+                          <td>{craft.plannedCraftCount.toLocaleString()}</td>
+                          <td>{craft.expectedMission.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
                         </tr>
                       );
                     })}
