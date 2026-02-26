@@ -309,6 +309,7 @@ button:disabled {
 .brand-header[data-compact="1"] .brand-mark {
   width: 66px;
   height: 102px;
+  transform: translateY(4px);
 }
 
 .brand-header[data-compact="1"] .brand-title {

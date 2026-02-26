@@ -48,6 +48,10 @@ type BackupMissionInfo = {
   status?: string;
 };
 
+type GetPlayerProfileOptions = {
+  includeShinyArtifacts?: boolean;
+};
+
 interface AuthenticatedMessagePayload {
   message?: Uint8Array;
   compressed?: boolean;
@@ -80,11 +84,16 @@ const VERSION_CANDIDATES = [
 
 let protoRootPromise: Promise<protobuf.Root> | null = null;
 
-export async function getPlayerProfile(eid: string, includeSlotted = true): Promise<PlayerProfile> {
+export async function getPlayerProfile(
+  eid: string,
+  includeSlotted = true,
+  options: GetPlayerProfileOptions = {}
+): Promise<PlayerProfile> {
   const root = await getProtoRoot();
   const RequestMessage = root.lookupType("ei.EggIncFirstContactRequest");
   const ResponseMessage = root.lookupType("ei.EggIncFirstContactResponse");
   const AuthenticatedMessage = root.lookupType("ei.AuthenticatedMessage");
+  const includeShinyArtifacts = options.includeShinyArtifacts !== false;
 
   let lastError: unknown = null;
 
@@ -148,7 +157,11 @@ export async function getPlayerProfile(eid: string, includeSlotted = true): Prom
         throw new Error(data.errorMessage || "error fetching backup");
       }
 
-      const inventory = parseInventory(data.backup?.artifactsDb?.inventoryItems || [], includeSlotted);
+      const inventory = parseInventory(
+        data.backup?.artifactsDb?.inventoryItems || [],
+        includeSlotted,
+        includeShinyArtifacts
+      );
       const craftCounts = parseCraftCounts(data.backup?.artifactsDb?.artifactStatus || []);
       const missionArchive = data.backup?.artifactsDb?.missionArchive || [];
       const missionInfos = data.backup?.artifactsDb?.missionInfos || [];
@@ -193,7 +206,20 @@ async function getProtoRoot(): Promise<protobuf.Root> {
   return protoRootPromise;
 }
 
-export function parseInventory(items: BackupInventoryItem[], includeSlotted: boolean): Inventory {
+const SHINY_RARITIES = new Set(["RARE", "EPIC", "LEGENDARY"]);
+
+function isShinyArtifactRarity(rarity: unknown): boolean {
+  if (typeof rarity !== "string") {
+    return false;
+  }
+  return SHINY_RARITIES.has(rarity.trim().toUpperCase());
+}
+
+export function parseInventory(
+  items: BackupInventoryItem[],
+  includeSlotted: boolean,
+  includeShinyArtifacts = true
+): Inventory {
   const inventory = {} as Inventory;
   const addQuantity = (spec: { name?: string; level?: string | number }, quantity: number) => {
     const name = formatSpecName(spec);
@@ -206,7 +232,9 @@ export function parseInventory(items: BackupInventoryItem[], includeSlotted: boo
   for (const item of items) {
     const quantity = Math.max(0, Math.round(item.quantity || 0));
     const spec = item.artifact?.spec;
-    if (spec) {
+    const canUseArtifactAsIngredient =
+      includeShinyArtifacts || !isShinyArtifactRarity(item.artifact?.spec?.rarity);
+    if (spec && canUseArtifactAsIngredient) {
       addQuantity(spec, quantity);
     }
 

@@ -47,6 +47,40 @@ describe("parseInventory", () => {
     expect(withoutSlotted.tachyon_stone_3).toBeUndefined();
     expect(withoutSlotted.terra_stone_3).toBeUndefined();
   });
+
+  it("can exclude shiny artifacts from craftable inventory counts", () => {
+    const items = [
+      {
+        artifact: {
+          spec: { name: "SOUL_STONE", level: "INFERIOR", rarity: "RARE" },
+          stones: [{ name: "TACHYON_STONE", level: "LESSER" }],
+        },
+        quantity: 2,
+      },
+      {
+        artifact: {
+          spec: { name: "LIGHT_OF_EGGENDIL", level: "GREATER", rarity: "LEGENDARY" },
+          stones: [{ name: "TERRA_STONE_FRAGMENT", level: "NORMAL" }],
+        },
+        quantity: 1,
+      },
+      {
+        artifact: {
+          spec: { name: "PUZZLE_CUBE", level: "NORMAL", rarity: "COMMON" },
+          stones: [],
+        },
+        quantity: 3,
+      },
+    ];
+
+    const inventory = parseInventory(items, true, false);
+
+    expect(inventory.soul_stone_2).toBeUndefined();
+    expect(inventory.light_of_eggendil_4).toBeUndefined();
+    expect(inventory.puzzle_cube_3).toBe(3);
+    expect(inventory.tachyon_stone_3).toBe(2);
+    expect(inventory.terra_stone_3).toBe(1);
+  });
 });
 
 describe("parseCraftCounts and parseMissions", () => {

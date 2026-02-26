@@ -21,7 +21,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   try {
-    const profile = await getPlayerProfile(parsedQuery.data.eid, parsedQuery.data.includeSlotted);
+    const profile = await getPlayerProfile(parsedQuery.data.eid, parsedQuery.data.includeSlotted, {
+      includeShinyArtifacts: false,
+    });
     return new Response(
       JSON.stringify({
         inventory: profile.inventory,
