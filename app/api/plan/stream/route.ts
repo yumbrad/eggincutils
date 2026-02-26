@@ -10,6 +10,14 @@ type PlanStreamMessage =
   | { type: "result"; data: unknown }
   | { type: "error"; error: string; details?: unknown };
 
+function streamHeartbeatMs(): number {
+  const raw = Number(process.env.PLAN_STREAM_HEARTBEAT_MS || "15000");
+  if (!Number.isFinite(raw)) {
+    return 15000;
+  }
+  return Math.max(5000, Math.min(60000, Math.round(raw)));
+}
+
 function enqueueLine(controller: ReadableStreamDefaultController<Uint8Array>, encoder: TextEncoder, payload: PlanStreamMessage): void {
   controller.enqueue(encoder.encode(`${JSON.stringify(payload)}\n`));
 }
@@ -38,6 +46,13 @@ export async function POST(request: Request): Promise<Response> {
     start(controller) {
       let closed = false;
       const streamStartedAtMs = Date.now();
+      let heartbeatHandle: ReturnType<typeof setInterval> | null = null;
+      let lastProgress: PlannerProgressEvent = {
+        phase: "init",
+        message: "Submitting planning request...",
+        elapsedMs: 0,
+        etaMs: null,
+      };
       const safeEnqueue = (payload: PlanStreamMessage) => {
         if (closed) {
           return;
@@ -53,6 +68,10 @@ export async function POST(request: Request): Promise<Response> {
           return;
         }
         closed = true;
+        if (heartbeatHandle) {
+          clearInterval(heartbeatHandle);
+          heartbeatHandle = null;
+        }
         try {
           controller.close();
         } catch {
@@ -62,14 +81,31 @@ export async function POST(request: Request): Promise<Response> {
       const emitProgress = (
         event: Omit<PlannerProgressEvent, "elapsedMs"> & { elapsedMs?: number }
       ) => {
+        lastProgress = {
+          ...lastProgress,
+          ...event,
+          elapsedMs: event.elapsedMs ?? Date.now() - streamStartedAtMs,
+        };
         safeEnqueue({
           type: "progress",
-          progress: {
-            ...event,
-            elapsedMs: event.elapsedMs ?? Date.now() - streamStartedAtMs,
-          },
+          progress: lastProgress,
         });
       };
+      heartbeatHandle = setInterval(() => {
+        if (closed) {
+          return;
+        }
+        const elapsedMs = Math.max(lastProgress.elapsedMs, Date.now() - streamStartedAtMs);
+        const progress: PlannerProgressEvent = {
+          ...lastProgress,
+          elapsedMs,
+        };
+        lastProgress = progress;
+        safeEnqueue({
+          type: "progress",
+          progress,
+        });
+      }, streamHeartbeatMs());
 
       void (async () => {
         try {
@@ -102,12 +138,9 @@ export async function POST(request: Request): Promise<Response> {
             {
               fastMode: parsedPayload.data.fastMode,
               onProgress: (progress) => {
-                safeEnqueue({
-                  type: "progress",
-                  progress: {
-                    ...progress,
-                    elapsedMs: solveElapsedOffsetMs + Math.max(0, Math.round(progress.elapsedMs)),
-                  },
+                emitProgress({
+                  ...progress,
+                  elapsedMs: solveElapsedOffsetMs + Math.max(0, Math.round(progress.elapsedMs)),
                 });
               },
             }

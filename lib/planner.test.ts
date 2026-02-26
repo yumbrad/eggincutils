@@ -118,6 +118,59 @@ describe("planForTarget coverage handling", () => {
     expect(result.notes.some((note) => note.includes("unified HiGHS model"))).toBe(true);
   });
 
+  it("reports expected mission time as 3-slot makespan rather than slot-time average", async () => {
+    mockedLoadLootData.mockResolvedValue({
+      missions: [
+        {
+          afxShip: 0,
+          afxDurationType: 0,
+          missionId: "test-extended",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "puzzle-cube-1",
+                      counts: [1, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    mockedSolveWithHighs.mockResolvedValue({
+      Status: "Optimal",
+      Columns: {
+        m_0: { Primal: 2 },
+      },
+    });
+
+    const profile = baseProfile();
+    profile.missionOptions = [
+      {
+        ship: "CHICKEN_ONE",
+        missionId: "test-extended",
+        durationType: "SHORT",
+        level: 0,
+        durationSeconds: 138_240,
+        capacity: 1,
+      },
+    ];
+
+    const result = await planForTarget(profile, "puzzle-cube-1", 2, 0.5);
+    expect(result.totalSlotSeconds).toBe(276_480);
+    expect(result.expectedHours).toBeCloseTo(38.4, 6);
+  });
+
   it("treats target quantity as additional beyond current inventory", async () => {
     mockedLoadLootData.mockResolvedValue({
       missions: [

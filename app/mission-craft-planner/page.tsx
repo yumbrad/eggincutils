@@ -74,6 +74,7 @@ type PlanResponse = {
     quantity: number;
     priorityTime: number;
     geCost: number;
+    totalSlotSeconds: number;
     expectedHours: number;
     weightedScore: number;
     crafts: Array<{ itemId: string; count: number }>;
@@ -417,7 +418,7 @@ function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | nul
 
   const missionSlotSeconds = missionSegments.reduce((sum, segment) => sum + segment.totalSlotSeconds, 0);
   const prepSlotSeconds = prepSegments.reduce((sum, segment) => sum + segment.totalSlotSeconds, 0);
-  const modelTotalSlotSeconds = Math.max(0, Math.round(plan.expectedHours * 3 * 3600));
+  const modelTotalSlotSeconds = Math.max(0, Math.round(plan.totalSlotSeconds ?? plan.expectedHours * 3 * 3600));
   let hiddenPrepSlotSeconds = Math.max(0, modelTotalSlotSeconds - (missionSlotSeconds + prepSlotSeconds));
   if (hiddenPrepSlotSeconds < 60) {
     hiddenPrepSlotSeconds = 0;
@@ -755,6 +756,7 @@ export default function MissionCraftPlannerPage() {
   }, [targetFilter, targetOptions, targetPickerOpen]);
 
   const missionTimeline = useMemo(() => (response ? buildMissionTimeline(response.plan) : null), [response]);
+  const expectedMissionHours = missionTimeline ? missionTimeline.totalSeconds / 3600 : response?.plan.expectedHours ?? 0;
   const craftPlanDetailRows = useMemo(() => {
     if (!response) {
       return [] as CraftPlanDetailRow[];
@@ -1566,7 +1568,7 @@ export default function MissionCraftPlannerPage() {
           <div className="grid cards">
             <div className="card">
               <div className="muted">Expected mission time</div>
-              <div className="kpi">{formatDurationFromHours(response.plan.expectedHours)}</div>
+              <div className="kpi">{formatDurationFromHours(expectedMissionHours)}</div>
               <div className="muted">3 mission slots assumed</div>
             </div>
             <div className="card">

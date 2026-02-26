@@ -318,13 +318,22 @@ export default function XpGeCraftPage(): JSX.Element {
 
             <div className={styles.sortSection}>
               <span>Sort rows by:</span>
-              <button className={sortKey === "name" ? styles.activeButton : ""} onClick={() => setSortKey("name")}>
+              <button
+                className={`${styles.sortButton} ${sortKey === "name" ? styles.activeButton : ""}`}
+                onClick={() => setSortKey("name")}
+              >
                 Name
               </button>
-              <button className={sortKey === "xp" ? styles.activeButton : ""} onClick={() => setSortKey("xp")}>
+              <button
+                className={`${styles.sortButton} ${sortKey === "xp" ? styles.activeButton : ""}`}
+                onClick={() => setSortKey("xp")}
+              >
                 Total XP
               </button>
-              <button className={sortKey === "xpPerGe" ? styles.activeButton : ""} onClick={() => setSortKey("xpPerGe")}>
+              <button
+                className={`${styles.sortButton} ${sortKey === "xpPerGe" ? styles.activeButton : ""}`}
+                onClick={() => setSortKey("xpPerGe")}
+              >
                 XP / GE
               </button>
             </div>

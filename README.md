@@ -28,10 +28,21 @@ npm run test
 You can override with:
 
 - `LOOT_DATA_URL`
+- `LOOT_DATA_CACHE_FILE`
+- `LOOT_DATA_FALLBACK_FILE`
+- `LOOT_DATA_CACHE_TTL_SECONDS`
 - `EI_CLIENT_VERSION`
 - `EI_APP_VERSION`
 - `EI_PLATFORM`
 - `EI_PLATFORM_VALUE`
+
+Loot data loading now uses layered caching:
+
+- In-memory process cache
+- Disk cache file (`LOOT_DATA_CACHE_FILE`, default `/tmp/eggincutils-loot-cache.json`)
+- Optional vendored fallback snapshot (`LOOT_DATA_FALLBACK_FILE`, default `data/loot-data-snapshot.json`)
+
+If the disk/fallback cache is stale, stale data is served immediately and a background refresh is attempted.
 
 ## Current Planner Model
 

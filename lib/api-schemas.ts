@@ -209,6 +209,7 @@ export const plannerResultSchema = z.object({
   quantity: nonNegativeIntSchema,
   priorityTime: z.number().finite().min(0).max(1),
   geCost: nonNegativeFiniteSchema,
+  totalSlotSeconds: nonNegativeIntSchema,
   expectedHours: nonNegativeFiniteSchema,
   weightedScore: nonNegativeFiniteSchema,
   crafts: z.array(planCraftRowSchema),

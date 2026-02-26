@@ -74,6 +74,7 @@ export type PlannerResult = {
   quantity: number;
   priorityTime: number;
   geCost: number;
+  totalSlotSeconds: number;
   expectedHours: number;
   weightedScore: number;
   crafts: PlanCraftRow[];
@@ -149,6 +150,148 @@ function normalizedScore(ge: number, timeSec: number, priorityTime: number, geRe
   const safeGeRef = Math.max(1, geRef);
   const safeTimeRef = Math.max(1, timeRef);
   return (1 - priorityTime) * (ge / safeGeRef) + priorityTime * (timeSec / safeTimeRef);
+}
+
+function laneOrderByLoad(loads: number[]): number[] {
+  return [0, 1, 2].sort((a, b) => {
+    const diff = loads[a] - loads[b];
+    if (Math.abs(diff) > SCORE_EPS) {
+      return diff;
+    }
+    return a - b;
+  });
+}
+
+function distributeLaunchesAcrossLanes(launchesRaw: number, durationSecondsRaw: number, laneLoads: number[]): number[] {
+  const allocations = [0, 0, 0];
+  const projected = [...laneLoads];
+  let remaining = Math.max(0, Math.round(launchesRaw));
+  const durationSeconds = Math.max(0, Math.round(durationSecondsRaw));
+  if (remaining <= 0 || durationSeconds <= 0) {
+    return allocations;
+  }
+
+  while (remaining > 0) {
+    const order = laneOrderByLoad(projected);
+    const first = order[0];
+    const second = order[1];
+    const gap = projected[second] - projected[first];
+    let chunk = 1;
+    if (gap > 0) {
+      chunk = Math.ceil(gap / durationSeconds);
+    } else {
+      const minLoad = projected[first];
+      const tiedCount = order.filter((lane) => Math.abs(projected[lane] - minLoad) < SCORE_EPS).length;
+      chunk = Math.floor(remaining / Math.max(1, tiedCount));
+    }
+    const assign = Math.max(1, Math.min(remaining, chunk));
+    allocations[first] += assign;
+    projected[first] += assign * durationSeconds;
+    remaining -= assign;
+  }
+
+  return allocations;
+}
+
+function distributeSecondsAcrossLanes(totalSlotSecondsRaw: number, laneLoads: number[]): number[] {
+  const allocations = [0, 0, 0];
+  const projected = [...laneLoads];
+  let remaining = Math.max(0, Math.round(totalSlotSecondsRaw));
+  if (remaining <= 0) {
+    return allocations;
+  }
+
+  while (remaining > 0) {
+    const order = laneOrderByLoad(projected);
+    const first = order[0];
+    const second = order[1];
+    const gap = Math.max(0, Math.round(projected[second] - projected[first]));
+    let chunk = 1;
+    if (gap > 0) {
+      chunk = gap;
+    } else {
+      const minLoad = projected[first];
+      const tiedCount = order.filter((lane) => Math.abs(projected[lane] - minLoad) < SCORE_EPS).length;
+      chunk = Math.floor(remaining / Math.max(1, tiedCount));
+    }
+    const assign = Math.max(1, Math.min(remaining, chunk));
+    allocations[first] += assign;
+    projected[first] += assign;
+    remaining -= assign;
+  }
+
+  return allocations;
+}
+
+type LaunchDurationSegment = {
+  launches: number;
+  durationSeconds: number;
+};
+
+function estimateThreeSlotMakespanSeconds(segments: LaunchDurationSegment[], residualSlotSecondsRaw = 0): number {
+  const laneLoads = [0, 0, 0];
+  const normalizedSegments = segments
+    .map((segment) => ({
+      launches: Math.max(0, Math.round(segment.launches)),
+      durationSeconds: Math.max(0, Math.round(segment.durationSeconds)),
+    }))
+    .filter((segment) => segment.launches > 0 && segment.durationSeconds > 0)
+    .sort((a, b) => b.durationSeconds - a.durationSeconds || b.launches - a.launches);
+
+  for (const segment of normalizedSegments) {
+    const launchAllocations = distributeLaunchesAcrossLanes(segment.launches, segment.durationSeconds, laneLoads);
+    for (let lane = 0; lane < 3; lane += 1) {
+      const launches = launchAllocations[lane];
+      if (launches <= 0) {
+        continue;
+      }
+      laneLoads[lane] += launches * segment.durationSeconds;
+    }
+  }
+
+  const residualSlotSeconds = Math.max(0, Math.round(residualSlotSecondsRaw));
+  if (residualSlotSeconds > 0) {
+    const residualAllocations = distributeSecondsAcrossLanes(residualSlotSeconds, laneLoads);
+    for (let lane = 0; lane < 3; lane += 1) {
+      const seconds = residualAllocations[lane];
+      if (seconds <= 0) {
+        continue;
+      }
+      laneLoads[lane] += seconds;
+    }
+  }
+
+  return Math.max(0, ...laneLoads);
+}
+
+function estimateThreeSlotExpectedHours(options: {
+  actions: MissionAction[];
+  missionCounts: Record<string, number>;
+  residualSlotSeconds?: number;
+}): number {
+  const actionByKey = new Map(options.actions.map((action) => [action.key, action]));
+  const launchesByDuration = new Map<number, number>();
+  for (const [actionKey, launchesRaw] of Object.entries(options.missionCounts)) {
+    const launches = Math.max(0, Math.round(launchesRaw));
+    if (launches <= 0) {
+      continue;
+    }
+    const action = actionByKey.get(actionKey);
+    if (!action) {
+      continue;
+    }
+    const durationSeconds = Math.max(0, Math.round(action.durationSeconds));
+    if (durationSeconds <= 0) {
+      continue;
+    }
+    launchesByDuration.set(durationSeconds, (launchesByDuration.get(durationSeconds) || 0) + launches);
+  }
+  const segments = Array.from(launchesByDuration.entries()).map(([durationSeconds, launches]) => ({
+    launches,
+    durationSeconds,
+  }));
+  const makespanSeconds = estimateThreeSlotMakespanSeconds(segments, options.residualSlotSeconds || 0);
+  return makespanSeconds / 3600;
 }
 
 function collectClosure(itemKey: string, visited: Set<string>): void {
@@ -1960,7 +2103,10 @@ async function planForTargetHeuristic(
   const totalSlotSeconds = missionAllocation.totalSlotSeconds;
   const remainingDemandAfterMissions = missionAllocation.remainingDemand;
 
-  const expectedHours = totalSlotSeconds / 3 / 3600;
+  const expectedHours = estimateThreeSlotExpectedHours({
+    actions,
+    missionCounts,
+  });
   const weightedScore = normalizedScore(
     geCost,
     totalSlotSeconds / 3,
@@ -2036,6 +2182,7 @@ async function planForTargetHeuristic(
     quantity: quantityInt,
     priorityTime,
     geCost,
+    totalSlotSeconds,
     expectedHours,
     weightedScore,
     crafts: craftRows,
@@ -2512,12 +2659,19 @@ export async function planForTarget(
     });
     await yieldForProgressFlush();
 
+    const expectedHours = estimateThreeSlotExpectedHours({
+      actions: best.actions,
+      missionCounts: best.unified.missionCounts,
+      residualSlotSeconds: best.prepNoYieldSlotSeconds,
+    });
+
     const result: PlannerResult = {
       targetItemId,
       quantity: quantityInt,
       priorityTime,
       geCost: best.unified.geCost,
-      expectedHours: best.totalSlotSeconds / 3 / 3600,
+      totalSlotSeconds: best.totalSlotSeconds,
+      expectedHours,
       weightedScore: best.weightedScore,
       crafts: craftRows,
       missions: missionRows,

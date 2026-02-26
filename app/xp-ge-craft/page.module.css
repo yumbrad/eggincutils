@@ -70,18 +70,25 @@
   color: var(--muted);
 }
 
-.sortSection button.active {
-  background: linear-gradient(135deg, var(--accent-2), var(--accent));
-  border-color: var(--accent-2);
-  color: var(--button-ink);
-  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--accent-2), transparent 55%);
+.sortButton {
+  background: color-mix(in oklab, var(--panel), var(--bg-a) 30%);
+  border-color: var(--stroke);
+  color: var(--ink);
+  box-shadow: none;
+}
+
+.sortButton:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--panel), var(--accent) 12%);
+  border-color: color-mix(in oklab, var(--stroke), var(--accent) 40%);
 }
 
 .activeButton {
-  background: linear-gradient(135deg, var(--accent-2), var(--accent));
-  border-color: var(--accent-2);
+  background: linear-gradient(135deg, color-mix(in oklab, var(--accent-2), white 12%), var(--accent));
+  border-color: color-mix(in oklab, var(--accent), black 18%);
   color: var(--button-ink);
-  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--accent-2), transparent 55%);
+  box-shadow:
+    0 0 0 2px color-mix(in oklab, var(--accent-2), transparent 30%),
+    0 6px 14px color-mix(in oklab, var(--accent), transparent 75%);
 }
 
 .tableSection {
