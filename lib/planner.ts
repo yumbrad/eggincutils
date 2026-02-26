@@ -129,7 +129,7 @@ export class MissionCoverageError extends Error {
 
 const MAX_GREEDY_ITERATIONS = 3000;
 const MAX_CRAFT_COUNT_FOR_DISCOUNT = 300;
-const CRAFT_DISCOUNT_PIECEWISE_STEPS = 10;
+const MAX_CRAFT_DISCOUNT_PIECEWISE_STEPS = 10;
 const MAX_DISCOUNT_FACTOR = 0.9;
 const DISCOUNT_CURVE_EXPONENT = 0.2;
 const MISSION_SOLVER_UNMET_PENALTY_FACTOR = 1000;
@@ -141,6 +141,7 @@ const FAST_MODE_MAX_CANDIDATES = 4;
 const NORMAL_MODE_MAX_CANDIDATES = 12;
 const MIN_MISSION_TIME_OBJECTIVE_WEIGHT = 1e-5;
 const REFINEMENT_MAX_PHASES_PER_OPTION = 3;
+const LP_SCREENING_MILP_RESOLVES = 2;
 
 function getDiscountedCost(baseCost: number, craftCount: number): number {
   const progress = Math.min(1, craftCount / MAX_CRAFT_COUNT_FOR_DISCOUNT);
@@ -679,7 +680,9 @@ async function allocateMissionsWithSolver(
   lines.push("End");
 
   try {
-    const solution = await solveWithHighs(lines.join("\n"));
+    const solution = await solveWithHighs(lines.join("\n"), {
+      mip_rel_gap: 0.01,
+    });
     const status = solution.Status || "Unknown";
     if (status !== "Optimal") {
       const greedy = allocateMissionsGreedy(actions, initialDemand);
@@ -764,51 +767,39 @@ function formatLinearExpression(terms: Array<{ coefficient: number; variable: st
   return parts.join(" ");
 }
 
-async function solveUnifiedCraftMissionPlan(options: {
+type CraftCostModel = {
+  itemKey: string;
+  craftVar: string;
+  craftBound: number;
+  baseCost: number;
+  initialCraftCount: number;
+  preDiscountStepVars: string[];
+  preDiscountStepCosts: number[];
+  preDiscountStepSizes: number[];
+  tailVar: string | null;
+  tailCap: number;
+};
+
+type CraftModelSkeleton = {
+  itemKeys: string[];
+  craftModels: CraftCostModel[];
+  craftModelByItem: Map<string, CraftCostModel>;
+  unmetVarByItem: Map<string, string>;
+  demandByItem: Map<string, number>;
+};
+
+function buildCraftModelSkeleton(options: {
   profile: PlayerProfile;
   targetKey: string;
   quantity: number;
-  priorityTime: number;
   closure: Set<string>;
-  actions: MissionAction[];
-  geRef: number;
-  timeRef: number;
-  requiredMissionLaunches?: Record<string, RequiredMissionLaunchConstraint>;
-  maxMissionLaunchesByOption?: Record<string, number>;
-  optionLaunchPrecedenceChains?: string[][];
-}): Promise<UnifiedPlan> {
-  const {
-    profile,
-    targetKey,
-    quantity,
-    priorityTime,
-    closure,
-    actions,
-    geRef,
-    timeRef,
-    requiredMissionLaunches = {},
-    maxMissionLaunchesByOption = {},
-    optionLaunchPrecedenceChains = [],
-  } = options;
+}): CraftModelSkeleton {
+  const { profile, targetKey, quantity, closure } = options;
   const itemKeys = Array.from(closure).sort();
-  const missionVars = actions.map((_, index) => `m_${index}`);
   const unmetVarByItem = new Map<string, string>();
   for (let index = 0; index < itemKeys.length; index += 1) {
     unmetVarByItem.set(itemKeys[index], `u_${index}`);
   }
-
-  type CraftCostModel = {
-    itemKey: string;
-    craftVar: string;
-    craftBound: number;
-    baseCost: number;
-    initialCraftCount: number;
-    preDiscountStepVars: string[];
-    preDiscountStepCosts: number[];
-    preDiscountStepSizes: number[];
-    tailVar: string | null;
-    tailCap: number;
-  };
 
   const craftUpperBounds = estimateCraftUpperBounds(targetKey, quantity);
   const craftModels: CraftCostModel[] = [];
@@ -838,7 +829,8 @@ async function solveUnifiedCraftMissionPlan(options: {
     const preDiscountStepSizes: number[] = [];
 
     if (preDiscountLimit > 0) {
-      const stepSize = Math.max(1, Math.ceil(preDiscountLimit / CRAFT_DISCOUNT_PIECEWISE_STEPS));
+      const piecewiseSteps = preDiscountLimit <= 10 ? 3 : preDiscountLimit <= 50 ? 5 : MAX_CRAFT_DISCOUNT_PIECEWISE_STEPS;
+      const stepSize = Math.max(1, Math.ceil(preDiscountLimit / piecewiseSteps));
       let processed = 0;
       while (processed < preDiscountLimit) {
         const currentStepSize = Math.min(stepSize, preDiscountLimit - processed);
@@ -846,7 +838,7 @@ async function solveUnifiedCraftMissionPlan(options: {
         const avgCost = getBatchDiscountedCost(recipe.cost, initialCraftCount + processed, currentStepSize) / currentStepSize;
         preDiscountStepCosts.push(avgCost);
         preDiscountStepSizes.push(currentStepSize);
-        
+
         craftStepCounter += 1;
         processed += currentStepSize;
       }
@@ -872,6 +864,48 @@ async function solveUnifiedCraftMissionPlan(options: {
   }
 
   const demandByItem = new Map<string, number>(itemKeys.map((itemKey) => [itemKey, itemKey === targetKey ? quantity : 0]));
+
+  return { itemKeys, craftModels, craftModelByItem, unmetVarByItem, demandByItem };
+}
+
+async function solveUnifiedCraftMissionPlan(options: {
+  profile: PlayerProfile;
+  targetKey: string;
+  quantity: number;
+  priorityTime: number;
+  closure: Set<string>;
+  actions: MissionAction[];
+  geRef: number;
+  timeRef: number;
+  requiredMissionLaunches?: Record<string, RequiredMissionLaunchConstraint>;
+  maxMissionLaunchesByOption?: Record<string, number>;
+  optionLaunchPrecedenceChains?: string[][];
+  lpRelaxation?: boolean;
+  craftSkeleton?: CraftModelSkeleton;
+}): Promise<UnifiedPlan> {
+  const {
+    profile,
+    targetKey,
+    quantity,
+    priorityTime,
+    closure,
+    actions,
+    geRef,
+    timeRef,
+    requiredMissionLaunches = {},
+    maxMissionLaunchesByOption = {},
+    optionLaunchPrecedenceChains = [],
+    lpRelaxation = false,
+    craftSkeleton,
+  } = options;
+  const {
+    itemKeys,
+    craftModels,
+    craftModelByItem,
+    unmetVarByItem,
+    demandByItem,
+  } = craftSkeleton || buildCraftModelSkeleton({ profile, targetKey, quantity, closure });
+  const missionVars = actions.map((_, index) => `m_${index}`);
   const normalizedGeRef = Math.max(1, geRef);
   const normalizedTimeRef = Math.max(1, timeRef);
 
@@ -1061,22 +1095,26 @@ async function solveUnifiedCraftMissionPlan(options: {
     lines.push(`  ${variable} >= 0`);
   }
 
-  const integerVars = [
-    ...craftModels.map((model) => model.craftVar),
-    ...craftModels.flatMap((model) => model.preDiscountStepVars),
-    ...craftModels.flatMap((model) => (model.tailVar ? [model.tailVar] : [])),
-    ...missionVars,
-  ];
-  if (integerVars.length > 0) {
-    lines.push("General");
-    const chunkSize = 24;
-    for (let index = 0; index < integerVars.length; index += chunkSize) {
-      lines.push(`  ${integerVars.slice(index, index + chunkSize).join(" ")}`);
+  if (!lpRelaxation) {
+    const integerVars = [
+      ...craftModels.map((model) => model.craftVar),
+      ...craftModels.flatMap((model) => model.preDiscountStepVars),
+      ...craftModels.flatMap((model) => (model.tailVar ? [model.tailVar] : [])),
+      ...missionVars,
+    ];
+    if (integerVars.length > 0) {
+      lines.push("General");
+      const chunkSize = 24;
+      for (let index = 0; index < integerVars.length; index += chunkSize) {
+        lines.push(`  ${integerVars.slice(index, index + chunkSize).join(" ")}`);
+      }
     }
   }
   lines.push("End");
 
-  const solution = await solveWithHighs(lines.join("\n"));
+  const solution = await solveWithHighs(lines.join("\n"), {
+    ...(lpRelaxation ? {} : { mip_rel_gap: 0.01 }),
+  });
   const status = solution.Status || "Unknown";
   if (status !== "Optimal") {
     throw new Error(`unified HiGHS solve status '${status}'`);
@@ -1585,6 +1623,7 @@ async function runPhasedYieldRefinement(options: {
   geRef: number;
   timeRef: number;
   lootData: LootJson;
+  craftSkeleton?: CraftModelSkeleton;
 }): Promise<
   | {
       actions: MissionAction[];
@@ -1608,6 +1647,7 @@ async function runPhasedYieldRefinement(options: {
     geRef,
     timeRef,
     lootData,
+    craftSkeleton,
   } = options;
 
   const finalOptionKeys = new Set(candidate.missionOptions.map((option) => missionOptionKey(option)));
@@ -1756,6 +1796,7 @@ async function runPhasedYieldRefinement(options: {
     requiredMissionLaunches,
     maxMissionLaunchesByOption,
     optionLaunchPrecedenceChains,
+    craftSkeleton,
   });
 
   const totalSlotSeconds = prepNoYieldSlotSeconds + unified.totalSlotSeconds;
@@ -2310,6 +2351,13 @@ export async function planForTarget(
   await yieldForProgressFlush();
   const baseActions = await buildMissionActionsForOptions(referenceMissionOptions, closure, lootData);
 
+  const craftSkeleton = buildCraftModelSkeleton({
+    profile,
+    targetKey,
+    quantity: quantityInt,
+    closure,
+  });
+
   if (fastMode) {
     reportProgress({
       phase: "candidate",
@@ -2330,6 +2378,8 @@ export async function planForTarget(
       actions: baseActions,
       geRef,
       timeRef,
+      lpRelaxation: true,
+      craftSkeleton,
     });
     const missionRows = buildMissionRows(baseActions, unified.missionCounts);
     const craftRows = buildCraftRows(unified.crafts);
@@ -2377,7 +2427,7 @@ export async function planForTarget(
       },
       notes: [
         ...unified.notes,
-        "Fast mode: skipped progression horizon search; solved for current ships only."
+        "Fast mode: LP relaxation solve for current ships only (no integer rounding)."
       ],
     };
     reportBenchmark(fastResult, "primary");
@@ -2430,50 +2480,16 @@ export async function planForTarget(
         }
       | null = null;
 
-    for (let candidateIndex = 0; candidateIndex < candidateTotal; candidateIndex += 1) {
-      if (maxSolveMs > 0 && Date.now() - startedAtMs >= maxSolveMs) {
-        timeBudgetExceeded = true;
-        reportProgress({
-          phase: "candidates",
-          message: "Time budget reached; stopping horizon candidate search early.",
-          completed: completedCandidateCount,
-          total: candidateTotal,
-          etaMs: null,
-        });
-        break;
-      }
+    type CandidateEvalInput = {
+      candidate: ProgressionCandidate;
+      candidateActions: MissionAction[];
+      requiredMissionLaunches: Record<string, RequiredMissionLaunchConstraint>;
+      prepNoYieldSlotSeconds: number;
+    };
 
-      const candidate = progressionCandidates[candidateIndex];
-      reportProgress({
-        phase: "candidate",
-        message: `Evaluating candidate ${candidateIndex + 1} of ${candidateTotal}...`,
-        completed: completedCandidateCount,
-        total: candidateTotal,
-        etaMs: estimateCandidateEtaMs(),
-      });
-      await yieldForProgressFlush();
-
-      const prepOnlyLowerBound = normalizedScore(
-        0,
-        candidate.prepSlotSeconds / 3,
-        priorityTime,
-        geRef,
-        timeRef
-      );
-      if (best && prepOnlyLowerBound + SCORE_EPS >= best.weightedScore) {
-        prunedCandidateCount += 1;
-        completedCandidateCount = candidateIndex + 1;
-        reportProgress({
-          phase: "candidates",
-          message: `Processed ${completedCandidateCount.toLocaleString()}/${candidateTotal.toLocaleString()} candidates (${prunedCandidateCount.toLocaleString()} pruned).`,
-          completed: completedCandidateCount,
-          total: candidateTotal,
-          etaMs: estimateCandidateEtaMs(),
-        });
-        await yieldForProgressFlush();
-        continue;
-      }
-
+    const prepareCandidateInput = async (
+      candidate: ProgressionCandidate
+    ): Promise<CandidateEvalInput | null> => {
       const prepRequirements = aggregatePrepOptionRequirements(candidate.prepSteps);
       const prepOptions = Array.from(prepRequirements.values()).map((entry) => entry.option);
       const combinedOptions = mergeMissionOptionsByKey(candidate.missionOptions, prepOptions);
@@ -2487,60 +2503,114 @@ export async function planForTarget(
         );
         actionCache.set(candidateKey, candidateActions);
       }
-      try {
-        const finalOptionKeys = new Set(candidate.missionOptions.map((option) => missionOptionKey(option)));
-        const actionOptionKeys = new Set(candidateActions.map((action) => action.optionKey));
-        const requiredMissionLaunches: Record<string, RequiredMissionLaunchConstraint> = {};
-        let prepNoYieldSlotSeconds = 0;
-        for (const [optionKey, requirement] of prepRequirements.entries()) {
-          if (requirement.launches <= 0) {
-            continue;
-          }
-          if (!actionOptionKeys.has(optionKey)) {
-            prepNoYieldSlotSeconds += requirement.launches * requirement.option.durationSeconds;
-            continue;
-          }
-          addRequiredLaunchConstraint(
-            requiredMissionLaunches,
-            optionKey,
-            requirement.launches,
-            !finalOptionKeys.has(optionKey)
-          );
+      const finalOptionKeys = new Set(candidate.missionOptions.map((option) => missionOptionKey(option)));
+      const actionOptionKeys = new Set(candidateActions.map((action) => action.optionKey));
+      const requiredMissionLaunches: Record<string, RequiredMissionLaunchConstraint> = {};
+      let prepNoYieldSlotSeconds = 0;
+      for (const [optionKey, requirement] of prepRequirements.entries()) {
+        if (requirement.launches <= 0) {
+          continue;
         }
-
-        const unified = await solveUnifiedCraftMissionPlan({
-          profile,
-          targetKey,
-          quantity: quantityInt,
-          priorityTime,
-          closure,
-          actions: candidateActions,
-          geRef,
-          timeRef,
+        if (!actionOptionKeys.has(optionKey)) {
+          prepNoYieldSlotSeconds += requirement.launches * requirement.option.durationSeconds;
+          continue;
+        }
+        addRequiredLaunchConstraint(
           requiredMissionLaunches,
-        });
-        const totalSlotSeconds = prepNoYieldSlotSeconds + unified.totalSlotSeconds;
-        const weightedScore = normalizedScore(
-          unified.geCost,
-          totalSlotSeconds / 3,
-          priorityTime,
-          geRef,
-          timeRef
+          optionKey,
+          requirement.launches,
+          !finalOptionKeys.has(optionKey)
         );
-        if (
-          !best ||
-          weightedScore + SCORE_EPS < best.weightedScore ||
-          (Math.abs(weightedScore - best.weightedScore) <= SCORE_EPS && totalSlotSeconds < best.totalSlotSeconds)
-        ) {
-          best = {
-            candidate,
-            actions: candidateActions,
-            unified,
-            totalSlotSeconds,
-            weightedScore,
-            prepNoYieldSlotSeconds,
-          };
+      }
+      return { candidate, candidateActions, requiredMissionLaunches, prepNoYieldSlotSeconds };
+    };
+
+    const solveCandidateInput = async (
+      input: CandidateEvalInput,
+      lpRelaxation: boolean,
+    ) => {
+      const unified = await solveUnifiedCraftMissionPlan({
+        profile,
+        targetKey,
+        quantity: quantityInt,
+        priorityTime,
+        closure,
+        actions: input.candidateActions,
+        geRef,
+        timeRef,
+        requiredMissionLaunches: input.requiredMissionLaunches,
+        lpRelaxation,
+        craftSkeleton,
+      });
+      const totalSlotSeconds = input.prepNoYieldSlotSeconds + unified.totalSlotSeconds;
+      const weightedScore = normalizedScore(
+        unified.geCost,
+        totalSlotSeconds / 3,
+        priorityTime,
+        geRef,
+        timeRef
+      );
+      return { unified, totalSlotSeconds, weightedScore };
+    };
+
+    // Phase 1: LP-screen all candidates (fast)
+    type LpScreenResult = {
+      input: CandidateEvalInput;
+      weightedScore: number;
+      totalSlotSeconds: number;
+    };
+    const lpScreened: LpScreenResult[] = [];
+    for (let candidateIndex = 0; candidateIndex < candidateTotal; candidateIndex += 1) {
+      if (maxSolveMs > 0 && Date.now() - startedAtMs >= maxSolveMs) {
+        timeBudgetExceeded = true;
+        reportProgress({
+          phase: "candidates",
+          message: "Time budget reached; stopping LP screening early.",
+          completed: completedCandidateCount,
+          total: candidateTotal,
+          etaMs: null,
+        });
+        break;
+      }
+
+      const candidate = progressionCandidates[candidateIndex];
+      reportProgress({
+        phase: "candidate",
+        message: `LP screening candidate ${candidateIndex + 1} of ${candidateTotal}...`,
+        completed: completedCandidateCount,
+        total: candidateTotal,
+        etaMs: estimateCandidateEtaMs(),
+      });
+      await yieldForProgressFlush();
+
+      const prepOnlyLowerBound = normalizedScore(
+        0,
+        candidate.prepSlotSeconds / 3,
+        priorityTime,
+        geRef,
+        timeRef
+      );
+      const currentBestLp = lpScreened.length > 0
+        ? Math.min(...lpScreened.map((r) => r.weightedScore))
+        : Number.POSITIVE_INFINITY;
+      if (lpScreened.length >= LP_SCREENING_MILP_RESOLVES && prepOnlyLowerBound + SCORE_EPS >= currentBestLp) {
+        prunedCandidateCount += 1;
+        completedCandidateCount = candidateIndex + 1;
+        continue;
+      }
+
+      try {
+        const input = await prepareCandidateInput(candidate);
+        if (!input) {
+          completedCandidateCount = candidateIndex + 1;
+          continue;
         }
+        const result = await solveCandidateInput(input, true);
+        lpScreened.push({
+          input,
+          weightedScore: result.weightedScore,
+          totalSlotSeconds: result.totalSlotSeconds,
+        });
       } catch (error) {
         const details = error instanceof Error ? error.message : String(error);
         solverErrors.push(details);
@@ -2549,12 +2619,57 @@ export async function planForTarget(
       completedCandidateCount = candidateIndex + 1;
       reportProgress({
         phase: "candidates",
-        message: `Processed ${completedCandidateCount.toLocaleString()}/${candidateTotal.toLocaleString()} candidates (${prunedCandidateCount.toLocaleString()} pruned, ${solverErrors.length.toLocaleString()} solve errors).`,
+        message: `LP screened ${completedCandidateCount.toLocaleString()}/${candidateTotal.toLocaleString()} candidates (${prunedCandidateCount.toLocaleString()} pruned).`,
         completed: completedCandidateCount,
         total: candidateTotal,
         etaMs: estimateCandidateEtaMs(),
       });
       await yieldForProgressFlush();
+    }
+
+    // Phase 2: MILP re-solve top candidates
+    lpScreened.sort((a, b) => {
+      const scoreDiff = a.weightedScore - b.weightedScore;
+      if (Math.abs(scoreDiff) > SCORE_EPS) {
+        return scoreDiff;
+      }
+      return a.totalSlotSeconds - b.totalSlotSeconds;
+    });
+    const milpCandidates = lpScreened.slice(0, LP_SCREENING_MILP_RESOLVES);
+
+    if (milpCandidates.length > 0) {
+      reportProgress({
+        phase: "candidates",
+        message: `MILP re-solving top ${milpCandidates.length} of ${lpScreened.length} LP-screened candidates...`,
+        completed: completedCandidateCount,
+        total: candidateTotal,
+        etaMs: null,
+      });
+      await yieldForProgressFlush();
+    }
+
+    for (let resolveIndex = 0; resolveIndex < milpCandidates.length; resolveIndex += 1) {
+      const { input } = milpCandidates[resolveIndex];
+      try {
+        const result = await solveCandidateInput(input, false);
+        if (
+          !best ||
+          result.weightedScore + SCORE_EPS < best.weightedScore ||
+          (Math.abs(result.weightedScore - best.weightedScore) <= SCORE_EPS && result.totalSlotSeconds < best.totalSlotSeconds)
+        ) {
+          best = {
+            candidate: input.candidate,
+            actions: input.candidateActions,
+            unified: result.unified,
+            totalSlotSeconds: result.totalSlotSeconds,
+            weightedScore: result.weightedScore,
+            prepNoYieldSlotSeconds: input.prepNoYieldSlotSeconds,
+          };
+        }
+      } catch (error) {
+        const details = error instanceof Error ? error.message : String(error);
+        solverErrors.push(details);
+      }
     }
 
     if (!best) {
@@ -2584,6 +2699,7 @@ export async function planForTarget(
           geRef,
           timeRef,
           lootData,
+          craftSkeleton,
         });
         if (refined) {
           refinementNotes.push(...refined.notes);
