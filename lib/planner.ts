@@ -2331,7 +2331,8 @@ export async function planForTarget(
   const progressionCandidatesRaw = buildProgressionCandidates(profile);
   const progressionDeduped = dedupeProgressionCandidatesByMissionOptions(progressionCandidatesRaw);
 
-  const candidateLimit = fastMode ? FAST_MODE_MAX_CANDIDATES : NORMAL_MODE_MAX_CANDIDATES;
+  const fastCandidateLimit = priorityTime <= SCORE_EPS ? NORMAL_MODE_MAX_CANDIDATES : FAST_MODE_MAX_CANDIDATES;
+  const candidateLimit = fastMode ? fastCandidateLimit : NORMAL_MODE_MAX_CANDIDATES;
   const progressionCandidates = progressionDeduped.unique.slice(0, candidateLimit);
   reportProgress({
     phase: "candidates",
@@ -2358,81 +2359,6 @@ export async function planForTarget(
     closure,
   });
 
-  if (fastMode) {
-    reportProgress({
-      phase: "candidate",
-      message: "Fast mode: Solving unified craft+mission plan for current ship levels...",
-    });
-    const { geRef, timeRef } = computeObjectiveReferences({
-      profile,
-      targetKey,
-      quantity: quantityInt,
-      actions: baseActions,
-    });
-    const unified = await solveUnifiedCraftMissionPlan({
-      profile,
-      targetKey,
-      quantity: quantityInt,
-      priorityTime,
-      closure,
-      actions: baseActions,
-      geRef,
-      timeRef,
-      lpRelaxation: true,
-      craftSkeleton,
-    });
-    const missionRows = buildMissionRows(baseActions, unified.missionCounts);
-    const craftRows = buildCraftRows(unified.crafts);
-    const targetBreakdown = buildTargetBreakdown({
-      quantity: quantityInt,
-      targetKey,
-      crafts: unified.crafts,
-      actions: baseActions,
-      missionCounts: unified.missionCounts,
-      remainingDemand: unified.remainingDemand,
-    });
-    const unmetItems = Object.entries(unified.remainingDemand)
-      .filter(([, qty]) => qty > 1e-6)
-      .map(([itemKey, qty]) => ({ itemId: itemKeyToId(itemKey), quantity: qty }))
-      .sort((a, b) => b.quantity - a.quantity);
-
-    const projectedShipLevels = projectShipLevelsAfterPlannedLaunches({
-      baseShipLevels: profile.shipLevels,
-      prepSteps: [],
-      actions: baseActions,
-      missionCounts: unified.missionCounts,
-    });
-
-    const expectedHours = estimateThreeSlotExpectedHours({
-      actions: baseActions,
-      missionCounts: unified.missionCounts,
-    });
-
-    const fastResult: PlannerResult = {
-      targetItemId,
-      quantity: quantityInt,
-      priorityTime,
-      geCost: unified.geCost,
-      totalSlotSeconds: unified.totalSlotSeconds,
-      expectedHours,
-      weightedScore: normalizedScore(unified.geCost, unified.totalSlotSeconds / 3, priorityTime, geRef, timeRef),
-      crafts: craftRows,
-      missions: missionRows,
-      unmetItems,
-      targetBreakdown,
-      progression: {
-        prepHours: 0,
-        prepLaunches: [],
-        projectedShipLevels: progressionShipRows(projectedShipLevels),
-      },
-      notes: [
-        ...unified.notes,
-        "Fast mode: LP relaxation solve for current ships only (no integer rounding)."
-      ],
-    };
-    reportBenchmark(fastResult, "primary");
-    return fastResult;
-  }
   const { geRef, timeRef } = computeObjectiveReferences({
     profile,
     targetKey,
@@ -2556,6 +2482,7 @@ export async function planForTarget(
     // Phase 1: LP-screen all candidates (fast)
     type LpScreenResult = {
       input: CandidateEvalInput;
+      unified: UnifiedPlan;
       weightedScore: number;
       totalSlotSeconds: number;
     };
@@ -2608,6 +2535,7 @@ export async function planForTarget(
         const result = await solveCandidateInput(input, true);
         lpScreened.push({
           input,
+          unified: result.unified,
           weightedScore: result.weightedScore,
           totalSlotSeconds: result.totalSlotSeconds,
         });
@@ -2635,40 +2563,91 @@ export async function planForTarget(
       }
       return a.totalSlotSeconds - b.totalSlotSeconds;
     });
-    const milpCandidates = lpScreened.slice(0, LP_SCREENING_MILP_RESOLVES);
-
-    if (milpCandidates.length > 0) {
-      reportProgress({
-        phase: "candidates",
-        message: `MILP re-solving top ${milpCandidates.length} of ${lpScreened.length} LP-screened candidates...`,
-        completed: completedCandidateCount,
-        total: candidateTotal,
-        etaMs: null,
-      });
-      await yieldForProgressFlush();
-    }
-
-    for (let resolveIndex = 0; resolveIndex < milpCandidates.length; resolveIndex += 1) {
-      const { input } = milpCandidates[resolveIndex];
-      try {
-        const result = await solveCandidateInput(input, false);
-        if (
-          !best ||
-          result.weightedScore + SCORE_EPS < best.weightedScore ||
-          (Math.abs(result.weightedScore - best.weightedScore) <= SCORE_EPS && result.totalSlotSeconds < best.totalSlotSeconds)
-        ) {
+    if (fastMode) {
+      const fastMilpResolves = priorityTime <= SCORE_EPS ? 2 : 0;
+      if (fastMilpResolves > 0 && lpScreened.length > 0) {
+        const fastMilpCandidates = lpScreened.slice(0, fastMilpResolves);
+        reportProgress({
+          phase: "candidates",
+          message: `Fast mode (GE-priority): integer re-solving top ${fastMilpCandidates.length} LP candidate...`,
+          completed: completedCandidateCount,
+          total: candidateTotal,
+          etaMs: null,
+        });
+        await yieldForProgressFlush();
+        for (let resolveIndex = 0; resolveIndex < fastMilpCandidates.length; resolveIndex += 1) {
+          const { input } = fastMilpCandidates[resolveIndex];
+          try {
+            const result = await solveCandidateInput(input, false);
+            if (
+              !best ||
+              result.weightedScore + SCORE_EPS < best.weightedScore ||
+              (Math.abs(result.weightedScore - best.weightedScore) <= SCORE_EPS && result.totalSlotSeconds < best.totalSlotSeconds)
+            ) {
+              best = {
+                candidate: input.candidate,
+                actions: input.candidateActions,
+                unified: result.unified,
+                totalSlotSeconds: result.totalSlotSeconds,
+                weightedScore: result.weightedScore,
+                prepNoYieldSlotSeconds: input.prepNoYieldSlotSeconds,
+              };
+            }
+          } catch (error) {
+            const details = error instanceof Error ? error.message : String(error);
+            solverErrors.push(details);
+          }
+        }
+      }
+      if (!best) {
+        const bestLp = lpScreened[0];
+        if (bestLp) {
           best = {
-            candidate: input.candidate,
-            actions: input.candidateActions,
-            unified: result.unified,
-            totalSlotSeconds: result.totalSlotSeconds,
-            weightedScore: result.weightedScore,
-            prepNoYieldSlotSeconds: input.prepNoYieldSlotSeconds,
+            candidate: bestLp.input.candidate,
+            actions: bestLp.input.candidateActions,
+            unified: bestLp.unified,
+            totalSlotSeconds: bestLp.totalSlotSeconds,
+            weightedScore: bestLp.weightedScore,
+            prepNoYieldSlotSeconds: bestLp.input.prepNoYieldSlotSeconds,
           };
         }
-      } catch (error) {
-        const details = error instanceof Error ? error.message : String(error);
-        solverErrors.push(details);
+      }
+    } else {
+      const milpCandidates = lpScreened.slice(0, LP_SCREENING_MILP_RESOLVES);
+
+      if (milpCandidates.length > 0) {
+        reportProgress({
+          phase: "candidates",
+          message: `MILP re-solving top ${milpCandidates.length} of ${lpScreened.length} LP-screened candidates...`,
+          completed: completedCandidateCount,
+          total: candidateTotal,
+          etaMs: null,
+        });
+        await yieldForProgressFlush();
+      }
+
+      for (let resolveIndex = 0; resolveIndex < milpCandidates.length; resolveIndex += 1) {
+        const { input } = milpCandidates[resolveIndex];
+        try {
+          const result = await solveCandidateInput(input, false);
+          if (
+            !best ||
+            result.weightedScore + SCORE_EPS < best.weightedScore ||
+            (Math.abs(result.weightedScore - best.weightedScore) <= SCORE_EPS && result.totalSlotSeconds < best.totalSlotSeconds)
+          ) {
+            best = {
+              candidate: input.candidate,
+              actions: input.candidateActions,
+              unified: result.unified,
+              totalSlotSeconds: result.totalSlotSeconds,
+              weightedScore: result.weightedScore,
+              prepNoYieldSlotSeconds: input.prepNoYieldSlotSeconds,
+            };
+          }
+        } catch (error) {
+          const details = error instanceof Error ? error.message : String(error);
+          solverErrors.push(details);
+        }
       }
     }
 
@@ -2677,10 +2656,13 @@ export async function planForTarget(
       throw new Error(`unified HiGHS solve failed across all horizon candidates (${details})`);
     }
 
-    if (!fastMode && !timeBudgetExceeded) {
+    const allowFastGeRefinement = fastMode && priorityTime <= SCORE_EPS;
+    if ((!fastMode || allowFastGeRefinement) && !timeBudgetExceeded) {
       reportProgress({
         phase: "refinement",
-        message: "Running phased-yield refinement pass...",
+        message: allowFastGeRefinement
+          ? "Fast mode GE-priority: running phased-yield refinement pass..."
+          : "Running phased-yield refinement pass...",
         completed: 0,
         total: 1,
         etaMs: null,
@@ -2727,17 +2709,21 @@ export async function planForTarget(
       }
       reportProgress({
         phase: "refinement",
-        message: "Phased-yield refinement finished.",
+        message: allowFastGeRefinement
+          ? "Fast mode GE-priority phased-yield refinement finished."
+          : "Phased-yield refinement finished.",
         completed: 1,
         total: 1,
         etaMs: 0,
       });
       await yieldForProgressFlush();
-    } else if (!fastMode && timeBudgetExceeded) {
+    } else if ((!fastMode || allowFastGeRefinement) && timeBudgetExceeded) {
       refinementNotes.push("Skipped phased-yield refinement due to solve-time budget cap.");
       reportProgress({
         phase: "refinement",
-        message: "Skipped phased-yield refinement due to solve-time budget.",
+        message: allowFastGeRefinement
+          ? "Fast mode GE-priority skipped phased-yield refinement due to solve-time budget."
+          : "Skipped phased-yield refinement due to solve-time budget.",
         completed: 1,
         total: 1,
         etaMs: 0,
@@ -2791,6 +2777,11 @@ export async function planForTarget(
       notes.push(
         `Fast solve mode enabled: limited progression-state solves to ${progressionCandidates.length.toLocaleString()} candidates.`
       );
+      if (priorityTime <= SCORE_EPS) {
+        notes.push("Fast mode GE-priority path integer re-solves the top two LP-screened progression candidates.");
+      } else {
+        notes.push("Fast mode uses LP-relaxation candidate screening only (no integer re-solve/refinement).");
+      }
     }
     if (progressionDeduped.dedupedCount > 0) {
       notes.push(

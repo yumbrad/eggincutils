@@ -1749,7 +1749,9 @@ export default function MissionCraftPlannerPage() {
                       const targetItemKey = targetOverride ? null : afxIdToItemKey(mission.targetAfxId);
                       const targetIconUrl = targetItemKey ? itemKeyToIconUrl(targetItemKey) : null;
                       return (
-                        <tr key={`${mission.missionId}:${mission.targetAfxId}`}>
+                        <tr
+                          key={`${missionIndex}:${mission.ship}:${mission.durationType}:${mission.missionId}:${mission.targetAfxId}`}
+                        >
                           <td>
                             {titleCaseShip(mission.ship)}<br />
                             <span className="muted">{durationTypeLabel(mission.durationType)}</span>
