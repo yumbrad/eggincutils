@@ -758,7 +758,8 @@ async function solveUnifiedCraftMissionPlan(options: {
   lines.push("Subject To");
   for (let itemIndex = 0; itemIndex < itemKeys.length; itemIndex += 1) {
     const itemKey = itemKeys[itemIndex];
-    const inventoryQty = Math.max(0, profile.inventory[itemKey] || 0);
+    // Target demand is interpreted as additional units beyond current inventory.
+    const inventoryQty = itemKey === targetKey ? 0 : Math.max(0, profile.inventory[itemKey] || 0);
     const demandQty = demandByItem.get(itemKey) || 0;
     const terms: Array<{ coefficient: number; variable: string }> = [];
 
@@ -1891,7 +1892,7 @@ async function planForTargetHeuristic(
 
   let geCost = 0;
 
-  const fulfill = (itemKey: string, needed: number, depth = 0) => {
+  const fulfill = (itemKey: string, needed: number, depth = 0, useInventory = true) => {
     const safeNeeded = Math.max(0, Math.round(needed));
     if (safeNeeded === 0) {
       return;
@@ -1902,10 +1903,12 @@ async function planForTargetHeuristic(
     }
 
     let remaining = safeNeeded;
-    const available = Math.max(0, inventory[itemKey] || 0);
-    const used = Math.min(available, remaining);
-    inventory[itemKey] = available - used;
-    remaining -= used;
+    if (useInventory) {
+      const available = Math.max(0, inventory[itemKey] || 0);
+      const used = Math.min(available, remaining);
+      inventory[itemKey] = available - used;
+      remaining -= used;
+    }
 
     while (remaining > 0) {
       const recipe = getRecipe(itemKey);
@@ -1932,7 +1935,7 @@ async function planForTargetHeuristic(
       }
 
       for (const [ingredientKey, ingredientQty] of Object.entries(recipe.ingredients)) {
-        fulfill(ingredientKey, ingredientQty, depth + 1);
+        fulfill(ingredientKey, ingredientQty, depth + 1, true);
       }
 
       geCost += craftGe;
@@ -1942,7 +1945,8 @@ async function planForTargetHeuristic(
     }
   };
 
-  fulfill(targetKey, quantityInt);
+  // Target demand is interpreted as additional units beyond current inventory.
+  fulfill(targetKey, quantityInt, 0, false);
 
   const remainingDemand: Record<string, number> = {};
   for (const [itemKey, qty] of Object.entries(demand)) {
@@ -2019,6 +2023,7 @@ async function planForTargetHeuristic(
   notes.push(
     "Planner currently uses expected-drop values with solver-backed mission allocation and 3 mission slots. Re-run after returns."
   );
+  notes.push("Target quantity is interpreted as additional copies beyond current inventory.");
   notes.push(
     "Rarity is treated as fungible for planning (shiny inventory counted toward craftable supply by item tier)."
   );
@@ -2480,6 +2485,7 @@ export async function planForTarget(
     notes.push(
       "Planner currently uses expected-drop values with unified solver-backed craft+mission allocation, bounded ship-progression horizon search, and 3 mission slots. Re-run after returns."
     );
+    notes.push("Target quantity is interpreted as additional copies beyond current inventory.");
     notes.push(
       "Prep launches are credited with expected drops for required items when compatible mission-target coverage exists."
     );
