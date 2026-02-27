@@ -4,3 +4,8 @@ npm-debug.log*
 .DS_Store
 *.tsbuildinfo
 local_data/
+
+# Emacs temp/lock/autosave files
+*~
+\#*\#
+.\#*

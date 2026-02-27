@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mission Craft Planner Benchmark Comparison</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --panel: #ffffff;
+      --text: #0f172a;
+      --muted: #475569;
+      --border: #dbe2ea;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      background: radial-gradient(circle at top left, #eef2ff, #f8fafc 45%);
+      color: var(--text);
+      line-height: 1.35;
+    }
+    main {
+      max-width: 1700px;
+      margin: 0 auto;
+      display: grid;
+      gap: 20px;
+    }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      overflow-x: auto;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+    h1, h2, h3 {
+      margin: 0 0 10px 0;
+      line-height: 1.2;
+    }
+    h1 { font-size: 1.6rem; }
+    h2 { font-size: 1.15rem; }
+    h3 { font-size: 1rem; }
+    p, li { color: var(--muted); }
+    code {
+      font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, monospace;
+      font-size: 0.92em;
+      color: #1d4ed8;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 980px;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      vertical-align: top;
+      text-align: left;
+      font-size: 0.88rem;
+    }
+    th {
+      background: #eef2f7;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    .metric-value {
+      font-weight: 600;
+      color: inherit;
+      white-space: nowrap;
+    }
+    .delta-note {
+      font-size: 0.76rem;
+      opacity: 0.9;
+      margin-top: 3px;
+      white-space: nowrap;
+    }
+    .baseline-cell {
+      background: #f1f5f9;
+      color: #334155;
+    }
+    .legend-grid {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: #334155;
+      font-size: 0.86rem;
+    }
+    .swatch {
+      width: 18px;
+      height: 18px;
+      border-radius: 5px;
+      border: 1px solid #cbd5e1;
+      display: inline-block;
+    }
+    .bar-chart {
+      display: grid;
+      gap: 8px;
+    }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 260px 1fr 260px;
+      align-items: center;
+      gap: 10px;
+    }
+    .bar-label { font-weight: 600; font-size: 0.9rem; }
+    .bar-track {
+      background: #e2e8f0;
+      border-radius: 999px;
+      height: 12px;
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 999px;
+    }
+    .bar-value {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      font-size: 0.86rem;
+      color: #0f172a;
+    }
+    .delta-inline {
+      color: #475569;
+      font-size: 0.8rem;
+    }
+    .ratio-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+    }
+    .ratio-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      background: #f8fafc;
+    }
+    .ratio-row {
+      display: grid;
+      grid-template-columns: 88px 1fr 54px;
+      gap: 8px;
+      align-items: center;
+      margin: 7px 0;
+    }
+    .ratio-label {
+      font-size: 0.78rem;
+      color: #334155;
+      font-weight: 600;
+    }
+    .ratio-track {
+      position: relative;
+      height: 12px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      overflow: hidden;
+      border: 1px solid #cbd5e1;
+    }
+    .ratio-fill {
+      position: absolute;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      border-right: 1px solid transparent;
+    }
+    .ratio-marker {
+      position: absolute;
+      top: -1px;
+      bottom: -1px;
+      left: 99px;
+      width: 2px;
+      background: #475569;
+      opacity: 0.6;
+    }
+    .ratio-value {
+      font-size: 0.78rem;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      color: #0f172a;
+    }
+    .note {
+      margin-top: 0;
+      margin-bottom: 10px;
+      font-size: 0.87rem;
+    }
+    @media (max-width: 1024px) {
+      body { padding: 12px; }
+      .bar-row { grid-template-columns: 180px 1fr 140px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section>
+      <h1>Mission Craft Planner Benchmark Comparison</h1>
+      <p>Generated at <code>2026-02-26T06:57:49.627Z</code>. Baseline is <code>main</code>. Cell colors use absolute deltas vs baseline: neutral under 2%, ramping to darkest at 50%+.</p>
+      
+  <div class="legend-grid">
+    <div class="legend-item"><span class="swatch" style="background:#f8fafc;"></span><span>&lt; 2% change (neutral)</span></div>
+    <div class="legend-item"><span class="swatch" style="background:#dcfce7;"></span><span>~2% improvement</span></div>
+    <div class="legend-item"><span class="swatch" style="background:#f15b2d;color:#fff;"></span><span>~50% regression (max dark)</span></div>
+    <div class="legend-item"><span class="swatch" style="background:#14532d;color:#fff;"></span><span>~50% improvement (max dark)</span></div>
+    <div class="legend-item"><span class="swatch" style="background:#fee2e2;"></span><span>~2% regression</span></div>
+  </div>
+      <h3>Source reports</h3>
+      <ul><li><strong>main (baseline)</strong>: <code>benchmark-main-67e69.json</code> (commit <code>67e69</code>)</li><li><strong>gemini-3-optimized</strong>: <code>benchmark-gemini-3-optimized-f71d3.json</code> (commit <code>f71d3</code>)</li><li><strong>claude-optimized</strong>: <code>benchmark-claude-optimized-002f4.json</code> (commit <code>002f4</code>)</li><li><strong>codex-53-xhigh-optimized</strong>: <code>benchmark-codex-53-xhigh-optimized-e6cb3.json</code> (commit <code>e6cb3</code>)</li></ul>
+    </section>
+
+    
+  <section>
+    <h2>Total Solver Wall Time (All 18 Scenarios)</h2>
+    <div class="bar-chart">
+      <div class="bar-row">
+        <div class="bar-label">main (baseline)</div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width:100.00%;background:#475569;"></div>
+        </div>
+        <div class="bar-value">1,534,262 ms <span class="delta-inline">(baseline)</span></div>
+      </div>
+    
+      <div class="bar-row">
+        <div class="bar-label">gemini-3-optimized</div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width:15.04%;background:#1d4ed8;"></div>
+        </div>
+        <div class="bar-value">230,677 ms <span class="delta-inline">(-85.0%)</span></div>
+      </div>
+    
+      <div class="bar-row">
+        <div class="bar-label">claude-optimized</div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width:3.34%;background:#047857;"></div>
+        </div>
+        <div class="bar-value">51,190 ms <span class="delta-inline">(-96.7%)</span></div>
+      </div>
+    
+      <div class="bar-row">
+        <div class="bar-label">codex-53-xhigh-optimized</div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width:25.12%;background:#9333ea;"></div>
+        </div>
+        <div class="bar-value">385,389 ms <span class="delta-inline">(-74.9%)</span></div>
+      </div>
+    </div>
+  </section>
+    
+  <section>
+    <h2>Average Delta vs Baseline</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Metric</th>
+          <th>main (baseline)</th><th>gemini-3-optimized</th><th>claude-optimized</th><th>codex-53-xhigh-optimized</th>
+        </tr>
+      </thead>
+      <tbody><tr><td>Solver wall clock time</td><td class="baseline-cell"><div class="metric-value">0.0%</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">-80.9%</div><div class="delta-note">avg vs baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">-89.7%</div><div class="delta-note">avg vs baseline</div></td><td style="background:#b0d7be;color:#14532d;"><div class="metric-value">-12.6%</div><div class="delta-note">avg vs baseline</div></td></tr><tr><td>Planned mission time</td><td class="baseline-cell"><div class="metric-value">0.0%</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">0.0%</div><div class="delta-note">avg vs baseline</div></td><td style="background:#c4e8d1;color:#14532d;"><div class="metric-value">-7.7%</div><div class="delta-note">avg vs baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">-2.0%</div><div class="delta-note">avg vs baseline</div></td></tr><tr><td>Planned GE cost</td><td class="baseline-cell"><div class="metric-value">0.0%</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">+1.2%</div><div class="delta-note">avg vs baseline</div></td><td style="background:#fcdede;color:#7f1d1d;"><div class="metric-value">+2.9%</div><div class="delta-note">avg vs baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">+0.9%</div><div class="delta-note">avg vs baseline</div></td></tr></tbody>
+    </table>
+  </section>
+    
+  <section>
+    <h2>Fast vs Normal Averages (9 Scenario Pairs per Branch)</h2>
+    <p class="note">100% means fast mode matches normal mode. Lower than 100% means fast mode reduced the metric.</p>
+    <div class="ratio-grid">
+        <div class="ratio-card">
+          <h3>main (baseline)</h3>
+          
+            <div class="ratio-row">
+              <div class="ratio-label">Solve time</div>
+              <div class="ratio-track">
+                <div class="ratio-fill" style="width:65.5px;background:#558a69;border-color:#f0fdf4;"></div>
+                <div class="ratio-marker"></div>
+              </div>
+              <div class="ratio-value">65.5%</div>
+            </div>
+          
+            <div class="ratio-row">
+              <div class="ratio-label">Mission time</div>
+              <div class="ratio-track">
+                <div class="ratio-fill" style="width:99.9px;background:#f8fafc;border-color:#334155;"></div>
+                <div class="ratio-marker"></div>
+              </div>
+              <div class="ratio-value">99.9%</div>
+            </div>
+          
+            <div class="ratio-row">
+              <div class="ratio-label">GE cost</div>
+              <div class="ratio-track">
+                <div class="ratio-fill" style="width:114.1px;background:#e5b0b0;border-color:#7f1d1d;"></div>
+                <div class="ratio-marker"></div>
+              </div>
+              <div class="ratio-value">114.1%</div>
+            </div>
+          
+        </div>
+      
+        <div class="ratio-card">
+          <h3>gemini-3-optimized</h3>
+          
+            <div class="ratio-row">
+              <div class="ratio-label">Solve time</div>
+              <div class="ratio-track">
+                <div class="ratio-fill" style="width:20.0px;background:#14532d;border-color:#f0fdf4;"></div>
+                <div class="ratio-marker"></div>
+              </div>
+              <div class="ratio-value">10.7%</div>
+            </div>
+          
+            <div class="ratio-row">
+              <div class="ratio-label">Mission time</div>
+              <div class="ratio-track">
+                <div class="ratio-fill" style="width:99.9px;background:#f8fafc;border-color:#334155;"></div>
+                <div class="ratio-marker"></div>
+              </div>
+              <div class="ratio-value">99.9%</div>
+            </div>
+          
+            <div class="ratio-row">
+              <div class="ratio-label">GE cost</div>
+              <div class="ratio-track">
+                <div class="ratio-fill" style="width:114.2px;background:#e4afaf;border-color:#7f1d1d;"></div>
+                <div class="ratio-marker"></div>
+              </div>
+              <div class="ratio-value">114.2%</div>
+            </div>
+          
+        </div>
+      
+        <div class="ratio-card">
+          <h3>claude-optimized</h3>
+          
+            <div class="ratio-row">
+              <div class="ratio-label">Solve time</div>
+              <div class="ratio-track">
+                <div class="ratio-fill" style="width:20.0px;background:#14532d;border-color:#f0fdf4;"></div>
+                <div class="ratio-marker"></div>
+              </div>
+              <div class="ratio-value">4.7%</div>
+            </div>
+          
+            <div class="ratio-row">
+              <div class="ratio-label">Mission time</div>
+              <div class="ratio-track">
+                <div class="ratio-fill" style="width:87.6px;background:#b1d7bf;border-color:#14532d;"></div>
+                <div class="ratio-marker"></div>
+              </div>
+              <div class="ratio-value">87.6%</div>
+            </div>
+          
+            <div class="ratio-row">
+              <div class="ratio-label">GE cost</div>
+              <div class="ratio-track">
+                <div class="ratio-fill" style="width:114.6px;background:#e4aeae;border-color:#7f1d1d;"></div>
+                <div class="ratio-marker"></div>
+              </div>
+              <div class="ratio-value">114.6%</div>
+            </div>
+          
+        </div>
+      
+        <div class="ratio-card">
+          <h3>codex-53-xhigh-optimized</h3>
+          
+            <div class="ratio-row">
+              <div class="ratio-label">Solve time</div>
+              <div class="ratio-track">
+                <div class="ratio-fill" style="width:75.1px;background:#7dac8e;border-color:#14532d;"></div>
+                <div class="ratio-marker"></div>
+              </div>
+              <div class="ratio-value">75.1%</div>
+            </div>
+          
+            <div class="ratio-row">
+              <div class="ratio-label">Mission time</div>
+              <div class="ratio-track">
+                <div class="ratio-fill" style="width:106.2px;background:#f5d1d1;border-color:#7f1d1d;"></div>
+                <div class="ratio-marker"></div>
+              </div>
+              <div class="ratio-value">106.2%</div>
+            </div>
+          
+            <div class="ratio-row">
+              <div class="ratio-label">GE cost</div>
+              <div class="ratio-track">
+                <div class="ratio-fill" style="width:115.2px;background:#e2abab;border-color:#7f1d1d;"></div>
+                <div class="ratio-marker"></div>
+              </div>
+              <div class="ratio-value">115.2%</div>
+            </div>
+          
+        </div>
+      </div>
+  </section>
+
+    
+  <section>
+    <h2>Solver wall clock time Matrix</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Artifact</th>
+          <th>Mode</th>
+          <th>Priority</th>
+          <th>main (baseline)</th><th>gemini-3-optimized</th><th>claude-optimized</th><th>codex-53-xhigh-optimized</th>
+        </tr>
+      </thead>
+      <tbody><tr><td>Gilded book of Basan (Gilded)</td><td>Normal</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">79,302 ms</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">25,633 ms</div><div class="delta-note">-67.7%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">5,748 ms</div><div class="delta-note">-92.8%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">4,150 ms</div><div class="delta-note">-94.8%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>Normal</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">207,839 ms</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">38,603 ms</div><div class="delta-note">-81.4%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">8,548 ms</div><div class="delta-note">-95.9%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">18,162 ms</div><div class="delta-note">-91.3%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>Normal</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">65,313 ms</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">12,264 ms</div><div class="delta-note">-81.2%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">3,132 ms</div><div class="delta-note">-95.2%</div></td><td style="background:#f1c8c8;color:#7f1d1d;"><div class="metric-value">70,699 ms</div><div class="delta-note">+8.2%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>Fast</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">46,118 ms</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">1,444 ms</div><div class="delta-note">-96.9%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">54 ms</div><div class="delta-note">-99.9%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">7,202 ms</div><div class="delta-note">-84.4%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>Fast</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">129,102 ms</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">2,553 ms</div><div class="delta-note">-98.0%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">56 ms</div><div class="delta-note">-100.0%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">40,343 ms</div><div class="delta-note">-68.8%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>Fast</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">42,205 ms</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">1,034 ms</div><div class="delta-note">-97.6%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">56 ms</div><div class="delta-note">-99.9%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">18,265 ms</div><div class="delta-note">-56.7%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Normal</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">10,836 ms</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">3,319 ms</div><div class="delta-note">-69.4%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">1,042 ms</div><div class="delta-note">-90.4%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">542 ms</div><div class="delta-note">-95.0%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Normal</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">23,721 ms</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">6,857 ms</div><div class="delta-note">-71.1%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">1,382 ms</div><div class="delta-note">-94.2%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">3,005 ms</div><div class="delta-note">-87.3%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Normal</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">191 ms</div><div class="delta-note">baseline</div></td><td style="background:#296540;color:#f0fdf4;"><div class="metric-value">105 ms</div><div class="delta-note">-45.0%</div></td><td style="background:#bfe4cc;color:#14532d;"><div class="metric-value">174 ms</div><div class="delta-note">-8.9%</div></td><td style="background:#991b1b;color:#fef2f2;"><div class="metric-value">1,261 ms</div><div class="delta-note">+560.2%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Fast</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">11,203 ms</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">298 ms</div><div class="delta-note">-97.3%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">71 ms</div><div class="delta-note">-99.4%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">395 ms</div><div class="delta-note">-96.5%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Fast</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">17,875 ms</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">515 ms</div><div class="delta-note">-97.1%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">48 ms</div><div class="delta-note">-99.7%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">488 ms</div><div class="delta-note">-97.3%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Fast</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">119 ms</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">53 ms</div><div class="delta-note">-55.5%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">44 ms</div><div class="delta-note">-63.0%</div></td><td style="background:#991b1b;color:#fef2f2;"><div class="metric-value">571 ms</div><div class="delta-note">+379.8%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Normal</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">259,913 ms</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">58,401 ms</div><div class="delta-note">-77.5%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">5,654 ms</div><div class="delta-note">-97.8%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">16,764 ms</div><div class="delta-note">-93.6%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Normal</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">290,226 ms</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">66,690 ms</div><div class="delta-note">-77.0%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">22,705 ms</div><div class="delta-note">-92.2%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">132,582 ms</div><div class="delta-note">-54.3%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Normal</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">17,325 ms</div><div class="delta-note">baseline</div></td><td style="background:#195732;color:#f0fdf4;"><div class="metric-value">8,867 ms</div><div class="delta-note">-48.8%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">2,318 ms</div><div class="delta-note">-86.6%</div></td><td style="background:#8eba9f;color:#14532d;"><div class="metric-value">13,754 ms</div><div class="delta-note">-20.6%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Fast</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">152,775 ms</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">1,613 ms</div><div class="delta-note">-98.9%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">51 ms</div><div class="delta-note">-100.0%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">11,651 ms</div><div class="delta-note">-92.4%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Fast</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">172,365 ms</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">2,220 ms</div><div class="delta-note">-98.7%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">53 ms</div><div class="delta-note">-100.0%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">43,016 ms</div><div class="delta-note">-75.0%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Fast</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">7,834 ms</div><div class="delta-note">baseline</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">208 ms</div><div class="delta-note">-97.3%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">54 ms</div><div class="delta-note">-99.3%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">2,539 ms</div><div class="delta-note">-67.6%</div></td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Planned mission time Matrix</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Artifact</th>
+          <th>Mode</th>
+          <th>Priority</th>
+          <th>main (baseline)</th><th>gemini-3-optimized</th><th>claude-optimized</th><th>codex-53-xhigh-optimized</th>
+        </tr>
+      </thead>
+      <tbody><tr><td>Gilded book of Basan (Gilded)</td><td>Normal</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">662.40 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">662.40 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">662.40 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">662.40 h</div><div class="delta-note">0.0%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>Normal</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">662.40 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">662.40 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">662.40 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">662.40 h</div><div class="delta-note">0.0%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>Normal</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">1708.80 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1708.80 h</div><div class="delta-note">0.0%</div></td><td style="background:#a0c9af;color:#14532d;"><div class="metric-value">1427.20 h</div><div class="delta-note">-16.5%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1708.80 h</div><div class="delta-note">0.0%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>Fast</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">768.00 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">768.00 h</div><div class="delta-note">0.0%</div></td><td style="background:#d0f1db;color:#14532d;"><div class="metric-value">729.60 h</div><div class="delta-note">-5.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">768.00 h</div><div class="delta-note">0.0%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>Fast</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">768.00 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">768.00 h</div><div class="delta-note">0.0%</div></td><td style="background:#d0f1db;color:#14532d;"><div class="metric-value">729.60 h</div><div class="delta-note">-5.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">768.00 h</div><div class="delta-note">0.0%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>Fast</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">1152.00 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1152.00 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1152.00 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1152.00 h</div><div class="delta-note">0.0%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Normal</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">57.60 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">57.60 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">57.60 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">57.60 h</div><div class="delta-note">0.0%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Normal</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">57.60 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">57.60 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">57.60 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">57.60 h</div><div class="delta-note">0.0%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Normal</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">614.40 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">614.40 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">614.40 h</div><div class="delta-note">0.0%</div></td><td style="background:#4f8563;color:#f0fdf4;"><div class="metric-value">393.60 h</div><div class="delta-note">-35.9%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Fast</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">57.60 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">57.60 h</div><div class="delta-note">0.0%</div></td><td style="background:#598e6e;color:#f0fdf4;"><div class="metric-value">38.40 h</div><div class="delta-note">-33.3%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">57.60 h</div><div class="delta-note">0.0%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Fast</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">57.60 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">57.60 h</div><div class="delta-note">0.0%</div></td><td style="background:#598e6e;color:#f0fdf4;"><div class="metric-value">38.40 h</div><div class="delta-note">-33.3%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">57.60 h</div><div class="delta-note">0.0%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Fast</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">614.40 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">614.40 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">614.40 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">614.40 h</div><div class="delta-note">0.0%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Normal</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">192.00 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">192.00 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">192.00 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">192.00 h</div><div class="delta-note">0.0%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Normal</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">192.00 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">192.00 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">192.00 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">192.00 h</div><div class="delta-note">0.0%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Normal</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">652.80 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">652.80 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">652.80 h</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">652.80 h</div><div class="delta-note">0.0%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Fast</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">192.00 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">192.00 h</div><div class="delta-note">0.0%</div></td><td style="background:#91bda1;color:#14532d;"><div class="metric-value">153.60 h</div><div class="delta-note">-20.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">192.00 h</div><div class="delta-note">0.0%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Fast</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">192.00 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">192.00 h</div><div class="delta-note">0.0%</div></td><td style="background:#91bda1;color:#14532d;"><div class="metric-value">153.60 h</div><div class="delta-note">-20.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">192.00 h</div><div class="delta-note">0.0%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Fast</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">652.80 h</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">652.80 h</div><div class="delta-note">0.0%</div></td><td style="background:#cceed8;color:#14532d;"><div class="metric-value">614.40 h</div><div class="delta-note">-5.9%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">652.80 h</div><div class="delta-note">0.0%</div></td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Planned GE cost Matrix</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Artifact</th>
+          <th>Mode</th>
+          <th>Priority</th>
+          <th>main (baseline)</th><th>gemini-3-optimized</th><th>claude-optimized</th><th>codex-53-xhigh-optimized</th>
+        </tr>
+      </thead>
+      <tbody><tr><td>Gilded book of Basan (Gilded)</td><td>Normal</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">9,574,923 GE</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">9,400,461 GE</div><div class="delta-note">-1.8%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">9,408,806 GE</div><div class="delta-note">-1.7%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">9,476,469 GE</div><div class="delta-note">-1.0%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>Normal</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">9,387,796 GE</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">9,387,796 GE</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">9,392,165 GE</div><div class="delta-note">+0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">9,387,796 GE</div><div class="delta-note">0.0%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>Normal</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">1,264,771 GE</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,264,771 GE</div><div class="delta-note">0.0%</div></td><td style="background:#e6b3b3;color:#7f1d1d;"><div class="metric-value">1,433,816 GE</div><div class="delta-note">+13.4%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,264,771 GE</div><div class="delta-note">0.0%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>Fast</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">8,922,958 GE</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">8,872,093 GE</div><div class="delta-note">-0.6%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">8,913,348 GE</div><div class="delta-note">-0.1%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">8,945,011 GE</div><div class="delta-note">+0.2%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>Fast</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">8,074,569 GE</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">8,074,569 GE</div><div class="delta-note">0.0%</div></td><td style="background:#ecbfbf;color:#7f1d1d;"><div class="metric-value">8,913,348 GE</div><div class="delta-note">+10.4%</div></td><td style="background:#edc1c1;color:#7f1d1d;"><div class="metric-value">8,886,294 GE</div><div class="delta-note">+10.1%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>Fast</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">3,127,673 GE</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">3,127,673 GE</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">3,127,673 GE</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">3,127,673 GE</div><div class="delta-note">0.0%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Normal</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">1,169,268 GE</div><div class="delta-note">baseline</div></td><td style="background:#f1c8c8;color:#7f1d1d;"><div class="metric-value">1,265,729 GE</div><div class="delta-note">+8.2%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,169,268 GE</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,169,268 GE</div><div class="delta-note">0.0%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Normal</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">1,161,078 GE</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,167,236 GE</div><div class="delta-note">+0.5%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,167,236 GE</div><div class="delta-note">+0.5%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,161,078 GE</div><div class="delta-note">0.0%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Normal</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">0 GE</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">0 GE</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">0 GE</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">0 GE</div><div class="delta-note">0.0%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Fast</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">1,169,268 GE</div><div class="delta-note">baseline</div></td><td style="background:#f1c8c8;color:#7f1d1d;"><div class="metric-value">1,265,729 GE</div><div class="delta-note">+8.2%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,165,194 GE</div><div class="delta-note">-0.3%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,169,268 GE</div><div class="delta-note">0.0%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Fast</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">1,161,078 GE</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,167,236 GE</div><div class="delta-note">+0.5%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,165,194 GE</div><div class="delta-note">+0.4%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,161,078 GE</div><div class="delta-note">0.0%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>Fast</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">0 GE</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">0 GE</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">0 GE</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">0 GE</div><div class="delta-note">0.0%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Normal</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">3,574,302 GE</div><div class="delta-note">baseline</div></td><td style="background:#fadbdb;color:#7f1d1d;"><div class="metric-value">3,706,917 GE</div><div class="delta-note">+3.7%</div></td><td style="background:#fbdcdc;color:#7f1d1d;"><div class="metric-value">3,695,869 GE</div><div class="delta-note">+3.4%</div></td><td style="background:#fbdcdc;color:#7f1d1d;"><div class="metric-value">3,695,869 GE</div><div class="delta-note">+3.4%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Normal</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">3,501,438 GE</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">3,481,355 GE</div><div class="delta-note">-0.6%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">3,481,355 GE</div><div class="delta-note">-0.6%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">3,501,438 GE</div><div class="delta-note">0.0%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Normal</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">810,284 GE</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">810,284 GE</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">810,284 GE</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">810,284 GE</div><div class="delta-note">0.0%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Fast</td><td>100% Time</td><td class="baseline-cell"><div class="metric-value">3,574,302 GE</div><div class="delta-note">baseline</div></td><td style="background:#fadbdb;color:#7f1d1d;"><div class="metric-value">3,706,917 GE</div><div class="delta-note">+3.7%</div></td><td style="background:#e8b7b7;color:#7f1d1d;"><div class="metric-value">4,016,541 GE</div><div class="delta-note">+12.4%</div></td><td style="background:#fbdcdc;color:#7f1d1d;"><div class="metric-value">3,695,869 GE</div><div class="delta-note">+3.4%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Fast</td><td>50/50</td><td class="baseline-cell"><div class="metric-value">3,501,438 GE</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">3,481,355 GE</div><div class="delta-note">-0.6%</div></td><td style="background:#e3adad;color:#7f1d1d;"><div class="metric-value">4,016,541 GE</div><div class="delta-note">+14.7%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">3,504,385 GE</div><div class="delta-note">+0.1%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>Fast</td><td>100% GE</td><td class="baseline-cell"><div class="metric-value">810,284 GE</div><div class="delta-note">baseline</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">810,284 GE</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">810,284 GE</div><div class="delta-note">0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">810,284 GE</div><div class="delta-note">0.0%</div></td></tr></tbody>
+    </table>
+  </section>
+
+    
+  <section>
+    <h2>Fast vs Normal: Solve time</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Artifact</th>
+          <th>Priority</th>
+          <th>main (baseline)</th><th>gemini-3-optimized</th><th>claude-optimized</th><th>codex-53-xhigh-optimized</th>
+        </tr>
+      </thead>
+      <tbody><tr><td>Gilded book of Basan (Gilded)</td><td>100% Time</td><td style="background:#36704d;color:#f0fdf4;"><div class="metric-value">46,118 ms</div><div class="delta-note">vs normal -41.8%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">1,444 ms</div><div class="delta-note">vs normal -94.4%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">54 ms</div><div class="delta-note">vs normal -99.1%</div></td><td style="background:#991b1b;color:#fef2f2;"><div class="metric-value">7,202 ms</div><div class="delta-note">vs normal +73.5%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>50/50</td><td style="background:#467e5c;color:#f0fdf4;"><div class="metric-value">129,102 ms</div><div class="delta-note">vs normal -37.9%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">2,553 ms</div><div class="delta-note">vs normal -93.4%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">56 ms</div><div class="delta-note">vs normal -99.3%</div></td><td style="background:#991b1b;color:#fef2f2;"><div class="metric-value">40,343 ms</div><div class="delta-note">vs normal +122.1%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>100% GE</td><td style="background:#518666;color:#f0fdf4;"><div class="metric-value">42,205 ms</div><div class="delta-note">vs normal -35.4%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">1,034 ms</div><div class="delta-note">vs normal -91.6%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">56 ms</div><div class="delta-note">vs normal -98.2%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">18,265 ms</div><div class="delta-note">vs normal -74.2%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>100% Time</td><td style="background:#fbdcdc;color:#7f1d1d;"><div class="metric-value">11,203 ms</div><div class="delta-note">vs normal +3.4%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">298 ms</div><div class="delta-note">vs normal -91.0%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">71 ms</div><div class="delta-note">vs normal -93.2%</div></td><td style="background:#73a486;color:#14532d;"><div class="metric-value">395 ms</div><div class="delta-note">vs normal -27.1%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>50/50</td><td style="background:#7eac8f;color:#14532d;"><div class="metric-value">17,875 ms</div><div class="delta-note">vs normal -24.6%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">515 ms</div><div class="delta-note">vs normal -92.5%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">48 ms</div><div class="delta-note">vs normal -96.5%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">488 ms</div><div class="delta-note">vs normal -83.8%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>100% GE</td><td style="background:#477e5d;color:#f0fdf4;"><div class="metric-value">119 ms</div><div class="delta-note">vs normal -37.7%</div></td><td style="background:#16552f;color:#f0fdf4;"><div class="metric-value">53 ms</div><div class="delta-note">vs normal -49.5%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">44 ms</div><div class="delta-note">vs normal -74.7%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">571 ms</div><div class="delta-note">vs normal -54.7%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>100% Time</td><td style="background:#39724f;color:#f0fdf4;"><div class="metric-value">152,775 ms</div><div class="delta-note">vs normal -41.2%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">1,613 ms</div><div class="delta-note">vs normal -97.2%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">51 ms</div><div class="delta-note">vs normal -99.1%</div></td><td style="background:#659879;color:#14532d;"><div class="metric-value">11,651 ms</div><div class="delta-note">vs normal -30.5%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>50/50</td><td style="background:#3b7451;color:#f0fdf4;"><div class="metric-value">172,365 ms</div><div class="delta-note">vs normal -40.6%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">2,220 ms</div><div class="delta-note">vs normal -96.7%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">53 ms</div><div class="delta-note">vs normal -99.8%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">43,016 ms</div><div class="delta-note">vs normal -67.6%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>100% GE</td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">7,834 ms</div><div class="delta-note">vs normal -54.8%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">208 ms</div><div class="delta-note">vs normal -97.7%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">54 ms</div><div class="delta-note">vs normal -97.7%</div></td><td style="background:#14532d;color:#f0fdf4;"><div class="metric-value">2,539 ms</div><div class="delta-note">vs normal -81.5%</div></td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Fast vs Normal: Mission time</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Artifact</th>
+          <th>Priority</th>
+          <th>main (baseline)</th><th>gemini-3-optimized</th><th>claude-optimized</th><th>codex-53-xhigh-optimized</th>
+        </tr>
+      </thead>
+      <tbody><tr><td>Gilded book of Basan (Gilded)</td><td>100% Time</td><td style="background:#e1a8a8;color:#7f1d1d;"><div class="metric-value">768.00 h</div><div class="delta-note">vs normal +15.9%</div></td><td style="background:#e1a8a8;color:#7f1d1d;"><div class="metric-value">768.00 h</div><div class="delta-note">vs normal +15.9%</div></td><td style="background:#edc0c0;color:#7f1d1d;"><div class="metric-value">729.60 h</div><div class="delta-note">vs normal +10.1%</div></td><td style="background:#e1a8a8;color:#7f1d1d;"><div class="metric-value">768.00 h</div><div class="delta-note">vs normal +15.9%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>50/50</td><td style="background:#e1a8a8;color:#7f1d1d;"><div class="metric-value">768.00 h</div><div class="delta-note">vs normal +15.9%</div></td><td style="background:#e1a8a8;color:#7f1d1d;"><div class="metric-value">768.00 h</div><div class="delta-note">vs normal +15.9%</div></td><td style="background:#edc0c0;color:#7f1d1d;"><div class="metric-value">729.60 h</div><div class="delta-note">vs normal +10.1%</div></td><td style="background:#e1a8a8;color:#7f1d1d;"><div class="metric-value">768.00 h</div><div class="delta-note">vs normal +15.9%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>100% GE</td><td style="background:#5d9070;color:#f0fdf4;"><div class="metric-value">1152.00 h</div><div class="delta-note">vs normal -32.6%</div></td><td style="background:#5d9070;color:#f0fdf4;"><div class="metric-value">1152.00 h</div><div class="delta-note">vs normal -32.6%</div></td><td style="background:#94bfa4;color:#14532d;"><div class="metric-value">1152.00 h</div><div class="delta-note">vs normal -19.3%</div></td><td style="background:#5d9070;color:#f0fdf4;"><div class="metric-value">1152.00 h</div><div class="delta-note">vs normal -32.6%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>100% Time</td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">57.60 h</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">57.60 h</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#598e6e;color:#f0fdf4;"><div class="metric-value">38.40 h</div><div class="delta-note">vs normal -33.3%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">57.60 h</div><div class="delta-note">vs normal 0.0%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>50/50</td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">57.60 h</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">57.60 h</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#598e6e;color:#f0fdf4;"><div class="metric-value">38.40 h</div><div class="delta-note">vs normal -33.3%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">57.60 h</div><div class="delta-note">vs normal 0.0%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>100% GE</td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">614.40 h</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">614.40 h</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">614.40 h</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#991b1b;color:#fef2f2;"><div class="metric-value">614.40 h</div><div class="delta-note">vs normal +56.1%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>100% Time</td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">192.00 h</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">192.00 h</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#91bda1;color:#14532d;"><div class="metric-value">153.60 h</div><div class="delta-note">vs normal -20.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">192.00 h</div><div class="delta-note">vs normal 0.0%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>50/50</td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">192.00 h</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">192.00 h</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#91bda1;color:#14532d;"><div class="metric-value">153.60 h</div><div class="delta-note">vs normal -20.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">192.00 h</div><div class="delta-note">vs normal 0.0%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>100% GE</td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">652.80 h</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">652.80 h</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#cceed8;color:#14532d;"><div class="metric-value">614.40 h</div><div class="delta-note">vs normal -5.9%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">652.80 h</div><div class="delta-note">vs normal 0.0%</div></td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Fast vs Normal: GE cost</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Artifact</th>
+          <th>Priority</th>
+          <th>main (baseline)</th><th>gemini-3-optimized</th><th>claude-optimized</th><th>codex-53-xhigh-optimized</th>
+        </tr>
+      </thead>
+      <tbody><tr><td>Gilded book of Basan (Gilded)</td><td>100% Time</td><td style="background:#c8ebd4;color:#14532d;"><div class="metric-value">8,922,958 GE</div><div class="delta-note">vs normal -6.8%</div></td><td style="background:#cdefd9;color:#14532d;"><div class="metric-value">8,872,093 GE</div><div class="delta-note">vs normal -5.6%</div></td><td style="background:#cef1da;color:#14532d;"><div class="metric-value">8,913,348 GE</div><div class="delta-note">vs normal -5.3%</div></td><td style="background:#cdefd9;color:#14532d;"><div class="metric-value">8,945,011 GE</div><div class="delta-note">vs normal -5.6%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>50/50</td><td style="background:#aad2b9;color:#14532d;"><div class="metric-value">8,074,569 GE</div><div class="delta-note">vs normal -14.0%</div></td><td style="background:#aad2b9;color:#14532d;"><div class="metric-value">8,074,569 GE</div><div class="delta-note">vs normal -14.0%</div></td><td style="background:#cff1db;color:#14532d;"><div class="metric-value">8,913,348 GE</div><div class="delta-note">vs normal -5.1%</div></td><td style="background:#cef0da;color:#14532d;"><div class="metric-value">8,886,294 GE</div><div class="delta-note">vs normal -5.3%</div></td></tr><tr><td>Gilded book of Basan (Gilded)</td><td>100% GE</td><td style="background:#991b1b;color:#fef2f2;"><div class="metric-value">3,127,673 GE</div><div class="delta-note">vs normal +147.3%</div></td><td style="background:#991b1b;color:#fef2f2;"><div class="metric-value">3,127,673 GE</div><div class="delta-note">vs normal +147.3%</div></td><td style="background:#991b1b;color:#fef2f2;"><div class="metric-value">3,127,673 GE</div><div class="delta-note">vs normal +118.1%</div></td><td style="background:#991b1b;color:#fef2f2;"><div class="metric-value">3,127,673 GE</div><div class="delta-note">vs normal +147.3%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>100% Time</td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,169,268 GE</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,265,729 GE</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,165,194 GE</div><div class="delta-note">vs normal -0.3%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,169,268 GE</div><div class="delta-note">vs normal 0.0%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>50/50</td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,161,078 GE</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,167,236 GE</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,165,194 GE</div><div class="delta-note">vs normal -0.2%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">1,161,078 GE</div><div class="delta-note">vs normal 0.0%</div></td></tr><tr><td>Reggference titanium actuator (Reggference)</td><td>100% GE</td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">0 GE</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">0 GE</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">0 GE</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">0 GE</div><div class="delta-note">vs normal 0.0%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>100% Time</td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">3,574,302 GE</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">3,706,917 GE</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f0c6c6;color:#7f1d1d;"><div class="metric-value">4,016,541 GE</div><div class="delta-note">vs normal +8.7%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">3,695,869 GE</div><div class="delta-note">vs normal 0.0%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>50/50</td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">3,501,438 GE</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">3,481,355 GE</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#e2abab;color:#7f1d1d;"><div class="metric-value">4,016,541 GE</div><div class="delta-note">vs normal +15.4%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">3,504,385 GE</div><div class="delta-note">vs normal +0.1%</div></td></tr><tr><td>Brilliant light of Eggendil (Brilliant)</td><td>100% GE</td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">810,284 GE</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">810,284 GE</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">810,284 GE</div><div class="delta-note">vs normal 0.0%</div></td><td style="background:#f8fafc;color:#334155;"><div class="metric-value">810,284 GE</div><div class="delta-note">vs normal 0.0%</div></td></tr></tbody>
+    </table>
+  </section>
+  </main>
+</body>
+</html>

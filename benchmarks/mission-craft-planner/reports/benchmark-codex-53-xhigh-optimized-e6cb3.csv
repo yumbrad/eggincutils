@@ -1,0 +1,19 @@
+target_item_id,target_label,solve_mode,fast_mode,priority_label,priority_time,wall_ms,expected_hours,ge_cost,solve_path
+book-of-basan-4,Gilded book of Basan (Gilded),Normal,false,100% Time,1,4150,662.400000,9476469.000000,primary
+book-of-basan-4,Gilded book of Basan (Gilded),Normal,false,50/50,0.5,18162,662.400000,9387796.000000,primary
+book-of-basan-4,Gilded book of Basan (Gilded),Normal,false,100% GE,0,70699,1708.800000,1264771.000000,primary
+book-of-basan-4,Gilded book of Basan (Gilded),"Faster, less optimal solve",true,100% Time,1,7202,768.000000,8945011.000000,primary
+book-of-basan-4,Gilded book of Basan (Gilded),"Faster, less optimal solve",true,50/50,0.5,40343,768.000000,8886294.000000,primary
+book-of-basan-4,Gilded book of Basan (Gilded),"Faster, less optimal solve",true,100% GE,0,18265,1152.000000,3127673.000000,primary
+titanium-actuator-4,Reggference titanium actuator (Reggference),Normal,false,100% Time,1,542,57.600000,1169268.000000,primary
+titanium-actuator-4,Reggference titanium actuator (Reggference),Normal,false,50/50,0.5,3005,57.600000,1161078.000000,primary
+titanium-actuator-4,Reggference titanium actuator (Reggference),Normal,false,100% GE,0,1261,393.600000,0.000000,primary
+titanium-actuator-4,Reggference titanium actuator (Reggference),"Faster, less optimal solve",true,100% Time,1,395,57.600000,1169268.000000,primary
+titanium-actuator-4,Reggference titanium actuator (Reggference),"Faster, less optimal solve",true,50/50,0.5,488,57.600000,1161078.000000,primary
+titanium-actuator-4,Reggference titanium actuator (Reggference),"Faster, less optimal solve",true,100% GE,0,571,614.400000,0.000000,primary
+light-of-eggendil-4,Brilliant light of Eggendil (Brilliant),Normal,false,100% Time,1,16764,192.000000,3695869.000000,primary
+light-of-eggendil-4,Brilliant light of Eggendil (Brilliant),Normal,false,50/50,0.5,132582,192.000000,3501438.000000,primary
+light-of-eggendil-4,Brilliant light of Eggendil (Brilliant),Normal,false,100% GE,0,13754,652.800000,810284.000000,primary
+light-of-eggendil-4,Brilliant light of Eggendil (Brilliant),"Faster, less optimal solve",true,100% Time,1,11651,192.000000,3695869.000000,primary
+light-of-eggendil-4,Brilliant light of Eggendil (Brilliant),"Faster, less optimal solve",true,50/50,0.5,43016,192.000000,3504385.000000,primary
+light-of-eggendil-4,Brilliant light of Eggendil (Brilliant),"Faster, less optimal solve",true,100% GE,0,2539,652.800000,810284.000000,primary
