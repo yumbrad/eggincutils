@@ -1,4 +1,5 @@
 import { formatZodIssues, planApiResponseSchema, planRequestSchema, playerProfileSchema } from "../../../lib/api-schemas";
+import { createDemoProfile, isBlankEid } from "../../../lib/demo-profile";
 import { LootDataError } from "../../../lib/loot-data";
 import { getPlayerProfile } from "../../../lib/profile";
 import { MissionCoverageError, planForTarget } from "../../../lib/planner";
@@ -25,7 +26,9 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   try {
-    const profile = await getPlayerProfile(parsedPayload.data.eid, parsedPayload.data.includeSlotted);
+    const profile = isBlankEid(parsedPayload.data.eid)
+      ? createDemoProfile()
+      : await getPlayerProfile(parsedPayload.data.eid, parsedPayload.data.includeSlotted);
     const validatedProfile = playerProfileSchema.safeParse(profile);
     if (!validatedProfile.success) {
       return new Response(

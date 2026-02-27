@@ -70,6 +70,15 @@
   color: var(--muted);
 }
 
+.sortCheckbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .sortButton {
   background: color-mix(in oklab, var(--panel), var(--bg-a) 30%);
   border-color: var(--stroke);

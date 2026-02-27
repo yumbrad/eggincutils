@@ -7,6 +7,7 @@ export const LOCAL_PREF_KEYS = {
   plannerQuantity: "eggincutils-planner-quantity",
   plannerPriorityTimePct: "eggincutils-planner-priority-time-pct",
   plannerFastMode: "eggincutils-planner-fast-mode",
+  plannerDemoNoticeDismissed: "eggincutils-planner-demo-notice-dismissed",
 } as const;
 
 export function readFirstStoredString(keys: readonly string[]): string | null {

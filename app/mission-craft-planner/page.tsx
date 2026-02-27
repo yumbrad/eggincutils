@@ -687,6 +687,18 @@ function buildReplanDeltas(previous: ProfileSnapshot, current: ProfileSnapshot):
   return { observedReturns, missionLaunches };
 }
 
+function buildDemoProfileSnapshot(response: PlanResponse): ProfileSnapshot {
+  return {
+    eid: "DEMO",
+    inventory: {},
+    craftCounts: {},
+    epicResearchFTLLevel: response.profile.epicResearchFTLLevel,
+    epicResearchZerogLevel: response.profile.epicResearchZerogLevel,
+    shipLevels: [],
+    missionOptions: [],
+  };
+}
+
 export default function MissionCraftPlannerPage() {
   const [eid, setEid] = useState("");
   const [targetItemId, setTargetItemId] = useState("soul-stone-2");
@@ -705,8 +717,12 @@ export default function MissionCraftPlannerPage() {
   const [planningStartedAtMs, setPlanningStartedAtMs] = useState<number | null>(null);
   const [response, setResponse] = useState<PlanResponse | null>(null);
   const [profileSnapshot, setProfileSnapshot] = useState<ProfileSnapshot | null>(null);
+  const [demoNoticeDismissed, setDemoNoticeDismissed] = useState(false);
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   const targetPickerRef = useRef<HTMLDivElement | null>(null);
+  const trimmedEid = eid.trim();
+  const isDemoMode = trimmedEid.length === 0;
+  const showDemoNotice = isDemoMode && !demoNoticeDismissed;
 
   const targetOptions = useMemo(() => {
     const recipeMap = recipes as Record<string, unknown>;
@@ -931,6 +947,10 @@ export default function MissionCraftPlannerPage() {
       if (savedFastMode != null) {
         setFastMode(savedFastMode);
       }
+      const savedDemoNoticeDismissed = readStoredBoolean([LOCAL_PREF_KEYS.plannerDemoNoticeDismissed]);
+      if (savedDemoNoticeDismissed != null) {
+        setDemoNoticeDismissed(savedDemoNoticeDismissed);
+      }
     } catch {
       // Ignore localStorage hydration errors.
     } finally {
@@ -1051,6 +1071,17 @@ export default function MissionCraftPlannerPage() {
     }
   }, [fastMode, prefsLoaded]);
 
+  useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
+    try {
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerDemoNoticeDismissed], demoNoticeDismissed);
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [demoNoticeDismissed, prefsLoaded]);
+
   async function runBuildPlan() {
     setError(null);
     setRefreshSummary(null);
@@ -1067,7 +1098,7 @@ export default function MissionCraftPlannerPage() {
     });
 
     try {
-      writeStoredString(SHARED_EID_KEYS, eid.trim());
+      writeStoredString(SHARED_EID_KEYS, trimmedEid);
       writeStoredBoolean(SHARED_INCLUDE_SLOTTED_KEYS, includeSlotted);
       writeStoredString([LOCAL_PREF_KEYS.plannerTargetItemId], targetItemId);
       writeStoredString([LOCAL_PREF_KEYS.plannerQuantity], String(quantity));
@@ -1075,7 +1106,7 @@ export default function MissionCraftPlannerPage() {
       writeStoredBoolean([LOCAL_PREF_KEYS.plannerFastMode], fastMode);
 
       const requestPayload = {
-        eid,
+        eid: trimmedEid,
         targetItemId,
         quantity,
         priorityTime: priorityTimePct / 100,
@@ -1181,8 +1212,12 @@ export default function MissionCraftPlannerPage() {
         throw new Error("planning stream completed without a result");
       }
       setResponse(streamResult);
-      const snapshot = await fetchProfileSnapshot(eid, includeSlotted);
-      setProfileSnapshot(snapshot);
+      if (isDemoMode) {
+        setProfileSnapshot(buildDemoProfileSnapshot(streamResult));
+      } else {
+        const snapshot = await fetchProfileSnapshot(trimmedEid, includeSlotted);
+        setProfileSnapshot(snapshot);
+      }
     } catch (caught) {
       const message = caught instanceof Error && caught.message ? caught.message : "planning request failed";
       setError(message);
@@ -1197,13 +1232,17 @@ export default function MissionCraftPlannerPage() {
     if (!response) {
       return;
     }
+    if (isDemoMode) {
+      setError("Live refresh is unavailable in demo mode. Enter your EID to replan from your account data.");
+      return;
+    }
 
     setError(null);
     setRefreshSummary(null);
     setRefreshing(true);
 
     try {
-      const liveProfile = await fetchProfileSnapshot(eid, includeSlotted);
+      const liveProfile = await fetchProfileSnapshot(trimmedEid, includeSlotted);
       const baselineProfile = profileSnapshot || liveProfile;
       const deltas = buildReplanDeltas(baselineProfile, liveProfile);
 
@@ -1368,10 +1407,12 @@ export default function MissionCraftPlannerPage() {
               type="text"
               value={eid}
               onChange={(event) => setEid(event.target.value)}
-              placeholder="EI123..."
+              placeholder="EI123... (leave blank for demo mode)"
               autoComplete="off"
-              required
             />
+            <div className="muted" style={{ fontSize: 12 }}>
+              Enter your EID for personalized plans, or leave blank to run a demo profile.
+            </div>
           </div>
 
           <div className="field" style={{ minWidth: 280, flex: 2 }} ref={targetPickerRef}>
@@ -1476,6 +1517,30 @@ export default function MissionCraftPlannerPage() {
           </div>
         </div>
 
+        {showDemoNotice && (
+          <div
+            style={{
+              marginTop: 12,
+              padding: 10,
+              borderRadius: 10,
+              border: "1px solid var(--stroke)",
+              background: "color-mix(in oklab, var(--panel), var(--accent) 8%)",
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              gap: 12,
+            }}
+          >
+            <div className="muted" style={{ fontSize: 13 }}>
+              Demo mode is active. This runs with an empty inventory plus maxed research and ship levels to show how the planner
+              works. For customized advice, enter your EID.
+            </div>
+            <button type="button" onClick={() => setDemoNoticeDismissed(true)} style={{ whiteSpace: "nowrap" }}>
+              Dismiss
+            </button>
+          </div>
+        )}
+
         <div className="row" style={{ marginTop: 10, alignItems: "end" }}>
           <div className="field" style={{ minWidth: 340, flex: 1 }}>
             <label htmlFor="priority">Optimization priority ({priorityTimePct}% time / {100 - priorityTimePct}% GE)</label>
@@ -1521,7 +1586,7 @@ export default function MissionCraftPlannerPage() {
           <button type="submit" disabled={loading}>
             {loading ? "Planning..." : "Build plan"}
           </button>
-          <button type="button" disabled={loading || refreshing || !response} onClick={onRefreshFromLive}>
+          <button type="button" disabled={loading || refreshing || !response || isDemoMode} onClick={onRefreshFromLive}>
             {refreshing ? "Replanning..." : "Replan after ship returns"}
           </button>
         </div>

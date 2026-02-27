@@ -52,7 +52,7 @@ export type ProfileQuery = z.infer<typeof profileQuerySchema>;
 
 export const planRequestSchema = z
   .object({
-    eid: z.string().trim().min(1, "eid is required"),
+    eid: z.string().trim().default(""),
     targetItemId: z.string().trim().min(1, "targetItemId is required"),
     quantity: z.coerce
       .number()
