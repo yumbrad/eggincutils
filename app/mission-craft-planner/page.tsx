@@ -1743,13 +1743,13 @@ export default function MissionCraftPlannerPage() {
             </div>
             <div className={styles.sourceMatrix} role="group" aria-label="Ingredient source filters">
               <span className={styles.matrixSpacer} aria-hidden="true" />
-              <span className={styles.matrixHeader} title="Rare shiny">
+              <span className={`${styles.matrixHeader} ${styles.matrixHeaderRare}`} title="Rare shiny">
                 R
               </span>
-              <span className={styles.matrixHeader} title="Epic shiny">
+              <span className={`${styles.matrixHeader} ${styles.matrixHeaderEpic}`} title="Epic shiny">
                 E
               </span>
-              <span className={styles.matrixHeader} title="Legendary shiny">
+              <span className={`${styles.matrixHeader} ${styles.matrixHeaderLegendary}`} title="Legendary shiny">
                 L
               </span>
               <span className={styles.matrixHeader} title="Slotted stones">

@@ -153,6 +153,18 @@
   text-align: center;
 }
 
+.matrixHeaderRare {
+  color: #4aa3ff;
+}
+
+.matrixHeaderEpic {
+  color: #b78cff;
+}
+
+.matrixHeaderLegendary {
+  color: #f7c548;
+}
+
 .matrixRowLabel {
   font-size: 12px;
   color: var(--ink);
