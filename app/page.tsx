@@ -29,15 +29,15 @@ const cards = [
 export default function HomePage() {
   return (
     <main className="page">
-      <div className="panel brand-panel home-brand-panel" style={{ marginBottom: 14 }}>
-        <div className="home-hamster-accent" aria-hidden="true">
-          <Image src="/media/hamster_egg_poly.png" alt="" width={768} height={1024} className="home-hamster" priority />
+      <div className="home-brand-shell" style={{ marginBottom: 14 }}>
+        <div className="home-brand-illustration" aria-hidden="true">
+          <Image src="/media/hens_in_space_full.png" alt="" width={1024} height={1024} className="home-brand-illustration-image"  />
         </div>
-        <div className="home-brand-copy">
-          <p className="brand-kicker">Egg Inc. Chicken-to-consumer Layer Optimization Layer (C2C-LOL)™</p>
-          <p className="brand-kicker">with Dilithium Enterprise Resource Planning (DERP™)</p>
-          <h1 className="brand-title">techyum&apos;s eggy tools</h1>
-        </div>
+          <div className="home-brand-copy">
+            <p className="brand-kicker">techyum's Chicken-to-consumer Layer Optimization Layer (C2C-LOL)™</p>
+
+            <h1 className="brand-title">Hens in Space</h1>
+          </div>
       </div>
 
       <section className="grid cards" aria-label="Utility links">

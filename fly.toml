@@ -12,6 +12,7 @@ swap_size_mb = 512
   LOOT_DATA_CACHE_FILE = "/data/eggincutils-loot-cache.json"
   # Keep Node memory in check for the 512MB RAM tier
   NODE_OPTIONS = "--max-old-space-size=768"
+  NEXT_PUBLIC_SITE_URL = "https://HensIn.space"
 
 [build]
 
