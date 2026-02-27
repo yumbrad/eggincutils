@@ -58,7 +58,7 @@
 }
 
 .toggleGroup button.active {
-  background: var(--button-bg);
+  background: var(--button-active);
   color: var(--button-ink);
 }
 

@@ -29,6 +29,7 @@
   --field: #0b131d;
   --field-ink: #e5edff;
   --button-bg: #15263b;
+  --button-active: #ff5f69;  
   --button-bg-hover: #1c3350;
   --button-ink: #e6efff;
   --panel-shadow: 0 2px 15px rgba(0, 0, 0, 0.92);
@@ -71,6 +72,7 @@
   --field-ink: #1f3049;
   --button-bg: #ffc770;
   --button-bg-hover: #ffd99f;
+  --button-active: #ffc770;  
   --button-ink: #3e2a10;
   --panel-shadow: 0 8px 30px rgba(20, 26, 39, 0.08);
   --card-hover-border: #db9c49;
@@ -100,6 +102,30 @@ body {
   background-repeat: var(--bg-repeat);
   background-blend-mode: var(--bg-blend);
   background-attachment: fixed;
+}
+
+:root:not([data-theme="light"]) .brand-title {
+  margin: 0;
+  font-family: var(--font-brand-title);
+  letter-spacing: -0.09em;
+  transform: scaley(0.6);
+  transform-origin: top left;
+  text-transform: uppercase;
+  font-size: 5rem;
+  color: #efb500; /* Primary text color */
+  text-shadow:
+      
+    2px 8px 0 #b52214, /* Pink shadow */
+    4px 16px 0 #367084, /* Dark blue shadow */
+    6px 24px 0 #151b27; /* Dark blue shadow */
+
+/*      0px 6px 0 #e77b24, /* Orange shadow */
+/*    0px 12px 0 #e14a00, /* Pink shadow */
+/*    0px 18px 0 #ab0b98, /* Dark blue shadow */
+/*    0px 24px 0 #5c26ba, /* Dark blue shadow */
+/*    0px 30px 0 #040266; /* Dark blue shadow */
+
+
 }
 
 :root:not([data-theme="light"]) .panel {
@@ -397,9 +423,29 @@ button:disabled {
   transform: translateY(4px);
 }
 
-.brand-header[data-compact="1"] .brand-title {
-  font-size: 28px;
-}
+  .brand-header[data-compact="1"] .brand-title {
+  margin: 0;
+  font-family: var(--font-brand-title);
+  letter-spacing: -0.09em;
+  transform: scaley(0.6);
+  transform-origin: top left;
+  text-transform: ;
+  color: #efb500; /* Primary text color */
+  text-shadow:
+      
+    1px 2px 0 #b52214, /* Pink shadow */
+    2px 4px 0 #367084, /* Dark blue shadow */
+    3px 6px 0 #151b27; /* Dark blue shadow */
+
+/*      0px 6px 0 #e77b24, /* Orange shadow */
+/*    0px 12px 0 #e14a00, /* Pink shadow */
+/*    0px 18px 0 #ab0b98, /* Dark blue shadow */
+/*    0px 24px 0 #5c26ba, /* Dark blue shadow */
+/*    0px 30px 0 #040266; /* Dark blue shadow */
+
+
+    font-size: 26px;
+  }
 
 .tool-card-title {
   font-family: var(--font-ui);
@@ -532,6 +578,30 @@ th {
     min-height: clamp(140px, 36vw, 174px);
   }
 
+  :root:not([data-theme="light"]) .brand-title {
+  margin: 0;
+  font-family: var(--font-brand-title);
+  letter-spacing: -0.09em;
+  transform: scaley(0.6);
+  transform-origin: top left;
+  text-transform: uppercase;
+  font-size: 5rem;
+  color: #efb500; /* Primary text color */
+  text-shadow:
+      
+    1px 2px 0 #b52214, /* Pink shadow */
+    2px 4px 0 #367084, /* Dark blue shadow */
+    3px 8px 0 #151b27; /* Dark blue shadow */
+
+/*      0px 6px 0 #e77b24, /* Orange shadow */
+/*    0px 12px 0 #e14a00, /* Pink shadow */
+/*    0px 18px 0 #ab0b98, /* Dark blue shadow */
+/*    0px 24px 0 #5c26ba, /* Dark blue shadow */
+/*    0px 30px 0 #040266; /* Dark blue shadow */
+      
+    font-size: 28px;
+  }
+
   .brand-title {
   margin: 0;
   font-family: var(--font-brand-title);
@@ -543,18 +613,19 @@ th {
   color: #efb500; /* Primary text color */
   text-shadow:
       
-    1px 4px 0 #b52214, /* Pink shadow */
-    2px 8px 0 #367084, /* Dark blue shadow */
-    3px 12px 0 #151b27; /* Dark blue shadow */
+    1px 1px 0 #b52214, /* Pink shadow */
+    2px 2px 0 #367084, /* Dark blue shadow */
+    3px 3px 0 #151b27; /* Dark blue shadow */
 
 /*      0px 6px 0 #e77b24, /* Orange shadow */
 /*    0px 12px 0 #e14a00, /* Pink shadow */
 /*    0px 18px 0 #ab0b98, /* Dark blue shadow */
 /*    0px 24px 0 #5c26ba, /* Dark blue shadow */
 /*    0px 30px 0 #040266; /* Dark blue shadow */
-      
-    font-size: 28px;
-  }
+
+
+}
+
 
   .brand-header[data-compact="1"] .brand-mark-shell {
     width: 58px;
@@ -567,6 +638,26 @@ th {
   }
 
   .brand-header[data-compact="1"] .brand-title {
+  margin: 0;
+  font-family: var(--font-brand-title);
+  letter-spacing: -0.09em;
+  transform: scaley(0.6);
+  transform-origin: top left;
+  text-transform: ;
+  color: #efb500; /* Primary text color */
+  text-shadow:
+      
+    1px 2px 0 #b52214, /* Pink shadow */
+    2px 4px 0 #367084, /* Dark blue shadow */
+    3px 6px 0 #151b27; /* Dark blue shadow */
+
+/*      0px 6px 0 #e77b24, /* Orange shadow */
+/*    0px 12px 0 #e14a00, /* Pink shadow */
+/*    0px 18px 0 #ab0b98, /* Dark blue shadow */
+/*    0px 24px 0 #5c26ba, /* Dark blue shadow */
+/*    0px 30px 0 #040266; /* Dark blue shadow */
+
+
     font-size: 26px;
   }
 

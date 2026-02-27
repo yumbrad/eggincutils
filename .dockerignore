@@ -6,3 +6,8 @@
 **/*.tsbuildinfo
 **/local_data
 fly.toml
+
+# Emacs temp/lock/autosave files
+**/*~
+**/#*#
+**/.#*
