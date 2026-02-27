@@ -28,7 +28,13 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const profile = isBlankEid(parsedPayload.data.eid)
       ? createDemoProfile()
-      : await getPlayerProfile(parsedPayload.data.eid, parsedPayload.data.includeSlotted);
+      : await getPlayerProfile(parsedPayload.data.eid, parsedPayload.data.includeSlotted, {
+          includeArtifactRarities: {
+            rare: parsedPayload.data.includeInventoryRare,
+            epic: parsedPayload.data.includeInventoryEpic,
+            legendary: parsedPayload.data.includeInventoryLegendary,
+          },
+        });
     const validatedProfile = playerProfileSchema.safeParse(profile);
     if (!validatedProfile.success) {
       return new Response(
@@ -44,7 +50,14 @@ export async function POST(request: Request): Promise<Response> {
       parsedPayload.data.targetItemId,
       parsedPayload.data.quantity,
       parsedPayload.data.priorityTime,
-      { fastMode: parsedPayload.data.fastMode }
+      {
+        fastMode: parsedPayload.data.fastMode,
+        missionDropRarities: {
+          rare: parsedPayload.data.includeDropRare,
+          epic: parsedPayload.data.includeDropEpic,
+          legendary: parsedPayload.data.includeDropLegendary,
+        },
+      }
     );
 
     const responsePayload = {

@@ -7,6 +7,12 @@ export const LOCAL_PREF_KEYS = {
   plannerQuantity: "eggincutils-planner-quantity",
   plannerPriorityTimePct: "eggincutils-planner-priority-time-pct",
   plannerFastMode: "eggincutils-planner-fast-mode",
+  plannerIncludeInventoryRare: "eggincutils-planner-include-inventory-rare",
+  plannerIncludeInventoryEpic: "eggincutils-planner-include-inventory-epic",
+  plannerIncludeInventoryLegendary: "eggincutils-planner-include-inventory-legendary",
+  plannerIncludeDropRare: "eggincutils-planner-include-drop-rare",
+  plannerIncludeDropEpic: "eggincutils-planner-include-drop-epic",
+  plannerIncludeDropLegendary: "eggincutils-planner-include-drop-legendary",
   plannerDemoNoticeDismissed: "eggincutils-planner-demo-notice-dismissed",
 } as const;
 

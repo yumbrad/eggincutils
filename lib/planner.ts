@@ -69,6 +69,12 @@ type TargetBreakdown = {
   shortfall: number;
 };
 
+type ShinyRaritySelection = {
+  rare: boolean;
+  epic: boolean;
+  legendary: boolean;
+};
+
 export type PlannerResult = {
   targetItemId: string;
   quantity: number;
@@ -91,6 +97,7 @@ export type PlannerResult = {
 
 export type PlannerOptions = {
   fastMode?: boolean;
+  missionDropRarities?: Partial<ShinyRaritySelection>;
   maxSolveMs?: number;
   onProgress?: (event: PlannerProgressEvent) => void;
   onBenchmarkSample?: (sample: PlannerBenchmarkSample) => void;
@@ -142,6 +149,39 @@ const NORMAL_MODE_MAX_CANDIDATES = 12;
 const MIN_MISSION_TIME_OBJECTIVE_WEIGHT = 1e-5;
 const REFINEMENT_MAX_PHASES_PER_OPTION = 3;
 const LP_SCREENING_MILP_RESOLVES = 2;
+const DEFAULT_INCLUDE_SHINY_RARITIES: ShinyRaritySelection = {
+  rare: true,
+  epic: true,
+  legendary: true,
+};
+
+function normalizeShinyRaritySelection(raw?: Partial<ShinyRaritySelection>): ShinyRaritySelection {
+  if (!raw) {
+    return { ...DEFAULT_INCLUDE_SHINY_RARITIES };
+  }
+  return {
+    rare: raw.rare !== false,
+    epic: raw.epic !== false,
+    legendary: raw.legendary !== false,
+  };
+}
+
+function missionDropRarityNote(selection: ShinyRaritySelection): string {
+  const shinyTiers: string[] = [];
+  if (selection.rare) {
+    shinyTiers.push("Rare");
+  }
+  if (selection.epic) {
+    shinyTiers.push("Epic");
+  }
+  if (selection.legendary) {
+    shinyTiers.push("Legendary");
+  }
+  if (shinyTiers.length === 0) {
+    return "Mission drops include common rarity only (R/E/L disabled by planner settings).";
+  }
+  return `Mission drops include common + ${shinyTiers.join(" + ")} rarities (per planner settings).`;
+}
 
 function getDiscountedCost(baseCost: number, craftCount: number): number {
   const progress = Math.min(1, craftCount / MAX_CRAFT_COUNT_FOR_DISCOUNT);
@@ -386,7 +426,8 @@ function missionOptionKey(option: MissionOption): string {
 function yieldsFromTarget(
   target: MissionTargetLootStore,
   items: Set<string>,
-  capacity: number
+  capacity: number,
+  includeShinyRarities: ShinyRaritySelection
 ): Record<string, number> {
   const yields: Record<string, number> = {};
   if (target.totalDrops <= 0) {
@@ -397,7 +438,11 @@ function yieldsFromTarget(
     if (!items.has(itemKey)) {
       continue;
     }
-    const totalItemDrops = item.counts.reduce((sum, count) => sum + count, 0);
+    const common = item.counts[0] || 0;
+    const rare = includeShinyRarities.rare ? item.counts[1] || 0 : 0;
+    const epic = includeShinyRarities.epic ? item.counts[2] || 0 : 0;
+    const legendary = includeShinyRarities.legendary ? item.counts[3] || 0 : 0;
+    const totalItemDrops = common + rare + epic + legendary;
     if (totalItemDrops <= 0) {
       continue;
     }
@@ -409,9 +454,11 @@ function yieldsFromTarget(
 async function buildMissionActionsForOptions(
   missionOptions: MissionOption[],
   relevantItems: Set<string>,
-  lootData?: LootJson
+  lootData?: LootJson,
+  missionDropRarities?: Partial<ShinyRaritySelection>
 ): Promise<MissionAction[]> {
   const loot = lootData || (await loadLootData());
+  const includeShinyRarities = normalizeShinyRaritySelection(missionDropRarities);
   const byMissionId = new Map(loot.missions.map((mission) => [mission.missionId, mission]));
 
   const actions: MissionAction[] = [];
@@ -429,7 +476,7 @@ async function buildMissionActionsForOptions(
     }
 
     for (const target of levelLoot.targets) {
-      const yields = yieldsFromTarget(target, relevantItems, option.capacity);
+      const yields = yieldsFromTarget(target, relevantItems, option.capacity, includeShinyRarities);
       if (Object.keys(yields).length === 0) {
         continue;
       }
@@ -451,9 +498,10 @@ async function buildMissionActionsForOptions(
 
 async function buildMissionActions(
   profile: PlayerProfile,
-  relevantItems: Set<string>
+  relevantItems: Set<string>,
+  missionDropRarities?: Partial<ShinyRaritySelection>
 ): Promise<MissionAction[]> {
-  return buildMissionActionsForOptions(profile.missionOptions, relevantItems);
+  return buildMissionActionsForOptions(profile.missionOptions, relevantItems, undefined, missionDropRarities);
 }
 
 function bestTimePerUnit(itemKey: string, actions: MissionAction[]): number {
@@ -1623,6 +1671,7 @@ async function runPhasedYieldRefinement(options: {
   geRef: number;
   timeRef: number;
   lootData: LootJson;
+  missionDropRarities?: Partial<ShinyRaritySelection>;
   craftSkeleton?: CraftModelSkeleton;
 }): Promise<
   | {
@@ -1647,6 +1696,7 @@ async function runPhasedYieldRefinement(options: {
     geRef,
     timeRef,
     lootData,
+    missionDropRarities,
     craftSkeleton,
   } = options;
 
@@ -1732,7 +1782,12 @@ async function runPhasedYieldRefinement(options: {
 
   const baseOptions = candidate.missionOptions.filter((option) => !sourceKeys.has(missionOptionKey(option)));
   const refinedMissionOptions = mergeMissionOptionsByKey(baseOptions, phasedOptions);
-  const refinedActions = await buildMissionActionsForOptions(refinedMissionOptions, closure, lootData);
+  const refinedActions = await buildMissionActionsForOptions(
+    refinedMissionOptions,
+    closure,
+    lootData,
+    missionDropRarities
+  );
   const refinedActionOptionKeys = new Set(refinedActions.map((action) => action.optionKey));
   const refinedFinalOptionKeys = new Set(refinedMissionOptions.map((option) => missionOptionKey(option)));
 
@@ -2072,7 +2127,8 @@ async function planForTargetHeuristic(
   profile: PlayerProfile,
   targetItemId: string,
   quantity: number,
-  priorityTimeRaw: number
+  priorityTimeRaw: number,
+  plannerOptions: Pick<PlannerOptions, "missionDropRarities"> = {}
 ): Promise<PlannerResult> {
   const targetKey = itemIdToKey(targetItemId);
   const priorityTime = Math.max(0, Math.min(1, priorityTimeRaw));
@@ -2082,7 +2138,7 @@ async function planForTargetHeuristic(
   const closure = new Set<string>();
   collectClosure(targetKey, closure);
 
-  const actions = await buildMissionActions(profile, closure);
+  const actions = await buildMissionActions(profile, closure, plannerOptions.missionDropRarities);
 
   const inventory: Record<string, number> = { ...profile.inventory };
   const craftCounts: Record<string, number> = { ...profile.craftCounts };
@@ -2233,9 +2289,7 @@ async function planForTargetHeuristic(
     "Planner currently uses expected-drop values with solver-backed mission allocation and 3 mission slots. Re-run after returns."
   );
   notes.push("Target quantity is interpreted as additional copies beyond current inventory.");
-  notes.push(
-    "Rarity is treated as fungible for planning (shiny inventory counted toward craftable supply by item tier)."
-  );
+  notes.push(missionDropRarityNote(normalizeShinyRaritySelection(plannerOptions.missionDropRarities)));
   notes.push(
     "Ship progression snapshot reflects projected levels after applying all launches in this plan (prep + farming), and is not persisted."
   );
@@ -2272,6 +2326,7 @@ export async function planForTarget(
   const priorityTime = Math.max(0, Math.min(1, priorityTimeRaw));
   const quantityInt = Math.max(1, Math.round(quantity));
   const fastMode = Boolean(plannerOptions.fastMode);
+  const missionDropRarities = normalizeShinyRaritySelection(plannerOptions.missionDropRarities);
   const benchmarkStartedAtMs = Date.now();
   let benchmarkExcludedMs = 0;
   const reportBenchmark = (result: PlannerResult, path: "primary" | "fallback") => {
@@ -2350,7 +2405,7 @@ export async function planForTarget(
     message: "Loaded mission loot data. Building mission action models...",
   });
   await yieldForProgressFlush();
-  const baseActions = await buildMissionActionsForOptions(referenceMissionOptions, closure, lootData);
+  const baseActions = await buildMissionActionsForOptions(referenceMissionOptions, closure, lootData, missionDropRarities);
 
   const craftSkeleton = buildCraftModelSkeleton({
     profile,
@@ -2422,11 +2477,7 @@ export async function planForTarget(
       const candidateKey = missionOptionsFingerprint(combinedOptions);
       let candidateActions = actionCache.get(candidateKey);
       if (!candidateActions) {
-        candidateActions = await buildMissionActionsForOptions(
-          combinedOptions,
-          closure,
-          lootData
-        );
+        candidateActions = await buildMissionActionsForOptions(combinedOptions, closure, lootData, missionDropRarities);
         actionCache.set(candidateKey, candidateActions);
       }
       const finalOptionKeys = new Set(candidate.missionOptions.map((option) => missionOptionKey(option)));
@@ -2681,6 +2732,7 @@ export async function planForTarget(
           geRef,
           timeRef,
           lootData,
+          missionDropRarities,
           craftSkeleton,
         });
         if (refined) {
@@ -2835,9 +2887,7 @@ export async function planForTarget(
     notes.push(
       "Prep launches are credited with expected drops for required items when compatible mission-target coverage exists."
     );
-    notes.push(
-      "Rarity is treated as fungible for planning (shiny inventory counted toward craftable supply by item tier)."
-    );
+    notes.push(missionDropRarityNote(missionDropRarities));
     notes.push(
       "Ship progression snapshot reflects projected levels after applying all launches in this plan (prep + farming), and is not persisted."
     );
@@ -2896,7 +2946,9 @@ export async function planForTarget(
       etaMs: null,
     });
     await yieldForProgressFlush();
-    const fallback = await planForTargetHeuristic(profile, targetItemId, quantityInt, priorityTime);
+    const fallback = await planForTargetHeuristic(profile, targetItemId, quantityInt, priorityTime, {
+      missionDropRarities,
+    });
     fallback.notes.unshift(
       `Unified solver allocation unavailable (${details}); fell back to heuristic craft decomposition + mission solver allocation.`
     );

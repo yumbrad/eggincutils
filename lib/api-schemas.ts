@@ -7,8 +7,12 @@ const nonNegativeFiniteSchema = z.number().finite().min(0);
 const nonNegativeIntSchema = z.number().int().min(0);
 
 function parseIncludeSlotted(raw: unknown): boolean {
+  return parseEnabledByDefault(raw, true);
+}
+
+function parseEnabledByDefault(raw: unknown, defaultValue: boolean): boolean {
   if (raw == null) {
-    return true;
+    return defaultValue;
   }
   if (typeof raw === "boolean") {
     return raw;
@@ -19,33 +23,27 @@ function parseIncludeSlotted(raw: unknown): boolean {
   if (typeof raw === "string") {
     return !FALSEY_STRINGS.has(raw.trim().toLowerCase());
   }
-  return true;
+  return defaultValue;
 }
 
 function parseFastMode(raw: unknown): boolean {
-  if (raw == null) {
-    return false;
-  }
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (typeof raw === "number") {
-    return raw !== 0;
-  }
-  if (typeof raw === "string") {
-    return !FALSEY_STRINGS.has(raw.trim().toLowerCase());
-  }
-  return false;
+  return parseEnabledByDefault(raw, false);
 }
 
 export const profileQuerySchema = z
   .object({
     eid: z.string().trim().min(1, "eid is required"),
     includeSlotted: z.string().optional(),
+    includeInventoryRare: z.string().optional(),
+    includeInventoryEpic: z.string().optional(),
+    includeInventoryLegendary: z.string().optional(),
   })
   .transform((value) => ({
     eid: value.eid,
     includeSlotted: parseIncludeSlotted(value.includeSlotted),
+    includeInventoryRare: parseEnabledByDefault(value.includeInventoryRare, true),
+    includeInventoryEpic: parseEnabledByDefault(value.includeInventoryEpic, true),
+    includeInventoryLegendary: parseEnabledByDefault(value.includeInventoryLegendary, true),
   }));
 
 export type ProfileQuery = z.infer<typeof profileQuerySchema>;
@@ -66,6 +64,12 @@ export const planRequestSchema = z
       .default(0.5)
       .transform((value) => Math.max(0, Math.min(1, value))),
     includeSlotted: z.union([z.boolean(), z.number(), z.string()]).optional(),
+    includeInventoryRare: z.union([z.boolean(), z.number(), z.string()]).optional(),
+    includeInventoryEpic: z.union([z.boolean(), z.number(), z.string()]).optional(),
+    includeInventoryLegendary: z.union([z.boolean(), z.number(), z.string()]).optional(),
+    includeDropRare: z.union([z.boolean(), z.number(), z.string()]).optional(),
+    includeDropEpic: z.union([z.boolean(), z.number(), z.string()]).optional(),
+    includeDropLegendary: z.union([z.boolean(), z.number(), z.string()]).optional(),
     fastMode: z.union([z.boolean(), z.number(), z.string()]).optional(),
   })
   .transform((value) => ({
@@ -74,6 +78,12 @@ export const planRequestSchema = z
     quantity: value.quantity,
     priorityTime: value.priorityTime,
     includeSlotted: parseIncludeSlotted(value.includeSlotted),
+    includeInventoryRare: parseEnabledByDefault(value.includeInventoryRare, true),
+    includeInventoryEpic: parseEnabledByDefault(value.includeInventoryEpic, true),
+    includeInventoryLegendary: parseEnabledByDefault(value.includeInventoryLegendary, true),
+    includeDropRare: parseEnabledByDefault(value.includeDropRare, true),
+    includeDropEpic: parseEnabledByDefault(value.includeDropEpic, true),
+    includeDropLegendary: parseEnabledByDefault(value.includeDropLegendary, true),
     fastMode: parseFastMode(value.fastMode),
   }));
 
@@ -145,11 +155,17 @@ export const replanRequestSchema = z.object({
     .default(0.5)
     .transform((value) => Math.max(0, Math.min(1, value))),
   fastMode: z.union([z.boolean(), z.number(), z.string()]).optional(),
+  includeDropRare: z.union([z.boolean(), z.number(), z.string()]).optional(),
+  includeDropEpic: z.union([z.boolean(), z.number(), z.string()]).optional(),
+  includeDropLegendary: z.union([z.boolean(), z.number(), z.string()]).optional(),
   observedReturns: z.array(observedReturnSchema).optional().default([]),
   missionLaunches: z.array(missionLaunchUpdateSchema).optional().default([]),
 }).transform((value) => ({
   ...value,
   fastMode: parseFastMode(value.fastMode),
+  includeDropRare: parseEnabledByDefault(value.includeDropRare, true),
+  includeDropEpic: parseEnabledByDefault(value.includeDropEpic, true),
+  includeDropLegendary: parseEnabledByDefault(value.includeDropLegendary, true),
 }));
 
 export type ReplanRequest = z.infer<typeof replanRequestSchema>;

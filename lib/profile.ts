@@ -7,6 +7,11 @@ import { buildMissionOptions, computeShipLevels, MissionRecord, ShipLevelInfo } 
 
 export type Inventory = Record<string, number>;
 export type CraftCounts = Record<string, number>;
+export type ShinyRaritySelection = {
+  rare: boolean;
+  epic: boolean;
+  legendary: boolean;
+};
 
 export type PlayerProfile = {
   eid: string;
@@ -49,6 +54,7 @@ type BackupMissionInfo = {
 };
 
 type GetPlayerProfileOptions = {
+  includeArtifactRarities?: Partial<ShinyRaritySelection>;
   includeShinyArtifacts?: boolean;
 };
 
@@ -93,7 +99,9 @@ export async function getPlayerProfile(
   const RequestMessage = root.lookupType("ei.EggIncFirstContactRequest");
   const ResponseMessage = root.lookupType("ei.EggIncFirstContactResponse");
   const AuthenticatedMessage = root.lookupType("ei.AuthenticatedMessage");
-  const includeShinyArtifacts = options.includeShinyArtifacts !== false;
+  const includeArtifactRarities = normalizeShinyRaritySelection(
+    options.includeArtifactRarities ?? options.includeShinyArtifacts
+  );
 
   let lastError: unknown = null;
 
@@ -160,7 +168,7 @@ export async function getPlayerProfile(
       const inventory = parseInventory(
         data.backup?.artifactsDb?.inventoryItems || [],
         includeSlotted,
-        includeShinyArtifacts
+        includeArtifactRarities
       );
       const craftCounts = parseCraftCounts(data.backup?.artifactsDb?.artifactStatus || []);
       const missionArchive = data.backup?.artifactsDb?.missionArchive || [];
@@ -207,6 +215,49 @@ async function getProtoRoot(): Promise<protobuf.Root> {
 }
 
 const SHINY_RARITIES = new Set(["RARE", "EPIC", "LEGENDARY"]);
+const DEFAULT_INCLUDE_SHINY_RARITIES: ShinyRaritySelection = {
+  rare: true,
+  epic: true,
+  legendary: true,
+};
+
+function normalizeShinyRaritySelection(
+  raw?: boolean | Partial<ShinyRaritySelection>
+): ShinyRaritySelection {
+  if (typeof raw === "boolean") {
+    return raw
+      ? { ...DEFAULT_INCLUDE_SHINY_RARITIES }
+      : { rare: false, epic: false, legendary: false };
+  }
+  if (!raw) {
+    return { ...DEFAULT_INCLUDE_SHINY_RARITIES };
+  }
+  return {
+    rare: raw.rare !== false,
+    epic: raw.epic !== false,
+    legendary: raw.legendary !== false,
+  };
+}
+
+function shouldIncludeArtifactRarity(rarity: unknown, selection: ShinyRaritySelection): boolean {
+  if (typeof rarity !== "string") {
+    return true;
+  }
+  const normalized = rarity.trim().toUpperCase();
+  if (!SHINY_RARITIES.has(normalized)) {
+    return true;
+  }
+  if (normalized === "RARE") {
+    return selection.rare;
+  }
+  if (normalized === "EPIC") {
+    return selection.epic;
+  }
+  if (normalized === "LEGENDARY") {
+    return selection.legendary;
+  }
+  return true;
+}
 
 function isShinyArtifactRarity(rarity: unknown): boolean {
   if (typeof rarity !== "string") {
@@ -218,9 +269,10 @@ function isShinyArtifactRarity(rarity: unknown): boolean {
 export function parseInventory(
   items: BackupInventoryItem[],
   includeSlotted: boolean,
-  includeShinyArtifacts = true
+  includeShinyArtifacts: boolean | Partial<ShinyRaritySelection> = true
 ): Inventory {
   const inventory = {} as Inventory;
+  const includeShinyRarities = normalizeShinyRaritySelection(includeShinyArtifacts);
   const addQuantity = (spec: { name?: string; level?: string | number }, quantity: number) => {
     const name = formatSpecName(spec);
     if (!name || quantity <= 0) {
@@ -232,9 +284,11 @@ export function parseInventory(
   for (const item of items) {
     const quantity = Math.max(0, Math.round(item.quantity || 0));
     const spec = item.artifact?.spec;
-    const canUseArtifactAsIngredient =
-      includeShinyArtifacts || !isShinyArtifactRarity(item.artifact?.spec?.rarity);
-    if (spec && canUseArtifactAsIngredient) {
+    const stones = item.artifact?.stones || [];
+    const excludeSlottedShinyArtifact =
+      !includeSlotted && stones.length > 0 && isShinyArtifactRarity(item.artifact?.spec?.rarity);
+    const canUseArtifactAsIngredient = shouldIncludeArtifactRarity(item.artifact?.spec?.rarity, includeShinyRarities);
+    if (spec && canUseArtifactAsIngredient && !excludeSlottedShinyArtifact) {
       addQuantity(spec, quantity);
     }
 
@@ -242,7 +296,6 @@ export function parseInventory(
       continue;
     }
 
-    const stones = item.artifact?.stones || [];
     for (const stone of stones) {
       addQuantity(stone, quantity > 0 ? quantity : 1);
     }

@@ -116,7 +116,13 @@ export async function POST(request: Request): Promise<Response> {
           });
           const profile = isBlankEid(parsedPayload.data.eid)
             ? createDemoProfile()
-            : await getPlayerProfile(parsedPayload.data.eid, parsedPayload.data.includeSlotted);
+            : await getPlayerProfile(parsedPayload.data.eid, parsedPayload.data.includeSlotted, {
+                includeArtifactRarities: {
+                  rare: parsedPayload.data.includeInventoryRare,
+                  epic: parsedPayload.data.includeInventoryEpic,
+                  legendary: parsedPayload.data.includeInventoryLegendary,
+                },
+              });
           const validatedProfile = playerProfileSchema.safeParse(profile);
           if (!validatedProfile.success) {
             safeEnqueue({
@@ -140,6 +146,11 @@ export async function POST(request: Request): Promise<Response> {
             parsedPayload.data.priorityTime,
             {
               fastMode: parsedPayload.data.fastMode,
+              missionDropRarities: {
+                rare: parsedPayload.data.includeDropRare,
+                epic: parsedPayload.data.includeDropEpic,
+                legendary: parsedPayload.data.includeDropLegendary,
+              },
               onProgress: (progress) => {
                 emitProgress({
                   ...progress,

@@ -60,6 +60,16 @@ type ProfileSnapshot = {
   missionOptions: MissionOption[];
 };
 
+type PlannerSourceFilters = {
+  includeSlotted: boolean;
+  includeInventoryRare: boolean;
+  includeInventoryEpic: boolean;
+  includeInventoryLegendary: boolean;
+  includeDropRare: boolean;
+  includeDropEpic: boolean;
+  includeDropLegendary: boolean;
+};
+
 type ProfileApiResponse = ProfileSnapshot & { error?: string; details?: unknown };
 
 type PlanResponse = {
@@ -627,16 +637,19 @@ function targetTierNumber(itemKey: string, displayTierNumber?: number): number {
   return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
 }
 
-function profileUrl(eid: string, includeSlotted: boolean): string {
+function profileUrl(eid: string, filters: PlannerSourceFilters): string {
   const params = new URLSearchParams({
     eid,
-    includeSlotted: includeSlotted ? "1" : "0",
+    includeSlotted: filters.includeSlotted ? "1" : "0",
+    includeInventoryRare: filters.includeInventoryRare ? "1" : "0",
+    includeInventoryEpic: filters.includeInventoryEpic ? "1" : "0",
+    includeInventoryLegendary: filters.includeInventoryLegendary ? "1" : "0",
   });
   return `/api/profile?${params.toString()}`;
 }
 
-async function fetchProfileSnapshot(eid: string, includeSlotted: boolean): Promise<ProfileSnapshot> {
-  const response = await fetch(profileUrl(eid, includeSlotted));
+async function fetchProfileSnapshot(eid: string, filters: PlannerSourceFilters): Promise<ProfileSnapshot> {
+  const response = await fetch(profileUrl(eid, filters));
   const payload = (await response.json()) as ProfileApiResponse;
   if (!response.ok) {
     const detailText =
@@ -706,8 +719,15 @@ export default function MissionCraftPlannerPage() {
   const [targetFilter, setTargetFilter] = useState("");
   const [targetActiveIndex, setTargetActiveIndex] = useState(0);
   const [quantity, setQuantity] = useState(1);
+  const [quantityInput, setQuantityInput] = useState("1");
   const [priorityTimePct, setPriorityTimePct] = useState(50);
-  const [includeSlotted, setIncludeSlotted] = useState(true);
+  const [includeSlotted, setIncludeSlotted] = useState(false);
+  const [includeInventoryRare, setIncludeInventoryRare] = useState(false);
+  const [includeInventoryEpic, setIncludeInventoryEpic] = useState(false);
+  const [includeInventoryLegendary, setIncludeInventoryLegendary] = useState(false);
+  const [includeDropRare, setIncludeDropRare] = useState(false);
+  const [includeDropEpic, setIncludeDropEpic] = useState(false);
+  const [includeDropLegendary, setIncludeDropLegendary] = useState(false);
   const [fastMode, setFastMode] = useState(false);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -723,6 +743,15 @@ export default function MissionCraftPlannerPage() {
   const trimmedEid = eid.trim();
   const isDemoMode = trimmedEid.length === 0;
   const showDemoNotice = isDemoMode && !demoNoticeDismissed;
+  const sourceFilters: PlannerSourceFilters = {
+    includeSlotted,
+    includeInventoryRare,
+    includeInventoryEpic,
+    includeInventoryLegendary,
+    includeDropRare,
+    includeDropEpic,
+    includeDropLegendary,
+  };
 
   const targetOptions = useMemo(() => {
     const recipeMap = recipes as Record<string, unknown>;
@@ -938,6 +967,7 @@ export default function MissionCraftPlannerPage() {
       const savedQuantity = readStoredInteger([LOCAL_PREF_KEYS.plannerQuantity], 1, 9999);
       if (savedQuantity != null) {
         setQuantity(savedQuantity);
+        setQuantityInput(String(savedQuantity));
       }
       const savedPriority = readStoredInteger([LOCAL_PREF_KEYS.plannerPriorityTimePct], 0, 100);
       if (savedPriority != null) {
@@ -946,6 +976,30 @@ export default function MissionCraftPlannerPage() {
       const savedFastMode = readStoredBoolean([LOCAL_PREF_KEYS.plannerFastMode]);
       if (savedFastMode != null) {
         setFastMode(savedFastMode);
+      }
+      const savedIncludeInventoryRare = readStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeInventoryRare]);
+      if (savedIncludeInventoryRare != null) {
+        setIncludeInventoryRare(savedIncludeInventoryRare);
+      }
+      const savedIncludeInventoryEpic = readStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeInventoryEpic]);
+      if (savedIncludeInventoryEpic != null) {
+        setIncludeInventoryEpic(savedIncludeInventoryEpic);
+      }
+      const savedIncludeInventoryLegendary = readStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeInventoryLegendary]);
+      if (savedIncludeInventoryLegendary != null) {
+        setIncludeInventoryLegendary(savedIncludeInventoryLegendary);
+      }
+      const savedIncludeDropRare = readStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDropRare]);
+      if (savedIncludeDropRare != null) {
+        setIncludeDropRare(savedIncludeDropRare);
+      }
+      const savedIncludeDropEpic = readStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDropEpic]);
+      if (savedIncludeDropEpic != null) {
+        setIncludeDropEpic(savedIncludeDropEpic);
+      }
+      const savedIncludeDropLegendary = readStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDropLegendary]);
+      if (savedIncludeDropLegendary != null) {
+        setIncludeDropLegendary(savedIncludeDropLegendary);
       }
       const savedDemoNoticeDismissed = readStoredBoolean([LOCAL_PREF_KEYS.plannerDemoNoticeDismissed]);
       if (savedDemoNoticeDismissed != null) {
@@ -1076,6 +1130,72 @@ export default function MissionCraftPlannerPage() {
       return;
     }
     try {
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeInventoryRare], includeInventoryRare);
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [includeInventoryRare, prefsLoaded]);
+
+  useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
+    try {
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeInventoryEpic], includeInventoryEpic);
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [includeInventoryEpic, prefsLoaded]);
+
+  useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
+    try {
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeInventoryLegendary], includeInventoryLegendary);
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [includeInventoryLegendary, prefsLoaded]);
+
+  useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
+    try {
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDropRare], includeDropRare);
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [includeDropRare, prefsLoaded]);
+
+  useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
+    try {
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDropEpic], includeDropEpic);
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [includeDropEpic, prefsLoaded]);
+
+  useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
+    try {
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDropLegendary], includeDropLegendary);
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [includeDropLegendary, prefsLoaded]);
+
+  useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
+    try {
       writeStoredBoolean([LOCAL_PREF_KEYS.plannerDemoNoticeDismissed], demoNoticeDismissed);
     } catch {
       // Ignore localStorage persistence errors.
@@ -1083,6 +1203,10 @@ export default function MissionCraftPlannerPage() {
   }, [demoNoticeDismissed, prefsLoaded]);
 
   async function runBuildPlan() {
+    const normalizedQuantity = Math.max(1, Math.min(9999, Math.round(Number(quantityInput) || quantity || 1)));
+    setQuantity(normalizedQuantity);
+    setQuantityInput(String(normalizedQuantity));
+
     setError(null);
     setRefreshSummary(null);
     setLoading(true);
@@ -1101,16 +1225,28 @@ export default function MissionCraftPlannerPage() {
       writeStoredString(SHARED_EID_KEYS, trimmedEid);
       writeStoredBoolean(SHARED_INCLUDE_SLOTTED_KEYS, includeSlotted);
       writeStoredString([LOCAL_PREF_KEYS.plannerTargetItemId], targetItemId);
-      writeStoredString([LOCAL_PREF_KEYS.plannerQuantity], String(quantity));
+      writeStoredString([LOCAL_PREF_KEYS.plannerQuantity], String(normalizedQuantity));
       writeStoredString([LOCAL_PREF_KEYS.plannerPriorityTimePct], String(priorityTimePct));
       writeStoredBoolean([LOCAL_PREF_KEYS.plannerFastMode], fastMode);
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeInventoryRare], includeInventoryRare);
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeInventoryEpic], includeInventoryEpic);
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeInventoryLegendary], includeInventoryLegendary);
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDropRare], includeDropRare);
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDropEpic], includeDropEpic);
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDropLegendary], includeDropLegendary);
 
       const requestPayload = {
         eid: trimmedEid,
         targetItemId,
-        quantity,
+        quantity: normalizedQuantity,
         priorityTime: priorityTimePct / 100,
         includeSlotted,
+        includeInventoryRare,
+        includeInventoryEpic,
+        includeInventoryLegendary,
+        includeDropRare,
+        includeDropEpic,
+        includeDropLegendary,
         fastMode,
       };
 
@@ -1215,7 +1351,7 @@ export default function MissionCraftPlannerPage() {
       if (isDemoMode) {
         setProfileSnapshot(buildDemoProfileSnapshot(streamResult));
       } else {
-        const snapshot = await fetchProfileSnapshot(trimmedEid, includeSlotted);
+        const snapshot = await fetchProfileSnapshot(trimmedEid, sourceFilters);
         setProfileSnapshot(snapshot);
       }
     } catch (caught) {
@@ -1240,9 +1376,12 @@ export default function MissionCraftPlannerPage() {
     setError(null);
     setRefreshSummary(null);
     setRefreshing(true);
+    const normalizedQuantity = Math.max(1, Math.min(9999, Math.round(Number(quantityInput) || quantity || 1)));
+    setQuantity(normalizedQuantity);
+    setQuantityInput(String(normalizedQuantity));
 
     try {
-      const liveProfile = await fetchProfileSnapshot(trimmedEid, includeSlotted);
+      const liveProfile = await fetchProfileSnapshot(trimmedEid, sourceFilters);
       const baselineProfile = profileSnapshot || liveProfile;
       const deltas = buildReplanDeltas(baselineProfile, liveProfile);
 
@@ -1254,9 +1393,12 @@ export default function MissionCraftPlannerPage() {
         body: JSON.stringify({
           profile: liveProfile,
           targetItemId,
-          quantity,
+          quantity: normalizedQuantity,
           priorityTime: priorityTimePct / 100,
           fastMode,
+          includeDropRare,
+          includeDropEpic,
+          includeDropLegendary,
           observedReturns: [],
           missionLaunches: [],
         }),
@@ -1372,6 +1514,23 @@ export default function MissionCraftPlannerPage() {
       }
     }
   }
+
+  const renderSourceToggle = (
+    enabled: boolean,
+    setEnabled: (next: boolean) => void,
+    ariaLabel: string
+  ) => (
+    <button
+      type="button"
+      className={styles.matrixToggle}
+      data-state={enabled ? "use" : "skip"}
+      aria-pressed={enabled}
+      aria-label={ariaLabel}
+      onClick={() => setEnabled(!enabled)}
+    >
+      {enabled ? "Use" : "Skip"}
+    </button>
+  );
 
   return (
     <main className="page">
@@ -1511,8 +1670,31 @@ export default function MissionCraftPlannerPage() {
               type="number"
               min={1}
               max={9999}
-              value={quantity}
-              onChange={(event) => setQuantity(Math.max(1, Math.round(Number(event.target.value) || 1)))}
+              value={quantityInput}
+              onChange={(event) => {
+                const nextRaw = event.target.value;
+                if (nextRaw === "") {
+                  setQuantityInput("");
+                  return;
+                }
+                const parsed = Number(nextRaw);
+                if (!Number.isFinite(parsed)) {
+                  return;
+                }
+                const nextQuantity = Math.max(1, Math.min(9999, Math.round(parsed)));
+                setQuantity(nextQuantity);
+                setQuantityInput(String(nextQuantity));
+              }}
+              onBlur={() => {
+                if (quantityInput.trim() === "") {
+                  setQuantityInput(String(quantity));
+                  return;
+                }
+                const parsed = Number(quantityInput);
+                const nextQuantity = Number.isFinite(parsed) ? Math.max(1, Math.min(9999, Math.round(parsed))) : quantity;
+                setQuantity(nextQuantity);
+                setQuantityInput(String(nextQuantity));
+              }}
             />
           </div>
         </div>
@@ -1532,8 +1714,8 @@ export default function MissionCraftPlannerPage() {
             }}
           >
             <div className="muted" style={{ fontSize: 13 }}>
-              Demo mode is active. This runs with an empty inventory plus maxed research and ship levels to show how the planner
-              works. For customized advice, enter your EID.
+              Demo mode is active. This runs with an empty inventory, maxed research, and all ships unlocked at 0 stars to show
+              how the planner works. For customized advice, enter your EID.
             </div>
             <button type="button" onClick={() => setDemoNoticeDismissed(true)} style={{ whiteSpace: "nowrap" }}>
               Dismiss
@@ -1541,7 +1723,7 @@ export default function MissionCraftPlannerPage() {
           </div>
         )}
 
-        <div className="row" style={{ marginTop: 10, alignItems: "end" }}>
+        <div className="row" style={{ marginTop: 10, alignItems: "stretch" }}>
           <div className="field" style={{ minWidth: 340, flex: 1 }}>
             <label htmlFor="priority">Optimization priority ({priorityTimePct}% time / {100 - priorityTimePct}% GE)</label>
             <input
@@ -1554,41 +1736,88 @@ export default function MissionCraftPlannerPage() {
             />
           </div>
 
-          <div className="field" style={{ minWidth: 220 }}>
-            <label htmlFor="includeSlotted">Inventory handling</label>
-            <select
-              id="includeSlotted"
-              value={includeSlotted ? "yes" : "no"}
-              onChange={(event) => setIncludeSlotted(event.target.value === "yes")}
-            >
-              <option value="yes">Include slotted stones</option>
-              <option value="no">Ignore slotted stones</option>
-            </select>
+          <div className={`field ${styles.sourceMatrixField}`} style={{ minWidth: 340, flex: 1 }}>
+            <label>Ingredient source filters</label>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Use = included in planning. Skip = excluded.
+            </div>
+            <div className={styles.sourceMatrix} role="group" aria-label="Ingredient source filters">
+              <span className={styles.matrixSpacer} aria-hidden="true" />
+              <span className={styles.matrixHeader} title="Rare shiny">
+                R
+              </span>
+              <span className={styles.matrixHeader} title="Epic shiny">
+                E
+              </span>
+              <span className={styles.matrixHeader} title="Legendary shiny">
+                L
+              </span>
+              <span className={styles.matrixHeader} title="Slotted stones">
+                Slotted
+              </span>
+
+              <span className={styles.matrixRowLabel}>Inventory</span>
+              <span className={styles.matrixCell}>
+                {renderSourceToggle(
+                  includeInventoryRare,
+                  setIncludeInventoryRare,
+                  "Inventory rare shiny artifacts"
+                )}
+              </span>
+              <span className={styles.matrixCell}>
+                {renderSourceToggle(
+                  includeInventoryEpic,
+                  setIncludeInventoryEpic,
+                  "Inventory epic shiny artifacts"
+                )}
+              </span>
+              <span className={styles.matrixCell}>
+                {renderSourceToggle(
+                  includeInventoryLegendary,
+                  setIncludeInventoryLegendary,
+                  "Inventory legendary shiny artifacts"
+                )}
+              </span>
+              <span className={styles.matrixCell}>
+                {renderSourceToggle(includeSlotted, setIncludeSlotted, "Inventory slotted stones")}
+              </span>
+
+              <span className={styles.matrixRowLabel}>Dropped</span>
+              <span className={styles.matrixCell}>
+                {renderSourceToggle(includeDropRare, setIncludeDropRare, "Dropped rare shiny artifacts")}
+              </span>
+              <span className={styles.matrixCell}>
+                {renderSourceToggle(includeDropEpic, setIncludeDropEpic, "Dropped epic shiny artifacts")}
+              </span>
+              <span className={styles.matrixCell}>
+                {renderSourceToggle(includeDropLegendary, setIncludeDropLegendary, "Dropped legendary shiny artifacts")}
+              </span>
+              <span className={`${styles.matrixCell} ${styles.matrixCellMuted}`}>n/a</span>
+            </div>
+            <div className="muted" style={{ fontSize: 12 }}>
+              Common rarity is always included for both inventory and drops.
+            </div>
           </div>
 
-          <label
-            className="field"
-            style={{ minWidth: 220, gap: 6, flexDirection: "row", alignItems: "center", marginBottom: 6 }}
-            htmlFor="fastMode"
-          >
-            <input
-              id="fastMode"
-              type="checkbox"
-              checked={fastMode}
-              onChange={(event) => setFastMode(event.target.checked)}
-              style={{ width: 16, height: 16, margin: 0 }}
-            />
-            <span className="muted" style={{ fontSize: 13 }}>
-              Faster, less optimal solve
-            </span>
-          </label>
-
-          <button type="submit" disabled={loading}>
-            {loading ? "Planning..." : "Build plan"}
-          </button>
-          <button type="button" disabled={loading || refreshing || !response || isDemoMode} onClick={onRefreshFromLive}>
-            {refreshing ? "Replanning..." : "Replan after ship returns"}
-          </button>
+          <div className={styles.actionColumn}>
+            <div className={styles.buildActionStack}>
+              <button type="submit" disabled={loading}>
+                {loading ? "Planning..." : "Build plan"}
+              </button>
+              <label className={styles.fastModeToggle} htmlFor="fastMode">
+                <input
+                  id="fastMode"
+                  type="checkbox"
+                  checked={fastMode}
+                  onChange={(event) => setFastMode(event.target.checked)}
+                />
+                <span className="muted">Faster, less optimal solve</span>
+              </label>
+            </div>
+            <button type="button" disabled={loading || refreshing || !response || isDemoMode} onClick={onRefreshFromLive}>
+              {refreshing ? "Replanning..." : "Replan after ship returns"}
+            </button>
+          </div>
         </div>
       </form>
 

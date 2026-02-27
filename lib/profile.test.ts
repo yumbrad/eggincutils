@@ -81,6 +81,68 @@ describe("parseInventory", () => {
     expect(inventory.tachyon_stone_3).toBe(2);
     expect(inventory.terra_stone_3).toBe(1);
   });
+
+  it("can include only selected shiny tiers", () => {
+    const items = [
+      {
+        artifact: {
+          spec: { name: "SOUL_STONE", level: "INFERIOR", rarity: "RARE" },
+        },
+        quantity: 2,
+      },
+      {
+        artifact: {
+          spec: { name: "LIGHT_OF_EGGENDIL", level: "GREATER", rarity: "EPIC" },
+        },
+        quantity: 1,
+      },
+      {
+        artifact: {
+          spec: { name: "PUZZLE_CUBE", level: "NORMAL", rarity: "LEGENDARY" },
+        },
+        quantity: 3,
+      },
+    ];
+
+    const inventory = parseInventory(items, true, {
+      rare: true,
+      epic: false,
+      legendary: false,
+    });
+
+    expect(inventory.soul_stone_2).toBe(2);
+    expect(inventory.light_of_eggendil_4).toBeUndefined();
+    expect(inventory.puzzle_cube_3).toBeUndefined();
+  });
+
+  it("excludes slotted shiny artifacts when slotted sources are disabled", () => {
+    const items = [
+      {
+        artifact: {
+          spec: { name: "SOUL_STONE", level: "INFERIOR", rarity: "RARE" },
+          stones: [{ name: "TACHYON_STONE", level: "LESSER" }],
+        },
+        quantity: 2,
+      },
+      {
+        artifact: {
+          spec: { name: "PUZZLE_CUBE", level: "NORMAL", rarity: "RARE" },
+          stones: [],
+        },
+        quantity: 3,
+      },
+    ];
+
+    const inventory = parseInventory(items, false, {
+      rare: true,
+      epic: false,
+      legendary: false,
+    });
+
+    expect(inventory.soul_stone_2).toBeUndefined();
+    expect(inventory.tachyon_stone_3).toBeUndefined();
+    expect(inventory.puzzle_cube_3).toBe(3);
+  });
 });
 
 describe("parseCraftCounts and parseMissions", () => {

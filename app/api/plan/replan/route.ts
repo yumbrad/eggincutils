@@ -50,7 +50,14 @@ export async function POST(request: Request): Promise<Response> {
       parsedPayload.data.targetItemId,
       parsedPayload.data.quantity,
       parsedPayload.data.priorityTime,
-      { fastMode: parsedPayload.data.fastMode }
+      {
+        fastMode: parsedPayload.data.fastMode,
+        missionDropRarities: {
+          rare: parsedPayload.data.includeDropRare,
+          epic: parsedPayload.data.includeDropEpic,
+          legendary: parsedPayload.data.includeDropLegendary,
+        },
+      }
     );
 
     const responsePayload = {
