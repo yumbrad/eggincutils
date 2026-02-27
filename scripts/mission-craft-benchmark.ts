@@ -54,13 +54,18 @@ type BenchmarkSerializableRow = {
 };
 
 const DEFAULT_QUANTITY = 1;
+const REPO_ROOT = process.cwd();
 const SNAPSHOT_PATH = path.join(
-  process.cwd(),
+  REPO_ROOT,
   "benchmarks",
   "mission-craft-planner",
   "profile-snapshot-benchmark.json"
 );
-const REPORT_DIR = path.join(process.cwd(), "benchmarks", "mission-craft-planner", "reports");
+const REPORT_DIR = path.join(REPO_ROOT, "benchmarks", "mission-craft-planner", "reports");
+
+function toRepoRelativePath(filePath: string): string {
+  return path.relative(REPO_ROOT, filePath).split(path.sep).join("/");
+}
 
 const TARGETS: BenchmarkTarget[] = [
   {
@@ -221,16 +226,17 @@ function buildMarkdownReport(options: {
   commitShort: string;
   generatedAt: string;
   snapshot: SnapshotFile;
+  snapshotPath: string;
   results: BenchmarkResultRow[];
 }): string {
-  const { branch, commitShort, generatedAt, snapshot, results } = options;
+  const { branch, commitShort, generatedAt, snapshot, snapshotPath, results } = options;
   const lines: string[] = [];
   lines.push("# Mission Craft Planner Benchmark");
   lines.push("");
   lines.push(`- Branch: \`${branch}\``);
   lines.push(`- Commit: \`${commitShort}\``);
   lines.push(`- Generated at: \`${generatedAt}\``);
-  lines.push(`- Profile snapshot: \`${SNAPSHOT_PATH}\``);
+  lines.push(`- Profile snapshot: \`${snapshotPath}\``);
   lines.push(`- Snapshot captured at: \`${snapshot.capturedAt}\``);
   lines.push("- Quantity per target: `1`");
   lines.push("- Loot load overhead: excluded (prewarmed and subtracted in planner benchmark hook)");
@@ -342,6 +348,7 @@ async function main(): Promise<void> {
     commitShort,
     generatedAt: new Date().toISOString(),
     snapshot,
+    snapshotPath: toRepoRelativePath(SNAPSHOT_PATH),
     results,
   });
   const jsonReport = {
@@ -350,7 +357,7 @@ async function main(): Promise<void> {
     branch,
     commitShort,
     quantityPerTarget: DEFAULT_QUANTITY,
-    profileSnapshotPath: SNAPSHOT_PATH,
+    profileSnapshotPath: toRepoRelativePath(SNAPSHOT_PATH),
     profileSnapshotCapturedAt: snapshot.capturedAt,
     lootLoadOverheadExcluded: true,
     rows: serializedRows,

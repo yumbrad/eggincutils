@@ -1,61 +1,138 @@
-# eggincutils
+# Hens in Space (`eggincutils`)
 
-Unified Egg, Inc. utility app (Next.js).
+Open-source Egg, Inc. utility suite built with Next.js.
+
+This repo bundles multiple tools in one app:
+- Mission Craft Planner
+- XP + GE Craft Optimizer
+- Ship Timer
+
+## Features
+
+- Unified web UI for multiple Egg, Inc. workflows.
+- Server-side APIs for profile fetch + planning.
+- Mission planner with normal/fast solve modes, rerun support, and streaming progress.
+- Layered loot-data caching (memory, disk, fallback snapshot).
+- Benchmark scripts for repeatable planner performance reports.
 
 ## Routes
 
-- `/` menu
-- `/mission-craft-planner` new planner (EID + target + quantity + GE/time slider)
-- `/xp-ge-craft` native XP + GE craft optimizer
-- `/xp-ge-craft/diagnostics` inventory/API diagnostics for the optimizer
-- `/ship-timer` native ship return planner
+- `/` Home
+- `/mission-craft-planner`
+- `/xp-ge-craft`
+- `/xp-ge-craft/diagnostics`
+- `/ship-timer`
 
-## Development
+## API Endpoints
+
+- `GET /api/profile?eid=...&includeSlotted=...`
+- `GET /api/inventory?eid=...&includeSlotted=...`
+- `POST /api/plan`
+- `POST /api/plan/stream` (NDJSON progress + result stream)
+- `POST /api/plan/replan`
+
+## Tech Stack
+
+- Next.js 14 (App Router)
+- React 18
+- TypeScript
+- Zod
+- Vitest
+
+## Local Development
+
+### Prerequisites
+
+- Node.js 20+
+- npm 10+
+
+### Run
 
 ```bash
 npm install
 npm run dev
-npm run test
 ```
 
-## Planner Data Sources
+Open `http://localhost:3000`.
 
-- Recipes and item metadata are vendored from `xp-ge-craft`.
-- Ship mission parameters are vendored from carpetsage `eiafx-config`.
-- Drop data loads from Menno backend by default:
-  - `https://eggincdatacollection.azurewebsites.net/api/GetCarpetDataTrimmed?newDropsOnly`
+### Quality Checks
 
-You can override with:
+```bash
+npm run build
+npm run test
+npm run lint
+```
 
-- `LOOT_DATA_URL`
-- `LOOT_DATA_CACHE_FILE`
-- `LOOT_DATA_FALLBACK_FILE`
+## Environment Variables
+
+### Profile/API behavior
+
+- `EI_CLIENT_VERSION` (default `70`)
+- `EI_APP_VERSION` (default `1.35`)
+- `EI_PLATFORM` (default `IOS`)
+- `EI_PLATFORM_VALUE` (default `2`)
+
+### Loot data
+
+- `LOOT_DATA_URL`  
+  Default: `https://eggincdatacollection.azurewebsites.net/api/GetCarpetDataTrimmed?newDropsOnly`
+- `LOOT_DATA_CACHE_FILE`  
+  Default: `/tmp/eggincutils-loot-cache.json`
+- `LOOT_DATA_FALLBACK_FILE`  
+  Default: `data/loot-data-snapshot.json`
 - `LOOT_DATA_CACHE_TTL_SECONDS`
-- `EI_CLIENT_VERSION`
-- `EI_APP_VERSION`
-- `EI_PLATFORM`
-- `EI_PLATFORM_VALUE`
 
-Loot data loading now uses layered caching:
+### Streaming planner
 
-- In-memory process cache
-- Disk cache file (`LOOT_DATA_CACHE_FILE`, default `/tmp/eggincutils-loot-cache.json`)
-- Optional vendored fallback snapshot (`LOOT_DATA_FALLBACK_FILE`, default `data/loot-data-snapshot.json`)
+- `PLAN_STREAM_HEARTBEAT_MS` (default `15000`, bounded to 5000..60000)
 
-If the disk/fallback cache is stale, stale data is served immediately and a background refresh is attempted.
+### Benchmark scripts
 
-## Current Planner Model
+- `BENCHMARK_EID` (or pass EID as first CLI argument to archive script)
 
-The planner combines recursive crafting (with craft-count GE discounts) and expected mission drops, with a 3-slot mission-time model.
-It is an initial greedy/expected-value model and should be rerun after returns.
+## Benchmark Workflow
 
-## Replanning Endpoint
+```bash
+# 1) Archive a live benchmark profile snapshot (EID is redacted in output)
+npm run benchmark:mission-craft:archive-profile -- <EID>
 
-Use `POST /api/plan/replan` to replan from a current snapshot without re-fetching from EID.
+# 2) Run benchmark matrix and generate reports (.md/.json/.csv)
+npm run benchmark:mission-craft
 
-Request body fields:
+# 3) Convert latest markdown report to json/csv (if needed)
+npm run benchmark:mission-craft:convert-report
+```
 
-- `profile`: full profile object (same shape as `/api/profile` response payload)
-- `targetItemId`, `quantity`, `priorityTime`
-- `observedReturns`: optional item drops to add to inventory (`[{ itemId, quantity }]`)
-- `missionLaunches`: optional launches completed since snapshot (`[{ ship, durationType, launches }]`)
+Reports are written under:
+- `benchmarks/mission-craft-planner/reports/`
+
+Benchmark metadata paths are stored repo-relative (not absolute local filesystem paths).
+
+## Deployment
+
+- Fly.io config: `fly.toml`
+- GitHub Actions deploy workflow: `.github/workflows/fly-deploy.yml`
+  - Requires repo secret: `FLY_API_TOKEN`
+- Netlify config: `netlify.toml`
+
+## Privacy and Open-Source Notes
+
+- Benchmark profile snapshots intentionally redact EID (`"eid": "REDACTED"`).
+- Do not commit personal raw profile exports or private tokens.
+- Editor temp/lock files are ignored in both git and docker contexts.
+
+## Project Structure
+
+- `app/` Next.js routes/pages/API handlers
+- `lib/` planner logic, schemas, data loaders
+- `scripts/` benchmarking + report tooling
+- `data/` static game/planner data
+- `benchmarks/` benchmark inputs and generated reports
+
+## Disclaimer
+
+This is an unofficial project and is not affiliated with Auxbrain.
+
+## License
+
+No license file is currently included. Add a `LICENSE` before publishing if you want explicit reuse terms.

@@ -25,6 +25,11 @@ type ParsedMetadata = {
 };
 
 const REPORTS_DIR = path.join(process.cwd(), "benchmarks", "mission-craft-planner", "reports");
+const REPO_ROOT = process.cwd();
+
+function toRepoRelativePath(filePath: string): string {
+  return path.relative(REPO_ROOT, filePath).split(path.sep).join("/");
+}
 const TARGET_LABEL_TO_ITEM_ID: Array<{ pattern: RegExp; itemId: string }> = [
   { pattern: /book of basan/i, itemId: "book-of-basan-4" },
   { pattern: /titanium actuator/i, itemId: "titanium-actuator-4" },
@@ -243,7 +248,7 @@ async function main(): Promise<void> {
 
   const payload = {
     schemaVersion: 1,
-    sourceMarkdownPath: markdownPath,
+    sourceMarkdownPath: toRepoRelativePath(markdownPath),
     convertedAt: new Date().toISOString(),
     ...metadata,
     rows,
