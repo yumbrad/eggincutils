@@ -1723,7 +1723,7 @@ export default function MissionCraftPlannerPage() {
           </div>
         )}
 
-        <div className="row" style={{ marginTop: 10, alignItems: "stretch" }}>
+        <div className="row" style={{ marginTop: 20, alignItems: "stretch" }}>
           <div className="field" style={{ minWidth: 340, flex: 1 }}>
             <label htmlFor="priority">Optimization priority ({priorityTimePct}% time / {100 - priorityTimePct}% GE)</label>
             <input
@@ -1858,7 +1858,11 @@ export default function MissionCraftPlannerPage() {
       )}
 
       {response && (
-        <div className="grid" style={{ marginTop: 12 }}>
+        <>
+          <div className={styles.resultsDivider} role="separator" aria-label="Plan output section">
+            <span>PLAN OUTPUT</span>
+          </div>
+          <div className="grid" style={{ marginTop: 14 }}>
           <div className="grid cards">
             <div className="card">
               <div className="muted">Expected mission time</div>
@@ -2178,7 +2182,8 @@ export default function MissionCraftPlannerPage() {
               </>
             )}
           </div>
-        </div>
+          </div>
+        </>
       )}
     </main>
   );

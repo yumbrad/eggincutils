@@ -223,6 +223,33 @@
   margin: 0;
 }
 
+.resultsDivider {
+  position: relative;
+  height: 1px;
+  margin: 26px 0 20px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in oklab, var(--stroke), var(--navy) 32%) 20%,
+    color-mix(in oklab, var(--stroke), var(--navy) 18%) 80%,
+    transparent 100%
+  );
+}
+
+.resultsDivider span {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 0 10px;
+  color: color-mix(in oklab, var(--accent), var(--ink) 35%);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: color-mix(in oklab, var(--bg-a), var(--panel) 42%);
+}
+
 .timelineIntro {
   margin: 0 0 8px;
   font-size: 12px;
