@@ -24,6 +24,10 @@ import {
   writeStoredBoolean,
   writeStoredString,
 } from "../../lib/local-preferences";
+import useHighsWorker from "../../lib/use-highs-worker";
+import { planForTarget, computeMonolithicPaths, type PlannerProgressEvent } from "../../lib/planner";
+import { createDemoProfile, isBlankEid } from "../../lib/demo-profile";
+import type { LootJson } from "../../lib/loot-data";
 import styles from "./page.module.css";
 
 type ShipLevelInfo = {
@@ -836,7 +840,12 @@ export default function MissionCraftPlannerPage() {
   const [compareResults, setCompareResults] = useState<MonolithicPathResult[] | null>(null);
   const [compareError, setCompareError] = useState<string | null>(null);
   const [compareExpandedRow, setCompareExpandedRow] = useState<number | null>(null);
+  const [lootData, setLootData] = useState<LootJson | null>(null);
+  const lootDataRef = useRef<LootJson | null>(null);
   const targetPickerRef = useRef<HTMLDivElement | null>(null);
+  const highs = useHighsWorker();
+  const highsRef = useRef(highs);
+  highsRef.current = highs;
   const trimmedEid = eid.trim();
   const isDemoMode = trimmedEid.length === 0;
   const showDemoNotice = isDemoMode && !demoNoticeDismissed;
@@ -849,6 +858,25 @@ export default function MissionCraftPlannerPage() {
     includeDropEpic,
     includeDropLegendary,
   };
+
+  // Pre-fetch loot data for client-side solving.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/loot")
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((data: LootJson) => {
+        if (!cancelled) {
+          setLootData(data);
+          lootDataRef.current = data;
+        }
+      })
+      .catch(() => {
+        // Loot fetch failure is non-fatal; client-side solve will fall back to server.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const targetOptions = useMemo(() => {
     const recipeMap = recipes as Record<string, unknown>;
@@ -1453,124 +1481,199 @@ export default function MissionCraftPlannerPage() {
       writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDropEpic], includeDropEpic);
       writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDropLegendary], includeDropLegendary);
 
-      const requestPayload = {
-        eid: trimmedEid,
-        targetItemId,
-        quantity: normalizedQuantity,
-        priorityTime: priorityTimePct / 100,
-        includeSlotted,
-        includeInventoryRare,
-        includeInventoryEpic,
-        includeInventoryLegendary,
-        includeDropRare,
-        includeDropEpic,
-        includeDropLegendary,
-        fastMode,
-      };
+      const canSolveClientSide = highsRef.current.ready && lootDataRef.current != null;
 
-      const planResp = await fetch("/api/plan/stream", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestPayload),
-      });
+      if (canSolveClientSide) {
+        // Client-side solve: fetch profile from server, run planner locally.
+        setPlannerProgress({
+          phase: "init",
+          message: "Fetching profile data...",
+          elapsedMs: Math.max(0, Date.now() - startedAt),
+          completed: null,
+          total: null,
+          etaMs: null,
+        });
 
-      if (!planResp.ok) {
-        const data = (await planResp.json()) as { error?: string; details?: unknown };
-        throw new Error(detailsText(data.details) || data.error || "planning request failed");
-      }
+        let profile: ProfileSnapshot;
+        if (isDemoMode) {
+          profile = createDemoProfile() as unknown as ProfileSnapshot;
+        } else {
+          profile = await fetchProfileSnapshot(trimmedEid, sourceFilters);
+        }
 
-      let streamResult: PlanResponse | null = null;
-      if (planResp.body) {
-        const reader = planResp.body.getReader();
-        const decoder = new TextDecoder();
-        let buffered = "";
+        setPlannerProgress({
+          phase: "init",
+          message: "Profile loaded. Starting client-side solve...",
+          elapsedMs: Math.max(0, Date.now() - startedAt),
+          completed: null,
+          total: null,
+          etaMs: null,
+        });
 
-        const handleLine = (line: string) => {
-          if (!line) {
-            return;
+        const result = await planForTarget(
+          profile as Parameters<typeof planForTarget>[0],
+          targetItemId,
+          normalizedQuantity,
+          priorityTimePct / 100,
+          {
+            fastMode,
+            missionDropRarities: {
+              rare: includeDropRare,
+              epic: includeDropEpic,
+              legendary: includeDropLegendary,
+            },
+            solverFn: highsRef.current.solve,
+            lootData: lootDataRef.current!,
+            onProgress: (progress: PlannerProgressEvent) => {
+              setPlannerProgress({
+                phase: progress.phase,
+                message: progress.message,
+                elapsedMs: Number.isFinite(progress.elapsedMs) ? Math.max(0, Math.round(progress.elapsedMs)) : 0,
+                completed: typeof progress.completed === "number" ? Math.max(0, Math.round(progress.completed)) : null,
+                total: typeof progress.total === "number" ? Math.max(0, Math.round(progress.total)) : null,
+                etaMs:
+                  typeof progress.etaMs === "number"
+                    ? Math.max(0, Math.round(progress.etaMs))
+                    : progress.etaMs === null
+                      ? null
+                      : null,
+              });
+            },
           }
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(line);
-          } catch {
-            return;
-          }
+        );
 
-          if (!parsed || typeof parsed !== "object" || !("type" in parsed)) {
-            return;
-          }
-          const message = parsed as PlanStreamMessage;
-          if (message.type === "progress") {
-            const progress = message.progress;
-            setPlannerProgress({
-              phase: progress.phase,
-              message: progress.message,
-              elapsedMs: Number.isFinite(progress.elapsedMs) ? Math.max(0, Math.round(progress.elapsedMs)) : 0,
-              completed: typeof progress.completed === "number" ? Math.max(0, Math.round(progress.completed)) : null,
-              total: typeof progress.total === "number" ? Math.max(0, Math.round(progress.total)) : null,
-              etaMs:
-                typeof progress.etaMs === "number"
-                  ? Math.max(0, Math.round(progress.etaMs))
-                  : progress.etaMs === null
-                    ? null
-                    : null,
-            });
-            return;
-          }
-          if (message.type === "result") {
-            streamResult = message.data;
-            return;
-          }
-          if (message.type === "error") {
-            throw new Error(detailsText(message.details) || message.error || "planning stream failed");
-          }
+        const planResponse: PlanResponse = {
+          profile: {
+            eid: profile.eid,
+            epicResearchFTLLevel: profile.epicResearchFTLLevel,
+            epicResearchZerogLevel: profile.epicResearchZerogLevel,
+            shipLevels: profile.shipLevels,
+          },
+          plan: result,
+        };
+        setResponse(planResponse);
+        setProfileSnapshot(profile);
+      } else {
+        // Server-side fallback: stream from /api/plan/stream.
+        const requestPayload = {
+          eid: trimmedEid,
+          targetItemId,
+          quantity: normalizedQuantity,
+          priorityTime: priorityTimePct / 100,
+          includeSlotted,
+          includeInventoryRare,
+          includeInventoryEpic,
+          includeInventoryLegendary,
+          includeDropRare,
+          includeDropEpic,
+          includeDropLegendary,
+          fastMode,
         };
 
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) {
-            buffered += decoder.decode();
-            break;
-          }
-          buffered += decoder.decode(value, { stream: true });
-          let newlineIndex = buffered.indexOf("\n");
-          while (newlineIndex >= 0) {
-            const line = buffered.slice(0, newlineIndex).trim();
-            buffered = buffered.slice(newlineIndex + 1);
-            handleLine(line);
-            newlineIndex = buffered.indexOf("\n");
-          }
-        }
-        const trailing = buffered.trim();
-        if (trailing.length > 0) {
-          handleLine(trailing);
-        }
-      } else {
-        const fallbackResp = await fetch("/api/plan", {
+        const planResp = await fetch("/api/plan/stream", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify(requestPayload),
         });
-        const fallbackData = (await fallbackResp.json()) as PlanResponse & { error?: string; details?: unknown };
-        if (!fallbackResp.ok) {
-          throw new Error(detailsText(fallbackData.details) || fallbackData.error || "planning request failed");
-        }
-        streamResult = fallbackData;
-      }
 
-      if (!streamResult) {
-        throw new Error("planning stream completed without a result");
-      }
-      setResponse(streamResult);
-      if (isDemoMode) {
-        setProfileSnapshot(buildDemoProfileSnapshot(streamResult));
-      } else {
-        const snapshot = await fetchProfileSnapshot(trimmedEid, sourceFilters);
-        setProfileSnapshot(snapshot);
+        if (!planResp.ok) {
+          const data = (await planResp.json()) as { error?: string; details?: unknown };
+          throw new Error(detailsText(data.details) || data.error || "planning request failed");
+        }
+
+        let streamResult: PlanResponse | null = null;
+        if (planResp.body) {
+          const reader = planResp.body.getReader();
+          const decoder = new TextDecoder();
+          let buffered = "";
+
+          const handleLine = (line: string) => {
+            if (!line) {
+              return;
+            }
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(line);
+            } catch {
+              return;
+            }
+
+            if (!parsed || typeof parsed !== "object" || !("type" in parsed)) {
+              return;
+            }
+            const message = parsed as PlanStreamMessage;
+            if (message.type === "progress") {
+              const progress = message.progress;
+              setPlannerProgress({
+                phase: progress.phase,
+                message: progress.message,
+                elapsedMs: Number.isFinite(progress.elapsedMs) ? Math.max(0, Math.round(progress.elapsedMs)) : 0,
+                completed: typeof progress.completed === "number" ? Math.max(0, Math.round(progress.completed)) : null,
+                total: typeof progress.total === "number" ? Math.max(0, Math.round(progress.total)) : null,
+                etaMs:
+                  typeof progress.etaMs === "number"
+                    ? Math.max(0, Math.round(progress.etaMs))
+                    : progress.etaMs === null
+                      ? null
+                      : null,
+              });
+              return;
+            }
+            if (message.type === "result") {
+              streamResult = message.data;
+              return;
+            }
+            if (message.type === "error") {
+              throw new Error(detailsText(message.details) || message.error || "planning stream failed");
+            }
+          };
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) {
+              buffered += decoder.decode();
+              break;
+            }
+            buffered += decoder.decode(value, { stream: true });
+            let newlineIndex = buffered.indexOf("\n");
+            while (newlineIndex >= 0) {
+              const line = buffered.slice(0, newlineIndex).trim();
+              buffered = buffered.slice(newlineIndex + 1);
+              handleLine(line);
+              newlineIndex = buffered.indexOf("\n");
+            }
+          }
+          const trailing = buffered.trim();
+          if (trailing.length > 0) {
+            handleLine(trailing);
+          }
+        } else {
+          const fallbackResp = await fetch("/api/plan", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(requestPayload),
+          });
+          const fallbackData = (await fallbackResp.json()) as PlanResponse & { error?: string; details?: unknown };
+          if (!fallbackResp.ok) {
+            throw new Error(detailsText(fallbackData.details) || fallbackData.error || "planning request failed");
+          }
+          streamResult = fallbackData;
+        }
+
+        if (!streamResult) {
+          throw new Error("planning stream completed without a result");
+        }
+        setResponse(streamResult);
+        if (isDemoMode) {
+          setProfileSnapshot(buildDemoProfileSnapshot(streamResult));
+        } else {
+          const snapshot = await fetchProfileSnapshot(trimmedEid, sourceFilters);
+          setProfileSnapshot(snapshot);
+        }
       }
     } catch (caught) {
       const message = caught instanceof Error && caught.message ? caught.message : "planning request failed";
@@ -1758,27 +1861,47 @@ export default function MissionCraftPlannerPage() {
     setCompareExpandedRow(null);
     try {
       const selectedCombos = response.plan.availableCombos.filter((c) => compareSelected.has(comboKey(c)));
-      const body = {
-        profile: profileSnapshot,
-        targetItemId: response.plan.targetItemId,
-        quantity: response.plan.quantity,
-        priorityTime: response.plan.priorityTime,
-        selectedCombos,
-        includeDropRare: sourceFilters.includeDropRare,
-        includeDropEpic: sourceFilters.includeDropEpic,
-        includeDropLegendary: sourceFilters.includeDropLegendary,
-      };
-      const res = await fetch("/api/plan/compare", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.details || data.error || `HTTP ${res.status}`);
+      const canCompareClientSide = highsRef.current.ready && lootDataRef.current != null;
+
+      if (canCompareClientSide) {
+        const results = await computeMonolithicPaths({
+          profile: profileSnapshot as Parameters<typeof computeMonolithicPaths>[0]["profile"],
+          targetItemId: response.plan.targetItemId,
+          quantity: response.plan.quantity,
+          priorityTime: response.plan.priorityTime,
+          selectedCombos: selectedCombos as Parameters<typeof computeMonolithicPaths>[0]["selectedCombos"],
+          missionDropRarities: {
+            rare: sourceFilters.includeDropRare,
+            epic: sourceFilters.includeDropEpic,
+            legendary: sourceFilters.includeDropLegendary,
+          },
+          solverFn: highsRef.current.solve,
+          lootData: lootDataRef.current!,
+        });
+        setCompareResults(results as unknown as MonolithicPathResult[]);
+      } else {
+        const body = {
+          profile: profileSnapshot,
+          targetItemId: response.plan.targetItemId,
+          quantity: response.plan.quantity,
+          priorityTime: response.plan.priorityTime,
+          selectedCombos,
+          includeDropRare: sourceFilters.includeDropRare,
+          includeDropEpic: sourceFilters.includeDropEpic,
+          includeDropLegendary: sourceFilters.includeDropLegendary,
+        };
+        const res = await fetch("/api/plan/compare", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.details || data.error || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        setCompareResults(data.paths as MonolithicPathResult[]);
       }
-      const data = await res.json();
-      setCompareResults(data.paths as MonolithicPathResult[]);
     } catch (err) {
       setCompareError(err instanceof Error ? err.message : String(err));
     } finally {

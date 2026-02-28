@@ -631,4 +631,73 @@ describe("planForTarget coverage handling", () => {
     expect(result.missions[0].launches).toBe(2);
     expect(result.notes.some((note) => note.includes("greedy fallback"))).toBe(true);
   });
+
+  it("uses injected solverFn instead of default HiGHS when provided", async () => {
+    const loot = {
+      missions: [
+        {
+          afxShip: 0,
+          afxDurationType: 0,
+          missionId: "test-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "puzzle-cube-1",
+                      counts: [1, 0, 0, 0] as [number, number, number, number],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    let injectedSolverCalled = false;
+    const injectedSolver = async (model: string, _options?: Record<string, string | number | boolean>): Promise<HighsSolveResult> => {
+      injectedSolverCalled = true;
+      void model;
+      return {
+        Status: "Optimal",
+        Columns: {
+          m_0: { Primal: 3 },
+        },
+      };
+    };
+
+    // Do NOT set up the mocked defaults — if the injected solver is used,
+    // the mocked loadLootData/solveWithHighs should never be called.
+    mockedLoadLootData.mockRejectedValue(new Error("should not be called"));
+    mockedSolveWithHighs.mockRejectedValue(new Error("should not be called"));
+
+    const profile = baseProfile();
+    profile.missionOptions = [
+      {
+        ship: "CHICKEN_ONE",
+        missionId: "test-short",
+        durationType: "SHORT",
+        level: 0,
+        durationSeconds: 1200,
+        capacity: 1,
+      },
+    ];
+
+    const result = await planForTarget(profile, "puzzle-cube-1", 3, 0.5, {
+      solverFn: injectedSolver,
+      lootData: loot,
+    });
+    expect(injectedSolverCalled).toBe(true);
+    expect(result.missions).toHaveLength(1);
+    expect(result.missions[0].launches).toBe(3);
+    expect(result.targetBreakdown.requested).toBe(3);
+  });
 });

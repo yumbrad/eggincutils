@@ -1,4 +1,4 @@
-import { PlayerProfile } from "./profile";
+import type { PlayerProfile } from "./profile";
 import { buildMissionOptions, computeShipLevelsFromLaunchCounts } from "./ship-data";
 
 const DEMO_EID = "DEMO";

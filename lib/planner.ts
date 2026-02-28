@@ -1,5 +1,5 @@
-import { loadLootData, LootJson, MissionLevelLootStore, MissionTargetLootStore } from "./loot-data";
-import { solveWithHighs } from "./highs";
+import type { LootJson, MissionLevelLootStore, MissionTargetLootStore } from "./loot-data";
+import type { HighsSolveResult } from "./highs";
 import { itemIdToKey, itemKeyToDisplayName, itemKeyToId } from "./item-utils";
 import { getRecipe, recipes } from "./recipes";
 import {
@@ -12,7 +12,17 @@ import {
   ShipLevelInfo,
   shipLevelsToLaunchCounts,
 } from "./ship-data";
-import { PlayerProfile } from "./profile";
+import type { PlayerProfile } from "./profile";
+
+async function getDefaultSolverFn(): Promise<SolverFunction> {
+  const { solveWithHighs } = await import("./highs");
+  return solveWithHighs;
+}
+
+async function getDefaultLootData(): Promise<LootJson> {
+  const { loadLootData } = await import("./loot-data");
+  return loadLootData();
+}
 
 type MissionAction = {
   key: string;
@@ -104,12 +114,19 @@ export type PlannerResult = {
   availableCombos: AvailableCombo[];
 };
 
+export type SolverFunction = (
+  model: string,
+  options?: Record<string, string | number | boolean>
+) => Promise<HighsSolveResult>;
+
 export type PlannerOptions = {
   fastMode?: boolean;
   missionDropRarities?: Partial<ShinyRaritySelection>;
   maxSolveMs?: number;
   onProgress?: (event: PlannerProgressEvent) => void;
   onBenchmarkSample?: (sample: PlannerBenchmarkSample) => void;
+  solverFn?: SolverFunction;
+  lootData?: LootJson;
 };
 
 export type PlannerProgressEvent = {
@@ -471,7 +488,7 @@ async function buildMissionActionsForOptions(
   lootData?: LootJson,
   missionDropRarities?: Partial<ShinyRaritySelection>
 ): Promise<MissionAction[]> {
-  const loot = lootData || (await loadLootData());
+  const loot = lootData || (await getDefaultLootData());
   const includeShinyRarities = normalizeShinyRaritySelection(missionDropRarities);
   const byMissionId = new Map(loot.missions.map((mission) => [mission.missionId, mission]));
 
@@ -685,8 +702,10 @@ function allocateMissionsGreedy(
 
 async function allocateMissionsWithSolver(
   actions: MissionAction[],
-  initialDemand: Record<string, number>
+  initialDemand: Record<string, number>,
+  solverFnOption?: SolverFunction
 ): Promise<MissionAllocation> {
+  const solverFn = solverFnOption ?? await getDefaultSolverFn();
   const demandEntries = Object.entries(initialDemand).filter(([, qty]) => qty > SCORE_EPS);
   if (demandEntries.length === 0 || actions.length === 0) {
     return {
@@ -743,7 +762,7 @@ async function allocateMissionsWithSolver(
   lines.push("End");
 
   try {
-    const solution = await solveWithHighs(lines.join("\n"), {
+    const solution = await solverFn(lines.join("\n"), {
       mip_rel_gap: 0.01,
     });
     const status = solution.Status || "Unknown";
@@ -961,6 +980,7 @@ async function solveUnifiedCraftMissionPlan(options: {
   lpRelaxation?: boolean;
   craftSkeleton?: CraftModelSkeleton;
   onSolveMetrics?: (metrics: UnifiedSolveMetrics) => void;
+  solverFn?: SolverFunction;
 }): Promise<UnifiedPlan> {
   const {
     profile,
@@ -978,7 +998,9 @@ async function solveUnifiedCraftMissionPlan(options: {
     lpRelaxation = false,
     craftSkeleton,
     onSolveMetrics,
+    solverFn: solverFnOption,
   } = options;
+  const solve = solverFnOption ?? await getDefaultSolverFn();
   const {
     itemKeys,
     craftModels,
@@ -1291,7 +1313,7 @@ async function solveUnifiedCraftMissionPlan(options: {
     craftLinkConstraintCount;
 
   const solveStartedAtMs = Date.now();
-  const solution = await solveWithHighs(lines.join("\n"), {
+  const solution = await solve(lines.join("\n"), {
     ...(lpRelaxation ? {} : { mip_rel_gap: 0.01 }),
   });
   const elapsedMs = Math.max(0, Date.now() - solveStartedAtMs);
@@ -2389,7 +2411,7 @@ async function planForTargetHeuristic(
   targetItemId: string,
   quantity: number,
   priorityTimeRaw: number,
-  plannerOptions: Pick<PlannerOptions, "missionDropRarities"> = {}
+  plannerOptions: Pick<PlannerOptions, "missionDropRarities" | "solverFn" | "lootData"> = {}
 ): Promise<PlannerResult> {
   const targetKey = itemIdToKey(targetItemId);
   const priorityTime = Math.max(0, Math.min(1, priorityTimeRaw));
@@ -2399,7 +2421,9 @@ async function planForTargetHeuristic(
   const closure = new Set<string>();
   collectClosure(targetKey, closure);
 
-  const actions = await buildMissionActions(profile, closure, plannerOptions.missionDropRarities);
+  const actions = await buildMissionActionsForOptions(
+    profile.missionOptions, closure, plannerOptions.lootData, plannerOptions.missionDropRarities
+  );
 
   const inventory: Record<string, number> = { ...profile.inventory };
   const craftCounts: Record<string, number> = { ...profile.craftCounts };
@@ -2478,7 +2502,7 @@ async function planForTargetHeuristic(
     }
   }
 
-  const missionAllocation = await allocateMissionsWithSolver(actions, remainingDemand);
+  const missionAllocation = await allocateMissionsWithSolver(actions, remainingDemand, plannerOptions.solverFn);
   const missionCounts = missionAllocation.missionCounts;
   const totalSlotSeconds = missionAllocation.totalSlotSeconds;
   const remainingDemandAfterMissions = missionAllocation.remainingDemand;
@@ -2589,6 +2613,8 @@ export async function planForTarget(
   const quantityInt = Math.max(1, Math.round(quantity));
   const fastMode = Boolean(plannerOptions.fastMode);
   const missionDropRarities = normalizeShinyRaritySelection(plannerOptions.missionDropRarities);
+  const solverFn = plannerOptions.solverFn;
+  const injectedLootData = plannerOptions.lootData;
   const benchmarkStartedAtMs = Date.now();
   let benchmarkExcludedMs = 0;
   const reportBenchmark = (result: PlannerResult, path: "primary" | "fallback") => {
@@ -2660,7 +2686,7 @@ export async function planForTarget(
   await yieldForProgressFlush();
   const referenceMissionOptions = progressionCandidates[0]?.missionOptions || profile.missionOptions;
   const lootLoadStartedAtMs = Date.now();
-  const lootData = await loadLootData();
+  const lootData = injectedLootData ?? await getDefaultLootData();
   benchmarkExcludedMs += Math.max(0, Date.now() - lootLoadStartedAtMs);
   reportProgress({
     phase: "init",
@@ -2874,6 +2900,7 @@ export async function planForTarget(
         phasedChainConstraints: input.phasedChainConstraints,
         lpRelaxation,
         craftSkeleton,
+        solverFn,
         onSolveMetrics: (metrics) => {
           baselineSolveMetrics = metrics;
           if (lpRelaxation) {
@@ -3419,6 +3446,8 @@ export async function planForTarget(
     await yieldForProgressFlush();
     const fallback = await planForTargetHeuristic(profile, targetItemId, quantityInt, priorityTime, {
       missionDropRarities,
+      solverFn,
+      lootData: injectedLootData,
     });
     fallback.notes.unshift(
       `Unified solver allocation unavailable (${details}); fell back to heuristic craft decomposition + mission solver allocation.`
@@ -3490,15 +3519,17 @@ export async function computeMonolithicPaths(options: {
   priorityTime: number;
   selectedCombos: Array<{ ship: string; durationType: DurationType; targetAfxId: number }>;
   missionDropRarities?: Partial<ShinyRaritySelection>;
+  solverFn?: SolverFunction;
+  lootData?: LootJson;
 }): Promise<MonolithicPathResult[]> {
-  const { profile, targetItemId, quantity, priorityTime, selectedCombos, missionDropRarities } = options;
+  const { profile, targetItemId, quantity, priorityTime, selectedCombos, missionDropRarities, solverFn: solverFnOption, lootData: injectedLootData } = options;
   const targetKey = itemIdToKey(targetItemId);
   const quantityInt = Math.max(1, Math.round(quantity));
 
   const closure = new Set<string>();
   collectClosure(targetKey, closure);
 
-  const lootData = await loadLootData();
+  const lootData = injectedLootData ?? await getDefaultLootData();
   const allOptions = profile.missionOptions.length > 0
     ? profile.missionOptions
     : buildMissionOptions(profile.shipLevels, profile.epicResearchFTLLevel, profile.epicResearchZerogLevel);
@@ -3584,6 +3615,7 @@ export async function computeMonolithicPaths(options: {
         maxMissionLaunchesByOption,
         phasedChainConstraints,
         craftSkeleton,
+        solverFn: solverFnOption,
       });
 
       const totalLaunches = Object.values(unified.missionCounts).reduce((sum, v) => sum + Math.max(0, Math.round(v)), 0);
