@@ -158,7 +158,6 @@ const NORMAL_MODE_MAX_CANDIDATES = 12;
 const MIN_MISSION_TIME_OBJECTIVE_WEIGHT = 1e-5;
 const MISSION_LAUNCH_TIEBREAKER_SECONDS = 300;
 const PLAN_SCORE_TIE_TOLERANCE_FRACTION = 0.01;
-const LAUNCH_POLISH_PRIORITY_THRESHOLD = 1 - SCORE_EPS;
 const REFINEMENT_MAX_PHASES_PER_OPTION = 3;
 const INTEGRATED_MAX_PHASES = 9;
 const PHASED_BUDGET_LAUNCHES = 5000;
@@ -807,7 +806,6 @@ type UnifiedPlan = {
 
 type UnifiedSolveMetrics = {
   lpRelaxation: boolean;
-  prioritizeFewerLaunches: boolean;
   status: string;
   elapsedMs: number;
   actionCount: number;
@@ -962,9 +960,6 @@ async function solveUnifiedCraftMissionPlan(options: {
   phasedChainConstraints?: PhasedChainConstraint[];
   lpRelaxation?: boolean;
   craftSkeleton?: CraftModelSkeleton;
-  prioritizeFewerLaunches?: boolean;
-  maxGeCost?: number;
-  maxTotalSlotSeconds?: number;
   onSolveMetrics?: (metrics: UnifiedSolveMetrics) => void;
 }): Promise<UnifiedPlan> {
   const {
@@ -982,9 +977,6 @@ async function solveUnifiedCraftMissionPlan(options: {
     phasedChainConstraints = [],
     lpRelaxation = false,
     craftSkeleton,
-    prioritizeFewerLaunches = false,
-    maxGeCost,
-    maxTotalSlotSeconds,
     onSolveMetrics,
   } = options;
   const {
@@ -1002,51 +994,36 @@ async function solveUnifiedCraftMissionPlan(options: {
   lines.push("Minimize");
   const objectiveTerms: Array<{ coefficient: number; variable: string }> = [];
   let maxObjectiveCoeff = 1;
-  const geCostTerms: Array<{ coefficient: number; variable: string }> = [];
 
   for (const model of craftModels) {
     for (let index = 0; index < model.preDiscountStepVars.length; index += 1) {
       const geCoeff = model.preDiscountStepCosts[index];
-      geCostTerms.push({
-        coefficient: geCoeff,
+      const coefficient = ((1 - priorityTime) * geCoeff) / normalizedGeRef;
+      objectiveTerms.push({
+        coefficient,
         variable: model.preDiscountStepVars[index],
       });
-      if (!prioritizeFewerLaunches) {
-        const coefficient = ((1 - priorityTime) * geCoeff) / normalizedGeRef;
-        objectiveTerms.push({
-          coefficient,
-          variable: model.preDiscountStepVars[index],
-        });
-        maxObjectiveCoeff = Math.max(maxObjectiveCoeff, Math.abs(coefficient));
-      }
+      maxObjectiveCoeff = Math.max(maxObjectiveCoeff, Math.abs(coefficient));
     }
     if (model.tailVar && model.tailCap > 0) {
       const tailCost = getDiscountedCost(
         model.baseCost,
         model.initialCraftCount + model.preDiscountStepSizes.reduce((a, b) => a + b, 0)
       );
-      geCostTerms.push({
-        coefficient: tailCost,
+      const coefficient = ((1 - priorityTime) * tailCost) / normalizedGeRef;
+      objectiveTerms.push({
+        coefficient,
         variable: model.tailVar,
       });
-      if (!prioritizeFewerLaunches) {
-        const coefficient = ((1 - priorityTime) * tailCost) / normalizedGeRef;
-        objectiveTerms.push({
-          coefficient,
-          variable: model.tailVar,
-        });
-        maxObjectiveCoeff = Math.max(maxObjectiveCoeff, Math.abs(coefficient));
-      }
+      maxObjectiveCoeff = Math.max(maxObjectiveCoeff, Math.abs(coefficient));
     }
   }
 
   const missionObjectiveWeight = Math.max(priorityTime, MIN_MISSION_TIME_OBJECTIVE_WEIGHT);
   const missionLaunchTiebreakCoeff = (missionObjectiveWeight * MISSION_LAUNCH_TIEBREAKER_SECONDS) / normalizedTimeRef;
-  const launchPolishTimeCoeff = 1 / Math.max(1, normalizedTimeRef * 1_000_000);
   for (let index = 0; index < actions.length; index += 1) {
-    const coefficient = prioritizeFewerLaunches
-      ? 1 + actions[index].durationSeconds * launchPolishTimeCoeff
-      : (missionObjectiveWeight * (actions[index].durationSeconds / 3)) / normalizedTimeRef + missionLaunchTiebreakCoeff;
+    const coefficient =
+      (missionObjectiveWeight * (actions[index].durationSeconds / 3)) / normalizedTimeRef + missionLaunchTiebreakCoeff;
     objectiveTerms.push({
       coefficient,
       variable: missionVars[index],
@@ -1215,17 +1192,6 @@ async function solveUnifiedCraftMissionPlan(options: {
     }
   }
 
-  if (Number.isFinite(maxGeCost) && maxGeCost != null && maxGeCost >= 0) {
-    lines.push(`  gc_0: ${formatLinearExpression(geCostTerms)} <= ${formatLpNumber(maxGeCost)}`);
-  }
-  if (Number.isFinite(maxTotalSlotSeconds) && maxTotalSlotSeconds != null && maxTotalSlotSeconds >= 0) {
-    const slotTerms: Array<{ coefficient: number; variable: string }> = missionVars.map((variable, index) => ({
-      coefficient: actions[index].durationSeconds,
-      variable,
-    }));
-    lines.push(`  tc_0: ${formatLinearExpression(slotTerms)} <= ${formatLpNumber(maxTotalSlotSeconds)}`);
-  }
-
   for (let modelIndex = 0; modelIndex < craftModels.length; modelIndex += 1) {
     const model = craftModels[modelIndex];
     const relationTerms: Array<{ coefficient: number; variable: string }> = [
@@ -1308,9 +1274,6 @@ async function solveUnifiedCraftMissionPlan(options: {
   const missionVarCount = missionVars.length;
   const binaryVarCount = phasedBinaryVars.length;
   const demandConstraintCount = itemKeys.length;
-  const geCapConstraintCount = Number.isFinite(maxGeCost) && maxGeCost != null && maxGeCost >= 0 ? 1 : 0;
-  const timeCapConstraintCount =
-    Number.isFinite(maxTotalSlotSeconds) && maxTotalSlotSeconds != null && maxTotalSlotSeconds >= 0 ? 1 : 0;
   const craftLinkConstraintCount = craftModels.reduce((sum, model) => {
     let modelCount = 1; // cl_
     modelCount += Math.max(0, model.preDiscountStepVars.length - 1); // cm_
@@ -1325,8 +1288,6 @@ async function solveUnifiedCraftMissionPlan(options: {
     optionMaxConstraintIndex +
     precedenceConstraintIndex +
     phasedConstraintIndex +
-    geCapConstraintCount +
-    timeCapConstraintCount +
     craftLinkConstraintCount;
 
   const solveStartedAtMs = Date.now();
@@ -1337,7 +1298,6 @@ async function solveUnifiedCraftMissionPlan(options: {
   const status = solution.Status || "Unknown";
   onSolveMetrics?.({
     lpRelaxation,
-    prioritizeFewerLaunches,
     status,
     elapsedMs,
     actionCount: actions.length,
@@ -2748,7 +2708,6 @@ export async function planForTarget(
     });
     const lpSolveStats = createSolveStageStats();
     const milpSolveStats = createSolveStageStats();
-    const polishSolveStats = createSolveStageStats();
     const recordSolveMetrics = (stats: SolveStageStats, metrics: UnifiedSolveMetrics) => {
       stats.attempts += 1;
       stats.totalMs += metrics.elapsedMs;
@@ -2802,8 +2761,8 @@ export async function planForTarget(
             weightedScore: number;
             geCost: number;
             unmetTotal: number;
-          totalLaunches: number;
-          prepNoYieldSlotSeconds: number;
+            totalLaunches: number;
+            prepNoYieldSlotSeconds: number;
         }
       | null = null;
 
@@ -2898,7 +2857,7 @@ export async function planForTarget(
       milpProgressContext?: MilpSolveProgressContext
     ) => {
       if (!lpRelaxation) {
-        await emitMilpStageProgress(milpProgressContext, "MILP baseline solve");
+        await emitMilpStageProgress(milpProgressContext, "Integer-constrained solve");
       }
       let baselineSolveMetrics: UnifiedSolveMetrics | null = null;
       const baselineUnified = await solveUnifiedCraftMissionPlan({
@@ -2924,60 +2883,7 @@ export async function planForTarget(
           }
         },
       });
-      let unified = baselineUnified;
-      if (!lpRelaxation && priorityTime >= LAUNCH_POLISH_PRIORITY_THRESHOLD) {
-        await emitMilpStageProgress(milpProgressContext, "MILP launch-polish solve");
-        const baselineLaunches = Object.values(baselineUnified.missionCounts).reduce(
-          (sum, launches) => sum + Math.max(0, Math.round(launches)),
-          0
-        );
-        const baselineUnmetTotal = Object.values(baselineUnified.remainingDemand).reduce(
-          (sum, qty) => sum + Math.max(0, qty),
-          0
-        );
-        try {
-          const polishedUnified = await solveUnifiedCraftMissionPlan({
-            profile,
-            targetKey,
-            quantity: quantityInt,
-            priorityTime,
-            closure,
-            actions: input.candidateActions,
-            geRef,
-            timeRef,
-            requiredMissionLaunches: input.requiredMissionLaunches,
-            maxMissionLaunchesByOption: input.maxMissionLaunchesByOption,
-            phasedChainConstraints: input.phasedChainConstraints,
-            lpRelaxation,
-            craftSkeleton,
-            prioritizeFewerLaunches: true,
-            maxGeCost: baselineUnified.geCost * (1 + PLAN_SCORE_TIE_TOLERANCE_FRACTION),
-            maxTotalSlotSeconds: baselineUnified.totalSlotSeconds * (1 + PLAN_SCORE_TIE_TOLERANCE_FRACTION),
-            onSolveMetrics: (metrics) => {
-              recordSolveMetrics(polishSolveStats, metrics);
-            },
-          });
-          const polishedLaunches = Object.values(polishedUnified.missionCounts).reduce(
-            (sum, launches) => sum + Math.max(0, Math.round(launches)),
-            0
-          );
-          const polishedUnmetTotal = Object.values(polishedUnified.remainingDemand).reduce(
-            (sum, qty) => sum + Math.max(0, qty),
-            0
-          );
-          if (polishedUnmetTotal <= baselineUnmetTotal + 1e-6 && polishedLaunches < baselineLaunches) {
-            unified = polishedUnified;
-          }
-        } catch {
-          await emitMilpStageProgress(milpProgressContext, "MILP launch-polish fallback to baseline");
-          // Keep baseline solution if launch-polish pass is infeasible/unavailable.
-        }
-      } else if (!lpRelaxation) {
-        await emitMilpStageProgress(
-          milpProgressContext,
-          "MILP launch-polish skipped (not in high time-priority mode)"
-        );
-      }
+      const unified = baselineUnified;
       const totalSlotSeconds = input.prepNoYieldSlotSeconds + unified.totalSlotSeconds;
       const weightedScore = normalizedScore(
         unified.geCost,
@@ -3074,7 +2980,7 @@ export async function planForTarget(
         timeBudgetExceeded = true;
         reportProgress({
           phase: "candidates",
-          message: "Time budget reached; stopping LP screening early.",
+          message: "Time budget reached; stopping relaxed screening early.",
           completed: completedCandidateCount,
           total: candidateTotal,
           etaMs: null,
@@ -3141,7 +3047,7 @@ export async function planForTarget(
       completedCandidateCount = candidateIndex + 1;
       reportProgress({
         phase: "candidates",
-        message: `LP screened ${completedCandidateCount.toLocaleString()}/${candidateTotal.toLocaleString()} candidates (${prunedCandidateCount.toLocaleString()} pruned).`,
+        message: `Relaxed-screened ${completedCandidateCount.toLocaleString()}/${candidateTotal.toLocaleString()} candidates (${prunedCandidateCount.toLocaleString()} pruned).`,
         completed: completedCandidateCount,
         total: candidateTotal,
         etaMs: estimateCandidateEtaMs(),
@@ -3162,7 +3068,7 @@ export async function planForTarget(
         for (let resolveIndex = 0; resolveIndex < fastMilpCandidates.length; resolveIndex += 1) {
           reportProgress({
             phase: "candidate",
-            message: `Fast mode: Preparing MILP candidate ${resolveIndex + 1} of ${fastMilpCandidates.length}...`,
+            message: `Fast mode: Preparing integer candidate ${resolveIndex + 1} of ${fastMilpCandidates.length}...`,
             completed: fastMilpCompleted,
             total: fastMilpCandidates.length,
             etaMs: estimateBatchEtaMs(fastMilpStartedAtMs, fastMilpCompleted, fastMilpCandidates.length),
@@ -3200,7 +3106,7 @@ export async function planForTarget(
           fastMilpCompleted = resolveIndex + 1;
           reportProgress({
             phase: "candidates",
-            message: `Fast mode: MILP re-solved ${fastMilpCompleted}/${fastMilpCandidates.length} LP candidates.`,
+            message: `Fast mode: Integer re-solved ${fastMilpCompleted}/${fastMilpCandidates.length} relaxed-screened candidates.`,
             completed: fastMilpCompleted,
             total: fastMilpCandidates.length,
             etaMs: estimateBatchEtaMs(fastMilpStartedAtMs, fastMilpCompleted, fastMilpCandidates.length),
@@ -3234,7 +3140,7 @@ export async function planForTarget(
         milpStartedAtMs = Date.now();
         reportProgress({
           phase: "candidates",
-          message: `MILP re-solving top ${milpCandidates.length} of ${lpScreened.length} LP-screened candidates...`,
+          message: `Integer re-solving top ${milpCandidates.length} of ${lpScreened.length} relaxed-screened candidates...`,
           completed: milpCompleted,
           total: milpCandidates.length,
           etaMs: null,
@@ -3245,7 +3151,7 @@ export async function planForTarget(
       for (let resolveIndex = 0; resolveIndex < milpCandidates.length; resolveIndex += 1) {
         reportProgress({
           phase: "candidate",
-          message: `Preparing MILP candidate ${resolveIndex + 1} of ${milpCandidates.length}...`,
+          message: `Preparing integer candidate ${resolveIndex + 1} of ${milpCandidates.length}...`,
           completed: milpCompleted,
           total: milpCandidates.length,
           etaMs: estimateBatchEtaMs(milpStartedAtMs, milpCompleted, milpCandidates.length),
@@ -3283,7 +3189,7 @@ export async function planForTarget(
         milpCompleted = resolveIndex + 1;
         reportProgress({
           phase: "candidates",
-          message: `MILP re-solved ${milpCompleted}/${milpCandidates.length} LP candidates.`,
+          message: `Integer re-solved ${milpCompleted}/${milpCandidates.length} relaxed-screened candidates.`,
           completed: milpCompleted,
           total: milpCandidates.length,
           etaMs: estimateBatchEtaMs(milpStartedAtMs, milpCompleted, milpCandidates.length),
@@ -3391,17 +3297,12 @@ export async function planForTarget(
     const solveStageSummaries = [
       summarizeSolveStage("LP screening", lpSolveStats),
       summarizeSolveStage("MILP re-solve", milpSolveStats),
-      summarizeSolveStage("MILP launch-polish", polishSolveStats),
     ].filter((entry): entry is string => entry !== null);
     if (solveStageSummaries.length > 0) {
       notes.push(`Solver diagnostics: ${solveStageSummaries.join(" ")}`);
     }
     if (best.solveMetrics) {
-      const solveType = best.solveMetrics.lpRelaxation
-        ? "LP"
-        : best.solveMetrics.prioritizeFewerLaunches
-          ? "MILP (launch-polish objective)"
-          : "MILP";
+      const solveType = best.solveMetrics.lpRelaxation ? "LP" : "MILP";
       notes.push(
         `Selected ${solveType} model size: ${best.solveMetrics.constraintCount.toLocaleString()} rows, ${best.solveMetrics.integerVarCount.toLocaleString()} integer vars (${best.solveMetrics.binaryVarCount.toLocaleString()} binary), ${best.solveMetrics.actionCount.toLocaleString()} mission actions.`
       );
