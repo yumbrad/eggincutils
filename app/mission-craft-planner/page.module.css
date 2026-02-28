@@ -416,3 +416,68 @@
     text-align: left;
   }
 }
+
+.compareToggle {
+  all: unset;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  user-select: none;
+}
+
+.compareToggle:hover {
+  color: var(--ink);
+}
+
+.comparePanel {
+  margin-top: 10px;
+}
+
+.compareComboList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow: auto;
+}
+
+.compareComboLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.compareComboLabel input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.compareRowSolver td {
+  background: color-mix(in oklab, var(--accent), transparent 85%);
+}
+
+.compareRow:hover td {
+  background: color-mix(in oklab, var(--accent), transparent 92%);
+}
+
+.compareBest {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.compareBreakdown {
+  padding: 8px;
+  border: 1px solid var(--stroke);
+  border-radius: 8px;
+  margin-top: 8px;
+  background: color-mix(in oklab, var(--card), transparent 20%);
+}
+
+.compareBreakdown table {
+  font-size: 12px;
+}

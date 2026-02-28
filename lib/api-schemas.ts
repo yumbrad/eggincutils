@@ -220,6 +220,12 @@ const planProgressionShipSchema = z.object({
   launchPoints: nonNegativeFiniteSchema,
 });
 
+const availableComboSchema = z.object({
+  ship: z.string().min(1),
+  durationType: z.enum(DURATION_TYPES),
+  targetAfxId: z.number().int(),
+});
+
 export const plannerResultSchema = z.object({
   targetItemId: z.string().min(1),
   quantity: nonNegativeIntSchema,
@@ -238,6 +244,7 @@ export const plannerResultSchema = z.object({
     projectedShipLevels: z.array(planProgressionShipSchema),
   }),
   notes: z.array(z.string()),
+  availableCombos: z.array(availableComboSchema),
 });
 
 export const planApiResponseSchema = z.object({
@@ -249,6 +256,39 @@ export const planApiResponseSchema = z.object({
   }),
   plan: plannerResultSchema,
 });
+
+const selectedComboSchema = z.object({
+  ship: z.string().min(1),
+  durationType: z.enum(DURATION_TYPES),
+  targetAfxId: z.number().int(),
+});
+
+export const compareRequestSchema = z.object({
+  profile: playerProfileSchema,
+  targetItemId: z.string().trim().min(1, "targetItemId is required"),
+  quantity: z.coerce
+    .number()
+    .finite()
+    .default(1)
+    .transform((value) => Math.max(1, Math.round(value)))
+    .pipe(nonNegativeIntSchema.max(1_000_000)),
+  priorityTime: z.coerce
+    .number()
+    .finite()
+    .default(0.5)
+    .transform((value) => Math.max(0, Math.min(1, value))),
+  selectedCombos: z.array(selectedComboSchema).min(1).max(20),
+  includeDropRare: z.union([z.boolean(), z.number(), z.string()]).optional(),
+  includeDropEpic: z.union([z.boolean(), z.number(), z.string()]).optional(),
+  includeDropLegendary: z.union([z.boolean(), z.number(), z.string()]).optional(),
+}).transform((value) => ({
+  ...value,
+  includeDropRare: parseEnabledByDefault(value.includeDropRare, true),
+  includeDropEpic: parseEnabledByDefault(value.includeDropEpic, true),
+  includeDropLegendary: parseEnabledByDefault(value.includeDropLegendary, true),
+}));
+
+export type CompareRequest = z.infer<typeof compareRequestSchema>;
 
 export function formatZodIssues(error: z.ZodError): string[] {
   return error.issues.map((issue) => {

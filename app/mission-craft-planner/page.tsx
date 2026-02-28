@@ -117,7 +117,31 @@ type PlanResponse = {
       projectedShipLevels: Array<ShipLevelInfo>;
     };
     notes: string[];
+    availableCombos: Array<{
+      ship: string;
+      durationType: string;
+      targetAfxId: number;
+    }>;
   };
+};
+
+type MonolithicPathResult = {
+  ship: string;
+  durationType: string;
+  targetAfxId: number;
+  totalLaunches: number;
+  expectedHours: number;
+  geCost: number;
+  feasible: boolean;
+  ingredientBreakdown: Array<{
+    itemId: string;
+    requested: number;
+    fromInventory: number;
+    fromCraft: number;
+    fromMissionsExpected: number;
+    shortfall: number;
+  }>;
+  phases: Array<{ level: number; capacity: number; launches: number }>;
 };
 
 type PlannerProgressPhase = "init" | "candidates" | "candidate" | "refinement" | "finalize" | "fallback";
@@ -739,6 +763,12 @@ export default function MissionCraftPlannerPage() {
   const [profileSnapshot, setProfileSnapshot] = useState<ProfileSnapshot | null>(null);
   const [demoNoticeDismissed, setDemoNoticeDismissed] = useState(false);
   const [prefsLoaded, setPrefsLoaded] = useState(false);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [compareSelected, setCompareSelected] = useState<Set<string>>(new Set());
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareResults, setCompareResults] = useState<MonolithicPathResult[] | null>(null);
+  const [compareError, setCompareError] = useState<string | null>(null);
+  const [compareExpandedRow, setCompareExpandedRow] = useState<number | null>(null);
   const targetPickerRef = useRef<HTMLDivElement | null>(null);
   const trimmedEid = eid.trim();
   const isDemoMode = trimmedEid.length === 0;
@@ -1515,6 +1545,59 @@ export default function MissionCraftPlannerPage() {
     }
   }
 
+  const comboKey = (c: { ship: string; durationType: string; targetAfxId: number }) =>
+    `${c.ship}|${c.durationType}|${c.targetAfxId}`;
+
+  const toggleCompareCombo = (key: string) => {
+    setCompareSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const runComparison = async () => {
+    if (!profileSnapshot || !response || compareSelected.size === 0) {
+      return;
+    }
+    setCompareLoading(true);
+    setCompareError(null);
+    setCompareResults(null);
+    setCompareExpandedRow(null);
+    try {
+      const selectedCombos = response.plan.availableCombos.filter((c) => compareSelected.has(comboKey(c)));
+      const body = {
+        profile: profileSnapshot,
+        targetItemId: response.plan.targetItemId,
+        quantity: response.plan.quantity,
+        priorityTime: response.plan.priorityTime,
+        selectedCombos,
+        includeDropRare: sourceFilters.includeDropRare,
+        includeDropEpic: sourceFilters.includeDropEpic,
+        includeDropLegendary: sourceFilters.includeDropLegendary,
+      };
+      const res = await fetch("/api/plan/compare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.details || data.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setCompareResults(data.paths as MonolithicPathResult[]);
+    } catch (err) {
+      setCompareError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCompareLoading(false);
+    }
+  };
+
   const renderSourceToggle = (
     enabled: boolean,
     setEnabled: (next: boolean) => void,
@@ -2182,6 +2265,174 @@ export default function MissionCraftPlannerPage() {
               </>
             )}
           </div>
+
+          {response.plan.availableCombos.length > 0 && (
+            <div className="panel">
+              <button
+                type="button"
+                className={styles.compareToggle}
+                onClick={() => {
+                  if (!compareOpen) {
+                    // Pre-select combos that appear in the solver's solution
+                    const solverCombos = new Set(
+                      response.plan.missions.map((m) => `${m.ship}|${m.durationType}|${m.targetAfxId}`)
+                    );
+                    setCompareSelected(solverCombos);
+                  }
+                  setCompareOpen((prev) => !prev);
+                }}
+              >
+                {compareOpen ? "▾" : "▸"} Advanced: Path Comparison
+              </button>
+              {compareOpen && (
+                <div className={styles.comparePanel}>
+                  <p className="muted" style={{ margin: "0 0 8px", fontSize: 12 }}>
+                    Compare monolithic single-combo paths against the solver&apos;s mixed result. Select combos and click Compare.
+                  </p>
+                  <div className={styles.compareComboList}>
+                    {response.plan.availableCombos.map((combo) => {
+                      const key = comboKey(combo);
+                      const checked = compareSelected.has(key);
+                      const targetLabel = afxIdToTargetFamilyName(combo.targetAfxId);
+                      return (
+                        <label key={key} className={styles.compareComboLabel}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleCompareCombo(key)}
+                          />
+                          <span>
+                            {titleCaseShip(combo.ship)} {durationTypeLabel(combo.durationType)} → {targetLabel}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    className="button"
+                    style={{ marginTop: 8 }}
+                    disabled={compareLoading || compareSelected.size === 0}
+                    onClick={runComparison}
+                  >
+                    {compareLoading ? "Comparing..." : "Compare"}
+                  </button>
+                  {compareError && (
+                    <p className="error" style={{ margin: "8px 0 0" }}>{compareError}</p>
+                  )}
+                  {compareResults && compareResults.length > 0 && (
+                    <div className="table-wrap" style={{ marginTop: 10 }}>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Ship / Duration</th>
+                            <th>Target</th>
+                            <th>Launches</th>
+                            <th>Time</th>
+                            <th>GE Cost</th>
+                            <th>Feasible</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr className={styles.compareRowSolver}>
+                            <td colSpan={2}><strong>Solver&apos;s mixed result</strong></td>
+                            <td>{response.plan.missions.reduce((s, m) => s + m.launches, 0).toLocaleString()}</td>
+                            <td>{formatDurationFromHours(response.plan.expectedHours)}</td>
+                            <td>{response.plan.geCost.toLocaleString()}</td>
+                            <td><span className="good">yes</span></td>
+                          </tr>
+                          {compareResults.map((path, pathIndex) => {
+                            const targetLabel = afxIdToTargetFamilyName(path.targetAfxId);
+                            const isExpanded = compareExpandedRow === pathIndex;
+                            const isBestTime = path.feasible && path.expectedHours ===
+                              Math.min(...compareResults.filter((p) => p.feasible).map((p) => p.expectedHours));
+                            const isBestGe = path.feasible && path.geCost ===
+                              Math.min(...compareResults.filter((p) => p.feasible).map((p) => p.geCost));
+                            return (
+                              <tr
+                                key={`${path.ship}:${path.durationType}:${path.targetAfxId}`}
+                                className={styles.compareRow}
+                                style={{ cursor: path.ingredientBreakdown.length > 0 ? "pointer" : undefined }}
+                                onClick={() => setCompareExpandedRow(isExpanded ? null : pathIndex)}
+                              >
+                                <td>{titleCaseShip(path.ship)} {durationTypeLabel(path.durationType)}</td>
+                                <td>{targetLabel}</td>
+                                <td>{path.totalLaunches.toLocaleString()}</td>
+                                <td className={isBestTime ? styles.compareBest : undefined}>
+                                  {path.expectedHours > 0 ? formatDurationFromHours(path.expectedHours) : "—"}
+                                </td>
+                                <td className={isBestGe ? styles.compareBest : undefined}>
+                                  {path.geCost.toLocaleString()}
+                                </td>
+                                <td>{path.feasible ? <span className="good">yes</span> : <span className="error">no</span>}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                      {compareExpandedRow !== null && compareResults[compareExpandedRow] && (
+                        <div className={styles.compareBreakdown}>
+                          <h4 style={{ margin: "8px 0 4px" }}>Ingredient breakdown</h4>
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>Item</th>
+                                <th>Requested</th>
+                                <th>Inventory</th>
+                                <th>Craft</th>
+                                <th>Missions (exp)</th>
+                                <th>Shortfall</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {compareResults[compareExpandedRow].ingredientBreakdown
+                                .filter((i) => i.requested > 0 || i.shortfall > 0)
+                                .map((item) => (
+                                  <tr key={item.itemId}>
+                                    <td>{itemIdToLabel(item.itemId)}</td>
+                                    <td>{item.requested.toFixed(1)}</td>
+                                    <td>{item.fromInventory.toFixed(1)}</td>
+                                    <td>{item.fromCraft.toFixed(1)}</td>
+                                    <td>{item.fromMissionsExpected.toFixed(1)}</td>
+                                    <td className={item.shortfall > 0.01 ? "error" : undefined}>
+                                      {item.shortfall.toFixed(2)}
+                                    </td>
+                                  </tr>
+                                ))}
+                            </tbody>
+                          </table>
+                          {compareResults[compareExpandedRow].phases.length > 0 && (
+                            <>
+                              <h4 style={{ margin: "8px 0 4px" }}>Level phases</h4>
+                              <table>
+                                <thead>
+                                  <tr>
+                                    <th>Level</th>
+                                    <th>Capacity</th>
+                                    <th>Launches</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {compareResults[compareExpandedRow].phases.map((phase) => (
+                                    <tr key={phase.level}>
+                                      <td>{phase.level}</td>
+                                      <td>{phase.capacity}</td>
+                                      <td>{phase.launches.toLocaleString()}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           </div>
         </>
       )}
