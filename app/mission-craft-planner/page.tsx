@@ -92,6 +92,7 @@ type PlanResponse = {
       missionId: string;
       ship: string;
       durationType: string;
+      level: number;
       targetAfxId: number;
       launches: number;
       durationSeconds: number;
@@ -130,6 +131,8 @@ type MonolithicPathResult = {
   durationType: string;
   targetAfxId: number;
   totalLaunches: number;
+  finalShipLevel: number | null;
+  finalShipMaxLevel: number | null;
   expectedHours: number;
   geCost: number;
   feasible: boolean;
@@ -183,6 +186,8 @@ type TimelineSegment = {
   phase: "mission" | "prep";
   ship: string;
   durationType: string;
+  level: number | null;
+  targetAfxId: number | null;
 };
 
 type TimelineLaneBlock = {
@@ -202,8 +207,10 @@ type CraftPlanDetailRow = {
   plannedCraftCount: number;
   have: number | null;
   requiredForChain: number;
-  additionalNeeded: number | null;
   expectedMission: number;
+  plannedCraftTooltip: string | null;
+  neededTooltip: string | null;
+  expectedMissionTooltip: string | null;
 };
 
 type TargetOption = {
@@ -244,6 +251,30 @@ function durationTypeLabel(durationType: string): string {
     default:
       return durationType;
   }
+}
+
+function durationTypeSortRank(durationType: string): number {
+  switch (durationType) {
+    case "TUTORIAL":
+      return 0;
+    case "SHORT":
+      return 1;
+    case "LONG":
+      return 2;
+    case "EPIC":
+      return 3;
+    default:
+      return 99;
+  }
+}
+
+function durationTypeWithLevelLabel(durationType: string, level: number): string {
+  const base = durationTypeLabel(durationType);
+  const safeLevel = Number.isFinite(level) ? Math.max(0, Math.round(level)) : 0;
+  if (safeLevel <= 0) {
+    return base;
+  }
+  return `${base} ${safeLevel}⭐`;
 }
 
 function hashString(value: string): number {
@@ -369,7 +400,7 @@ function distributeSecondsAcrossLanes(totalSlotSeconds: number, laneLoads: numbe
 function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | null {
   const usedMissionPaletteIndexes = new Set<number>();
   const rawMissionSegments: TimelineSegment[] = plan.missions
-    .map((mission: PlanMissionRow, index) => {
+    .map((mission: PlanMissionRow, index): TimelineSegment | null => {
       const launches = Math.max(0, Math.round(mission.launches));
       const durationSeconds = Math.max(0, Math.round(mission.durationSeconds));
       const totalSlotSeconds = launches * durationSeconds;
@@ -377,7 +408,7 @@ function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | nul
         return null;
       }
       const targetName = afxIdToTargetFamilyName(mission.targetAfxId);
-      const label = `${titleCaseShip(mission.ship)} ${durationTypeLabel(mission.durationType)}`;
+      const label = `${titleCaseShip(mission.ship)} ${durationTypeWithLevelLabel(mission.durationType, mission.level)}`;
       return {
         id: `mission:${index}:${mission.missionId}:${mission.targetAfxId}`,
         label,
@@ -392,13 +423,45 @@ function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | nul
         phase: "mission",
         ship: mission.ship,
         durationType: mission.durationType,
+        level: mission.level,
+        targetAfxId: mission.targetAfxId,
       };
     })
     .filter((segment): segment is TimelineSegment => segment !== null)
-    .sort((a, b) => b.durationSeconds - a.durationSeconds || b.launches - a.launches || a.label.localeCompare(b.label));
+    .sort((a, b) => {
+      const shipDiff = a.ship.localeCompare(b.ship);
+      if (shipDiff !== 0) {
+        return shipDiff;
+      }
+      const levelDiff = (a.level ?? Number.MAX_SAFE_INTEGER) - (b.level ?? Number.MAX_SAFE_INTEGER);
+      if (levelDiff !== 0) {
+        return levelDiff;
+      }
+      const durationDiff = durationTypeSortRank(a.durationType) - durationTypeSortRank(b.durationType);
+      if (durationDiff !== 0) {
+        return durationDiff;
+      }
+      const targetLabelDiff = a.subtitle.localeCompare(b.subtitle);
+      if (targetLabelDiff !== 0) {
+        return targetLabelDiff;
+      }
+      const targetDiff = (a.targetAfxId ?? Number.MAX_SAFE_INTEGER) - (b.targetAfxId ?? Number.MAX_SAFE_INTEGER);
+      if (targetDiff !== 0) {
+        return targetDiff;
+      }
+      const durationSecondsDiff = b.durationSeconds - a.durationSeconds;
+      if (durationSecondsDiff !== 0) {
+        return durationSecondsDiff;
+      }
+      const launchesDiff = b.launches - a.launches;
+      if (launchesDiff !== 0) {
+        return launchesDiff;
+      }
+      return a.label.localeCompare(b.label);
+    });
 
   const prepSegments: TimelineSegment[] = plan.progression.prepLaunches
-    .map((prep, index) => {
+    .map((prep, index): TimelineSegment | null => {
       const launches = Math.max(0, Math.round(prep.launches));
       const durationSeconds = Math.max(0, Math.round(prep.durationSeconds));
       const totalSlotSeconds = launches * durationSeconds;
@@ -416,6 +479,8 @@ function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | nul
         phase: "prep",
         ship: prep.ship,
         durationType: prep.durationType,
+        level: null,
+        targetAfxId: null,
       };
     })
     .filter((segment): segment is TimelineSegment => segment !== null);
@@ -471,6 +536,8 @@ function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | nul
       phase: "prep",
       ship: "",
       durationType: "",
+      level: null,
+      targetAfxId: null,
     });
   }
 
@@ -841,7 +908,6 @@ export default function MissionCraftPlannerPage() {
     const requiredByItemKey: Record<string, number> = {};
     const targetKey = itemIdToKey(response.plan.targetItemId);
     requiredByItemKey[targetKey] = (requiredByItemKey[targetKey] || 0) + response.plan.quantity;
-
     for (const craft of response.plan.crafts) {
       const craftKey = itemIdToKey(craft.itemId);
       const recipe = recipeMap[craftKey];
@@ -854,29 +920,151 @@ export default function MissionCraftPlannerPage() {
     }
 
     const missionExpectedByItemId = new Map<string, number>();
+    const missionExpectedBreakdownByItemId = new Map<string, Array<{ mission: PlanMissionRow; quantity: number }>>();
     for (const mission of response.plan.missions) {
       for (const yieldRow of mission.expectedYields) {
         missionExpectedByItemId.set(
           yieldRow.itemId,
           (missionExpectedByItemId.get(yieldRow.itemId) || 0) + yieldRow.quantity
         );
+        const existing = missionExpectedBreakdownByItemId.get(yieldRow.itemId) || [];
+        existing.push({ mission, quantity: yieldRow.quantity });
+        missionExpectedBreakdownByItemId.set(yieldRow.itemId, existing);
       }
     }
 
-    return response.plan.crafts.map((craft) => {
-      const itemKey = itemIdToKey(craft.itemId);
-      const have = profileSnapshot ? Math.max(0, profileSnapshot.inventory[itemKey] || 0) : null;
-      const requiredForChain = Math.max(0, requiredByItemKey[itemKey] || 0);
-      const additionalNeeded = have == null ? null : Math.max(0, requiredForChain - have);
-      return {
-        itemId: craft.itemId,
-        plannedCraftCount: craft.count,
-        have,
-        requiredForChain,
-        additionalNeeded,
-        expectedMission: Math.max(0, missionExpectedByItemId.get(craft.itemId) || 0),
-      };
+    const neededUsesByItemKey = new Map<string, Map<string, number>>();
+    const addNeededUse = (itemKey: string, consumerKey: string, quantity: number): void => {
+      const safeQty = Math.max(0, quantity);
+      if (safeQty <= 0) {
+        return;
+      }
+      const usage = neededUsesByItemKey.get(itemKey) || new Map<string, number>();
+      usage.set(consumerKey, (usage.get(consumerKey) || 0) + safeQty);
+      neededUsesByItemKey.set(itemKey, usage);
+    };
+    addNeededUse(targetKey, "__plan_target__", response.plan.quantity);
+    for (const craft of response.plan.crafts) {
+      const craftKey = itemIdToKey(craft.itemId);
+      const recipe = recipeMap[craftKey];
+      if (!recipe) {
+        continue;
+      }
+      for (const [ingredientKey, ingredientQty] of Object.entries(recipe.ingredients)) {
+        addNeededUse(ingredientKey, craft.itemId, craft.count * ingredientQty);
+      }
+    }
+
+    const plannedCraftCountByItemId = new Map<string, number>();
+    response.plan.crafts.forEach((craft) => {
+      plannedCraftCountByItemId.set(craft.itemId, Math.max(0, craft.count));
     });
+
+    const rowItemKeys = new Set<string>([
+      ...Object.keys(requiredByItemKey),
+      ...response.plan.crafts.map((craft) => itemIdToKey(craft.itemId)),
+    ]);
+
+    const rows = Array.from(rowItemKeys)
+      .map((itemKey) => {
+        const requiredQty = requiredByItemKey[itemKey] || 0;
+        const requiredForChain = Math.max(0, requiredQty);
+        const itemId = ARTIFACT_DISPLAY[itemKey]?.id || itemKeyToId(itemKey);
+        const plannedCraftCount = plannedCraftCountByItemId.get(itemId) || 0;
+        if (requiredForChain <= 0 && plannedCraftCount <= 0) {
+          return null;
+        }
+        const have = profileSnapshot ? Math.max(0, profileSnapshot.inventory[itemKey] || 0) : null;
+        const expectedMission = Math.max(0, missionExpectedByItemId.get(itemId) || 0);
+        let plannedCraftTooltip: string | null = null;
+        if (plannedCraftCount > 0) {
+          const recipe = recipeMap[itemKey];
+          if (recipe) {
+            const lines = Object.entries(recipe.ingredients)
+              .map(([ingredientKey, ingredientQty]) => ({
+                itemId: ARTIFACT_DISPLAY[ingredientKey]?.id || itemKeyToId(ingredientKey),
+                quantity: plannedCraftCount * ingredientQty,
+              }))
+              .filter((entry) => entry.quantity > 0)
+              .sort((a, b) => b.quantity - a.quantity || itemIdToLabel(a.itemId).localeCompare(itemIdToLabel(b.itemId)))
+              .map(
+                (entry) =>
+                  `${entry.quantity.toLocaleString(undefined, { maximumFractionDigits: 2 })} - ${itemIdToLabel(entry.itemId)}`
+              );
+            if (lines.length > 0) {
+              plannedCraftTooltip = ["Direct ingredients consumed:", ...lines].join("\n");
+            }
+          }
+        }
+
+        let neededTooltip: string | null = null;
+        const neededUses = neededUsesByItemKey.get(itemKey);
+        if (neededUses && neededUses.size > 0) {
+          const lines = Array.from(neededUses.entries())
+            .map(([consumerKey, quantity]) => ({
+              label: consumerKey === "__plan_target__" ? "Plan target" : itemIdToLabel(consumerKey),
+              quantity,
+            }))
+            .sort((a, b) => b.quantity - a.quantity || a.label.localeCompare(b.label))
+            .map(
+              (entry) =>
+                `${entry.quantity.toLocaleString(undefined, { maximumFractionDigits: 2 })} - ${entry.label}`
+            );
+          if (lines.length > 0) {
+            neededTooltip = ["Used by:", ...lines].join("\n");
+          }
+        }
+
+        let expectedMissionTooltip: string | null = null;
+        if (expectedMission > 0) {
+          const missionBreakdown = missionExpectedBreakdownByItemId.get(itemId) || [];
+          const lines = missionBreakdown
+            .map((entry) => {
+              const missionLabel = `${titleCaseShip(entry.mission.ship)} ${durationTypeWithLevelLabel(entry.mission.durationType, entry.mission.level)} / ${afxIdToTargetFamilyName(entry.mission.targetAfxId)}`;
+              return {
+                quantity: entry.quantity,
+                label: missionLabel,
+              };
+            })
+            .sort((a, b) => b.quantity - a.quantity || a.label.localeCompare(b.label))
+            .map(
+              (entry) =>
+                `${entry.quantity.toLocaleString(undefined, { maximumFractionDigits: 2 })} - ${entry.label}`
+            );
+          if (lines.length > 0) {
+            expectedMissionTooltip = ["Expected from missions:", ...lines].join("\n");
+          }
+        }
+
+        return {
+          itemId,
+          plannedCraftCount,
+          have,
+          requiredForChain,
+          expectedMission,
+          plannedCraftTooltip,
+          neededTooltip,
+          expectedMissionTooltip,
+        } satisfies CraftPlanDetailRow;
+      })
+      .filter((row): row is CraftPlanDetailRow => row !== null);
+
+    rows.sort((a, b) => {
+      const aItemKey = itemIdToKey(a.itemId);
+      const bItemKey = itemIdToKey(b.itemId);
+      const familyCompare = targetFamilyKey(aItemKey).localeCompare(targetFamilyKey(bItemKey));
+      if (familyCompare !== 0) {
+        return familyCompare;
+      }
+      const aTier = targetTierNumber(aItemKey, ARTIFACT_DISPLAY[aItemKey]?.tierNumber);
+      const bTier = targetTierNumber(bItemKey, ARTIFACT_DISPLAY[bItemKey]?.tierNumber);
+      if (aTier !== bTier) {
+        return aTier - bTier;
+      }
+      return itemIdToLabel(a.itemId).localeCompare(itemIdToLabel(b.itemId));
+    });
+
+    return rows;
   }, [profileSnapshot, response]);
   const missionPrepTargetOverrideByIndex = useMemo(() => {
     const overrides = new Map<number, string>();
@@ -1974,7 +2162,7 @@ export default function MissionCraftPlannerPage() {
 
           <div className="panel">
             <h2 style={{ marginTop: 0 }}>Craft plan</h2>
-            {response.plan.crafts.length === 0 ? (
+            {craftPlanDetailRows.length === 0 ? (
               <p className="muted" style={{ margin: 0 }}>No crafting needed.</p>
             ) : (
               <div className="table-wrap">
@@ -1982,8 +2170,8 @@ export default function MissionCraftPlannerPage() {
                   <thead>
                     <tr>
                       <th>Item</th>
+                      <th>Needed</th>
                       <th>Have</th>
-                      <th>Addl. needed</th>
                       <th>Planned craft</th>
                       <th>Expected mission</th>
                     </tr>
@@ -2009,14 +2197,31 @@ export default function MissionCraftPlannerPage() {
                               </div>
                             </div>
                           </td>
+                          <td>
+                            <span
+                              className={craft.neededTooltip ? styles.tooltipValue : undefined}
+                              title={craft.neededTooltip || undefined}
+                            >
+                              {craft.requiredForChain.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                            </span>
+                          </td>
                           <td>{craft.have == null ? "—" : craft.have.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
                           <td>
-                            {craft.additionalNeeded == null
-                              ? "—"
-                              : craft.additionalNeeded.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                            <span
+                              className={craft.plannedCraftCount > 0 && craft.plannedCraftTooltip ? styles.tooltipValue : undefined}
+                              title={craft.plannedCraftCount > 0 ? craft.plannedCraftTooltip || undefined : undefined}
+                            >
+                              {craft.plannedCraftCount.toLocaleString()}
+                            </span>
                           </td>
-                          <td>{craft.plannedCraftCount.toLocaleString()}</td>
-                          <td>{craft.expectedMission.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                          <td>
+                            <span
+                              className={craft.expectedMission > 0 && craft.expectedMissionTooltip ? styles.tooltipValue : undefined}
+                              title={craft.expectedMission > 0 ? craft.expectedMissionTooltip || undefined : undefined}
+                            >
+                              {craft.expectedMission.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                            </span>
+                          </td>
                         </tr>
                       );
                     })}
@@ -2135,7 +2340,7 @@ export default function MissionCraftPlannerPage() {
                         >
                           <td>
                             {titleCaseShip(mission.ship)}<br />
-                            <span className="muted">{durationTypeLabel(mission.durationType)}</span>
+                            <span className="muted">{durationTypeWithLevelLabel(mission.durationType, mission.level)}</span>
                           </td>
                           <td>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -2328,6 +2533,7 @@ export default function MissionCraftPlannerPage() {
                             <th>Ship / Duration</th>
                             <th>Target</th>
                             <th>Launches</th>
+                            <th>Final ship level</th>
                             <th>Time</th>
                             <th>GE Cost</th>
                             <th>Feasible</th>
@@ -2337,6 +2543,7 @@ export default function MissionCraftPlannerPage() {
                           <tr className={styles.compareRowSolver}>
                             <td colSpan={2}><strong>Solver&apos;s mixed result</strong></td>
                             <td>{response.plan.missions.reduce((s, m) => s + m.launches, 0).toLocaleString()}</td>
+                            <td>—</td>
                             <td>{formatDurationFromHours(response.plan.expectedHours)}</td>
                             <td>{response.plan.geCost.toLocaleString()}</td>
                             <td><span className="good">yes</span></td>
@@ -2358,6 +2565,11 @@ export default function MissionCraftPlannerPage() {
                                 <td>{titleCaseShip(path.ship)} {durationTypeLabel(path.durationType)}</td>
                                 <td>{targetLabel}</td>
                                 <td>{path.totalLaunches.toLocaleString()}</td>
+                                <td>
+                                  {path.finalShipLevel != null && path.finalShipMaxLevel != null
+                                    ? `${path.finalShipLevel}/${path.finalShipMaxLevel}`
+                                    : "—"}
+                                </td>
                                 <td className={isBestTime ? styles.compareBest : undefined}>
                                   {path.expectedHours > 0 ? formatDurationFromHours(path.expectedHours) : "—"}
                                 </td>

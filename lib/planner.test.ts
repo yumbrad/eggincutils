@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { HighsSolveResult } from "./highs";
 import type { PlayerProfile } from "./profile";
 
 vi.mock("./loot-data", () => ({
@@ -462,7 +463,7 @@ describe("planForTarget coverage handling", () => {
         },
       ],
     });
-    mockedSolveWithHighs.mockImplementation(async (model) => {
+    mockedSolveWithHighs.mockImplementation(async (model, _options): Promise<HighsSolveResult> => {
       if (model.includes("m_1")) {
         return {
           Status: "Optimal",
@@ -516,6 +517,67 @@ describe("planForTarget coverage handling", () => {
     expect(lpModel).not.toContain("\nBinary\n");
     expect(result.crafts.length).toBeGreaterThan(0);
     expect(result.notes.some((note) => note.includes("exact craft discount scheduling"))).toBe(true);
+  });
+
+  it("runs an integer re-solve in fast mode for non-GE priorities", async () => {
+    mockedLoadLootData.mockResolvedValue({
+      missions: [
+        {
+          afxShip: 0,
+          afxDurationType: 0,
+          missionId: "test-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "puzzle-cube-1",
+                      counts: [1, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    mockedSolveWithHighs.mockImplementation(async (model) => {
+      const isMilp = model.includes("\nGeneral\n");
+      return {
+        Status: "Optimal",
+        Columns: {
+          m_0: { Primal: isMilp ? 4 : 2 },
+        },
+      };
+    });
+
+    const profile = baseProfile();
+    profile.missionOptions = [
+      {
+        ship: "CHICKEN_ONE",
+        missionId: "test-short",
+        durationType: "SHORT",
+        level: 0,
+        durationSeconds: 1200,
+        capacity: 1,
+      },
+    ];
+
+    const result = await planForTarget(profile, "puzzle-cube-1", 4, 0.5, { fastMode: true });
+
+    expect(result.missions).toHaveLength(1);
+    expect(result.missions[0].launches).toBe(4);
+    expect(result.notes.some((note) => note.includes("Fast mode integer re-solves the top LP-screened progression candidate."))).toBe(
+      true
+    );
   });
 
   it("falls back to greedy mission allocation when HiGHS is non-optimal", async () => {

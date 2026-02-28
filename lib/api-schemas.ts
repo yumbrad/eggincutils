@@ -184,6 +184,7 @@ const planMissionRowSchema = z.object({
   missionId: z.string().min(1),
   ship: z.string().min(1),
   durationType: z.enum(DURATION_TYPES),
+  level: nonNegativeIntSchema,
   targetAfxId: z.number().int(),
   launches: nonNegativeIntSchema,
   durationSeconds: nonNegativeIntSchema,
