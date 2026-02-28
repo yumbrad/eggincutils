@@ -18,4 +18,10 @@ describe("target family mapping", () => {
     expect(afxIdToDisplayName(10000)).toBe("Untargeted");
     expect(afxIdToItemKey(10000)).toBeNull();
   });
+
+  it("maps stone fragment target family IDs", () => {
+    expect(afxIdToTargetFamilyName(52)).toBe("Clarity stone fragment");
+    expect(afxIdToDisplayName(52)).toBe("Clarity stone fragment");
+    expect(afxIdToItemKey(52)).toBe("clarity_stone_1");
+  });
 });

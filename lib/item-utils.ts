@@ -23,6 +23,8 @@ const targetFamilyMap = targetFamilies as Record<
   }
 >;
 const ICON_CDN_BASE_URL = "https://eggincassets.tcl.sh";
+const CANONICAL_UNTARGETED_TARGET_AFX_ID = 10000;
+const UNTARGETED_TARGET_AFX_IDS = new Set([CANONICAL_UNTARGETED_TARGET_AFX_ID]);
 
 export function itemIdToKey(itemId: string): string {
   return itemId.replaceAll("-", "_");
@@ -52,7 +54,14 @@ export function itemKeyToIconUrl(itemKey: string, size = 32): string | null {
   return `${ICON_CDN_BASE_URL}/${size}/egginc/${iconFilename}`;
 }
 
+export function isUntargetedTargetAfxId(afxId: number): boolean {
+  return UNTARGETED_TARGET_AFX_IDS.has(afxId);
+}
+
 export function afxIdToItemKey(afxId: number): string | null {
+  if (isUntargetedTargetAfxId(afxId)) {
+    return null;
+  }
   const targetFamily = targetFamilyMap[String(afxId)];
   if (targetFamily?.representativeItemId) {
     return itemIdToKey(targetFamily.representativeItemId);
@@ -62,12 +71,12 @@ export function afxIdToItemKey(afxId: number): string | null {
 }
 
 export function afxIdToDisplayName(afxId: number): string {
+  if (isUntargetedTargetAfxId(afxId)) {
+    return "Untargeted";
+  }
   const targetFamily = targetFamilyMap[String(afxId)];
   if (targetFamily?.name) {
     return targetFamily.name;
-  }
-  if (afxId === 10000) {
-    return "No target";
   }
   const itemKey = afxIdToItemKey(afxId);
   if (!itemKey) {
@@ -89,12 +98,12 @@ function titleCaseWords(text: string): string {
 }
 
 export function afxIdToTargetFamilyName(afxId: number): string {
+  if (isUntargetedTargetAfxId(afxId)) {
+    return "Untargeted";
+  }
   const targetFamily = targetFamilyMap[String(afxId)];
   if (targetFamily?.name) {
     return targetFamily.name;
-  }
-  if (afxId === 10000) {
-    return "Untargeted";
   }
   const fallback = afxIdToItemKey(afxId);
   return fallback ? titleCaseWords(itemKeyToFamilyKey(fallback)) : String(afxId);

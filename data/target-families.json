@@ -13,6 +13,13 @@
     "type": "Stone",
     "representativeItemId": "tachyon-stone-1"
   },
+  "2": {
+    "afxId": 2,
+    "id": "tachyon-stone-fragment",
+    "name": "Tachyon stone fragment",
+    "type": "Stone",
+    "representativeItemId": "tachyon-stone-1"
+  },
   "3": {
     "afxId": 3,
     "id": "neodymium-medallion",
@@ -236,6 +243,69 @@
     "name": "Solar titanium",
     "type": "Ingredient",
     "representativeItemId": "solar-titanium-1"
+  },
+  "44": {
+    "afxId": 44,
+    "id": "dilithium-stone-fragment",
+    "name": "Dilithium stone fragment",
+    "type": "Stone",
+    "representativeItemId": "dilithium-stone-1"
+  },
+  "45": {
+    "afxId": 45,
+    "id": "shell-stone-fragment",
+    "name": "Shell stone fragment",
+    "type": "Stone",
+    "representativeItemId": "shell-stone-1"
+  },
+  "46": {
+    "afxId": 46,
+    "id": "lunar-stone-fragment",
+    "name": "Lunar stone fragment",
+    "type": "Stone",
+    "representativeItemId": "lunar-stone-1"
+  },
+  "47": {
+    "afxId": 47,
+    "id": "soul-stone-fragment",
+    "name": "Soul stone fragment",
+    "type": "Stone",
+    "representativeItemId": "soul-stone-1"
+  },
+  "48": {
+    "afxId": 48,
+    "id": "prophecy-stone-fragment",
+    "name": "Prophecy stone fragment",
+    "type": "Stone",
+    "representativeItemId": "prophecy-stone-1"
+  },
+  "49": {
+    "afxId": 49,
+    "id": "quantum-stone-fragment",
+    "name": "Quantum stone fragment",
+    "type": "Stone",
+    "representativeItemId": "quantum-stone-1"
+  },
+  "50": {
+    "afxId": 50,
+    "id": "terra-stone-fragment",
+    "name": "Terra stone fragment",
+    "type": "Stone",
+    "representativeItemId": "terra-stone-1"
+  },
+  "51": {
+    "afxId": 51,
+    "id": "life-stone-fragment",
+    "name": "Life stone fragment",
+    "type": "Stone",
+    "representativeItemId": "life-stone-1"
+  },
+  "52": {
+    "afxId": 52,
+    "id": "clarity-stone-fragment",
+    "name": "Clarity stone fragment",
+    "type": "Stone",
+    "representativeItemId": "clarity-stone-1"
   },
   "10000": {
     "afxId": 10000,
