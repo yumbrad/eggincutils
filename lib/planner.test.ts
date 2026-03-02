@@ -580,6 +580,143 @@ describe("planForTarget coverage handling", () => {
     );
   });
 
+  it("uses a second integer pass to break ties by time in 100% GE mode", async () => {
+    mockedLoadLootData.mockResolvedValue({
+      missions: [
+        {
+          afxShip: 0,
+          afxDurationType: 0,
+          missionId: "test-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "puzzle-cube-1",
+                      counts: [1, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    let solveCalls = 0;
+    mockedSolveWithHighs.mockImplementation(async () => {
+      solveCalls += 1;
+      return {
+        Status: "Optimal",
+        Columns: {
+          m_0: { Primal: solveCalls === 1 ? 10 : 2 },
+        },
+      };
+    });
+
+    const profile = baseProfile();
+    profile.missionOptions = [
+      {
+        ship: "CHICKEN_ONE",
+        missionId: "test-short",
+        durationType: "SHORT",
+        level: 0,
+        durationSeconds: 1200,
+        capacity: 1,
+      },
+    ];
+
+    const result = await planForTarget(profile, "puzzle-cube-1", 2, 0);
+
+    expect(solveCalls).toBe(2);
+    expect(result.missions).toHaveLength(1);
+    expect(result.missions[0].launches).toBe(2);
+    expect(
+      result.notes.some((note) =>
+        note.includes("GE-priority uses lexicographic integer solves per candidate")
+      )
+    ).toBe(true);
+  });
+
+  it("uses GE polish to reduce craft cost without increasing expected mission time", async () => {
+    mockedLoadLootData.mockResolvedValue({
+      missions: [
+        {
+          afxShip: 0,
+          afxDurationType: 0,
+          missionId: "test-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 10,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 2,
+                      itemId: "prophecy-stone-2",
+                      counts: [8, 0, 0, 0],
+                    },
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "prophecy-stone-1",
+                      counts: [120, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    mockedSolveWithHighs.mockImplementation(async (model) => {
+      const isGePolish = model.includes("ts_0:");
+      return {
+        Status: "Optimal",
+        Columns: isGePolish
+          ? {
+              m_0: { Primal: 3 },
+            }
+          : {
+              m_0: { Primal: 2 },
+              c_0: { Primal: 1 },
+            },
+      };
+    });
+
+    const profile = baseProfile();
+    profile.missionOptions = [
+      {
+        ship: "CHICKEN_ONE",
+        missionId: "test-short",
+        durationType: "SHORT",
+        level: 0,
+        durationSeconds: 1200,
+        capacity: 1,
+      },
+    ];
+
+    const result = await planForTarget(profile, "prophecy-stone-2", 2, 0.5);
+
+    expect(result.geCost).toBe(0);
+    expect(result.missions).toHaveLength(1);
+    expect(result.missions[0].launches).toBe(3);
+    expect(result.notes.some((note) => note.includes("GE polish reduced craft cost"))).toBe(true);
+    expect(result.notes.some((note) => note.includes("MILP GE-polish"))).toBe(true);
+  });
+
   it("falls back to greedy mission allocation when HiGHS is non-optimal", async () => {
     mockedLoadLootData.mockResolvedValue({
       missions: [

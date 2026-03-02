@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run",
+    "mission-craft:run-snapshot": "tsx scripts/mission-craft-run-snapshot.ts",
     "benchmark:mission-craft:archive-profile": "tsx scripts/archive-mission-craft-benchmark-profile.ts",
     "benchmark:mission-craft": "tsx scripts/mission-craft-benchmark.ts",
     "benchmark:mission-craft:convert-report": "tsx scripts/mission-craft-benchmark-convert-report.ts"

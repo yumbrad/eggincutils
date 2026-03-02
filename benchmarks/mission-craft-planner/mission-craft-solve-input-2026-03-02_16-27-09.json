@@ -1,0 +1,3549 @@
+{
+  "schemaVersion": 1,
+  "kind": "mission-craft-planner-solve-input",
+  "capturedAt": "2026-03-02T16:27:09.957Z",
+  "request": {
+    "targetItemId": "prophecy-stone-2",
+    "quantity": 50,
+    "priorityTime": 0.01,
+    "fastMode": true
+  },
+  "sourceFilters": {
+    "includeSlotted": false,
+    "includeInventoryRare": false,
+    "includeInventoryEpic": false,
+    "includeInventoryLegendary": false,
+    "includeDropRare": false,
+    "includeDropEpic": false,
+    "includeDropLegendary": false
+  },
+  "profile": {
+    "eid": "REDACTED",
+    "inventory": {
+      "gold_meteorite_1": 38,
+      "lunar_stone_1": 17,
+      "terra_stone_1": 265,
+      "vial_martian_dust_1": 277,
+      "puzzle_cube_3": 415,
+      "demeters_necklace_1": 127,
+      "tachyon_stone_1": 207,
+      "shell_stone_2": 40,
+      "shell_stone_1": 270,
+      "puzzle_cube_2": 69,
+      "mercurys_lens_1": 190,
+      "tungsten_ankh_1": 95,
+      "soul_stone_1": 200,
+      "tungsten_ankh_3": 253,
+      "solar_titanium_1": 202,
+      "tachyon_stone_2": 50,
+      "quantum_stone_1": 227,
+      "vial_martian_dust_3": 177,
+      "ornate_gusset_3": 8,
+      "neodymium_medallion_1": 291,
+      "lunar_totem_4": 83,
+      "terra_stone_2": 53,
+      "life_stone_1": 114,
+      "vial_martian_dust_2": 209,
+      "dilithium_stone_1": 192,
+      "titanium_actuator_1": 311,
+      "soul_stone_2": 52,
+      "the_chalice_1": 451,
+      "quantum_stone_2": 56,
+      "phoenix_feather_1": 598,
+      "ship_in_a_bottle_1": 604,
+      "demeters_necklace_3": 308,
+      "prophecy_stone_1": 94,
+      "tachyon_stone_3": 15,
+      "dilithium_monocle_2": 282,
+      "the_chalice_3": 136,
+      "quantum_metronome_2": 207,
+      "the_chalice_2": 373,
+      "neodymium_medallion_4": 99,
+      "aurelian_brooch_4": 60,
+      "shell_stone_3": 69,
+      "beak_of_midas_3": 204,
+      "light_of_eggendil_1": 158,
+      "lunar_stone_3": 24,
+      "titanium_actuator_2": 188,
+      "book_of_basan_1": 166,
+      "quantum_stone_3": 21,
+      "phoenix_feather_3": 65,
+      "terra_stone_3": 56,
+      "carved_rainstick_3": 165,
+      "prophecy_stone_2": 10,
+      "tachyon_deflector_2": 78,
+      "clarity_stone_1": 68,
+      "tungsten_ankh_4": 8,
+      "titanium_actuator_3": 13,
+      "puzzle_cube_4": 10,
+      "vial_martian_dust_4": 7,
+      "ornate_gusset_4": 29,
+      "aurelian_brooch_3": 230,
+      "carved_rainstick_4": 1,
+      "soul_stone_3": 15,
+      "life_stone_3": 8,
+      "ship_in_a_bottle_3": 6,
+      "dilithium_stone_3": 4,
+      "dilithium_stone_2": 41,
+      "phoenix_feather_4": 1,
+      "mercurys_lens_4": 2,
+      "dilithium_monocle_4": 2,
+      "tachyon_deflector_3": 2,
+      "quantum_metronome_3": 44,
+      "light_of_eggendil_3": 1,
+      "aurelian_brooch_2": 143,
+      "the_chalice_4": 4,
+      "life_stone_2": 24,
+      "carved_rainstick_1": 164,
+      "demeters_necklace_2": 249,
+      "tau_ceti_geode_1": 118,
+      "ornate_gusset_1": 57,
+      "aurelian_brooch_1": 303,
+      "puzzle_cube_1": 50,
+      "demeters_necklace_4": 40,
+      "book_of_basan_2": 8,
+      "phoenix_feather_2": 82,
+      "neodymium_medallion_2": 66,
+      "ornate_gusset_2": 38,
+      "beak_of_midas_1": 139,
+      "mercurys_lens_2": 78,
+      "tau_ceti_geode_2": 148,
+      "light_of_eggendil_2": 15,
+      "lunar_stone_2": 8,
+      "tungsten_ankh_2": 52,
+      "interstellar_compass_2": 42,
+      "beak_of_midas_2": 66,
+      "interstellar_compass_1": 68,
+      "prophecy_stone_3": 2,
+      "quantum_stone_4": 1,
+      "solar_titanium_2": 152,
+      "carved_rainstick_2": 22,
+      "mercurys_lens_3": 13,
+      "dilithium_monocle_1": 4,
+      "tachyon_deflector_1": 21,
+      "ship_in_a_bottle_2": 21,
+      "clarity_stone_2": 9,
+      "interstellar_compass_3": 15,
+      "dilithium_monocle_3": 9,
+      "beak_of_midas_4": 5,
+      "solar_titanium_3": 11,
+      "neodymium_medallion_3": 4,
+      "interstellar_compass_4": 1,
+      "shell_stone_4": 2,
+      "quantum_metronome_1": 27,
+      "soul_stone_4": 1,
+      "gold_meteorite_2": 9,
+      "lunar_stone_4": 1,
+      "lunar_totem_2": 3
+    },
+    "craftCounts": {
+      "lunar_totem_1": 0,
+      "lunar_totem_2": 75,
+      "lunar_totem_3": 69,
+      "lunar_totem_4": 80,
+      "tachyon_stone_2": 1,
+      "tachyon_stone_3": 0,
+      "tachyon_stone_4": 2,
+      "tachyon_stone_1": 0,
+      "neodymium_medallion_1": 0,
+      "neodymium_medallion_2": 88,
+      "neodymium_medallion_3": 70,
+      "neodymium_medallion_4": 70,
+      "beak_of_midas_1": 0,
+      "beak_of_midas_2": 123,
+      "beak_of_midas_3": 81,
+      "beak_of_midas_4": 7,
+      "light_of_eggendil_1": 0,
+      "light_of_eggendil_2": 3,
+      "light_of_eggendil_3": 2,
+      "light_of_eggendil_4": 0,
+      "demeters_necklace_1": 0,
+      "demeters_necklace_2": 71,
+      "demeters_necklace_3": 36,
+      "demeters_necklace_4": 11,
+      "vial_martian_dust_1": 0,
+      "vial_martian_dust_2": 55,
+      "vial_martian_dust_3": 23,
+      "vial_martian_dust_4": 6,
+      "ornate_gusset_1": 0,
+      "ornate_gusset_2": 91,
+      "ornate_gusset_3": 60,
+      "ornate_gusset_4": 28,
+      "the_chalice_1": 0,
+      "the_chalice_2": 10,
+      "the_chalice_3": 3,
+      "the_chalice_4": 5,
+      "book_of_basan_1": 0,
+      "book_of_basan_2": 4,
+      "book_of_basan_3": 1,
+      "book_of_basan_4": 0,
+      "phoenix_feather_1": 0,
+      "phoenix_feather_2": 0,
+      "phoenix_feather_3": 25,
+      "phoenix_feather_4": 1,
+      "tungsten_ankh_1": 0,
+      "tungsten_ankh_2": 84,
+      "tungsten_ankh_3": 55,
+      "tungsten_ankh_4": 2,
+      "gold_meteorite_1": 0,
+      "gold_meteorite_2": 220,
+      "gold_meteorite_3": 163,
+      "tau_ceti_geode_1": 0,
+      "tau_ceti_geode_2": 104,
+      "tau_ceti_geode_3": 13,
+      "aurelian_brooch_1": 0,
+      "aurelian_brooch_2": 56,
+      "aurelian_brooch_3": 32,
+      "aurelian_brooch_4": 20,
+      "carved_rainstick_1": 0,
+      "carved_rainstick_2": 78,
+      "carved_rainstick_3": 70,
+      "carved_rainstick_4": 0,
+      "puzzle_cube_1": 0,
+      "puzzle_cube_2": 36,
+      "puzzle_cube_3": 51,
+      "puzzle_cube_4": 1,
+      "quantum_metronome_1": 0,
+      "quantum_metronome_2": 127,
+      "quantum_metronome_3": 34,
+      "quantum_metronome_4": 1,
+      "ship_in_a_bottle_1": 0,
+      "ship_in_a_bottle_2": 24,
+      "ship_in_a_bottle_3": 0,
+      "ship_in_a_bottle_4": 0,
+      "tachyon_deflector_1": 0,
+      "tachyon_deflector_2": 53,
+      "tachyon_deflector_3": 1,
+      "tachyon_deflector_4": 0,
+      "interstellar_compass_1": 0,
+      "interstellar_compass_2": 73,
+      "interstellar_compass_3": 56,
+      "interstellar_compass_4": 0,
+      "dilithium_monocle_1": 0,
+      "dilithium_monocle_2": 128,
+      "dilithium_monocle_3": 5,
+      "dilithium_monocle_4": 2,
+      "titanium_actuator_1": 0,
+      "titanium_actuator_2": 0,
+      "titanium_actuator_3": 0,
+      "titanium_actuator_4": 0,
+      "mercurys_lens_1": 0,
+      "mercurys_lens_2": 72,
+      "mercurys_lens_3": 34,
+      "mercurys_lens_4": 5,
+      "dilithium_stone_2": 5,
+      "dilithium_stone_3": 3,
+      "dilithium_stone_4": 0,
+      "shell_stone_2": 2,
+      "shell_stone_3": 0,
+      "shell_stone_4": 0,
+      "lunar_stone_2": 19,
+      "lunar_stone_3": 3,
+      "lunar_stone_4": 2,
+      "soul_stone_2": 1,
+      "soul_stone_3": 0,
+      "soul_stone_4": 0,
+      "quantum_stone_2": 1,
+      "quantum_stone_3": 0,
+      "quantum_stone_4": 2,
+      "terra_stone_2": 0,
+      "terra_stone_3": 0,
+      "terra_stone_4": 0,
+      "life_stone_2": 7,
+      "life_stone_3": 4,
+      "life_stone_4": 0,
+      "prophecy_stone_2": 15,
+      "prophecy_stone_3": 2,
+      "prophecy_stone_4": 0,
+      "clarity_stone_2": 16,
+      "clarity_stone_3": 3,
+      "clarity_stone_4": 0,
+      "solar_titanium_1": 0,
+      "solar_titanium_2": 113,
+      "solar_titanium_3": 37,
+      "dilithium_stone_1": 0,
+      "shell_stone_1": 0,
+      "lunar_stone_1": 0,
+      "soul_stone_1": 0,
+      "prophecy_stone_1": 0,
+      "quantum_stone_1": 0,
+      "terra_stone_1": 0,
+      "life_stone_1": 0,
+      "clarity_stone_1": 0
+    },
+    "epicResearchFTLLevel": 60,
+    "epicResearchZerogLevel": 10,
+    "shipLevels": [
+      {
+        "ship": "CHICKEN_ONE",
+        "unlocked": true,
+        "launches": 5,
+        "launchPoints": 5.8,
+        "level": 0,
+        "maxLevel": 0,
+        "launchesByDuration": {
+          "TUTORIAL": 2,
+          "SHORT": 2,
+          "LONG": 0,
+          "EPIC": 1
+        }
+      },
+      {
+        "ship": "CHICKEN_NINE",
+        "unlocked": true,
+        "launches": 10,
+        "launchPoints": 14.8,
+        "level": 2,
+        "maxLevel": 2,
+        "launchesByDuration": {
+          "TUTORIAL": 0,
+          "SHORT": 4,
+          "LONG": 0,
+          "EPIC": 6
+        }
+      },
+      {
+        "ship": "CHICKEN_HEAVY",
+        "unlocked": true,
+        "launches": 64,
+        "launchPoints": 71.2,
+        "level": 3,
+        "maxLevel": 3,
+        "launchesByDuration": {
+          "TUTORIAL": 0,
+          "SHORT": 52,
+          "LONG": 6,
+          "EPIC": 6
+        }
+      },
+      {
+        "ship": "BCR",
+        "unlocked": true,
+        "launches": 87,
+        "launchPoints": 88.6,
+        "level": 4,
+        "maxLevel": 4,
+        "launchesByDuration": {
+          "TUTORIAL": 0,
+          "SHORT": 83,
+          "LONG": 4,
+          "EPIC": 0
+        }
+      },
+      {
+        "ship": "MILLENIUM_CHICKEN",
+        "unlocked": true,
+        "launches": 125,
+        "launchPoints": 125,
+        "level": 4,
+        "maxLevel": 4,
+        "launchesByDuration": {
+          "TUTORIAL": 0,
+          "SHORT": 125,
+          "LONG": 0,
+          "EPIC": 0
+        }
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "unlocked": true,
+        "launches": 123,
+        "launchPoints": 125.4,
+        "level": 4,
+        "maxLevel": 4,
+        "launchesByDuration": {
+          "TUTORIAL": 0,
+          "SHORT": 120,
+          "LONG": 0,
+          "EPIC": 3
+        }
+      },
+      {
+        "ship": "GALEGGTICA",
+        "unlocked": true,
+        "launches": 41,
+        "launchPoints": 46.6,
+        "level": 2,
+        "maxLevel": 5,
+        "launchesByDuration": {
+          "TUTORIAL": 0,
+          "SHORT": 30,
+          "LONG": 8,
+          "EPIC": 3
+        }
+      },
+      {
+        "ship": "CHICKFIANT",
+        "unlocked": true,
+        "launches": 57,
+        "launchPoints": 59,
+        "level": 2,
+        "maxLevel": 5,
+        "launchesByDuration": {
+          "TUTORIAL": 0,
+          "SHORT": 52,
+          "LONG": 5,
+          "EPIC": 0
+        }
+      },
+      {
+        "ship": "VOYEGGER",
+        "unlocked": true,
+        "launches": 31,
+        "launchPoints": 31.8,
+        "level": 1,
+        "maxLevel": 6,
+        "launchesByDuration": {
+          "TUTORIAL": 0,
+          "SHORT": 29,
+          "LONG": 2,
+          "EPIC": 0
+        }
+      },
+      {
+        "ship": "HENERPRISE",
+        "unlocked": true,
+        "launches": 79,
+        "launchPoints": 83,
+        "level": 3,
+        "maxLevel": 8,
+        "launchesByDuration": {
+          "TUTORIAL": 0,
+          "SHORT": 74,
+          "LONG": 0,
+          "EPIC": 5
+        }
+      },
+      {
+        "ship": "ATREGGIES",
+        "unlocked": true,
+        "launches": 35,
+        "launchPoints": 47.4,
+        "level": 1,
+        "maxLevel": 8,
+        "launchesByDuration": {
+          "TUTORIAL": 0,
+          "SHORT": 19,
+          "LONG": 1,
+          "EPIC": 15
+        }
+      }
+    ],
+    "missionOptions": [
+      {
+        "ship": "CHICKEN_ONE",
+        "missionId": "chicken-one-short",
+        "durationType": "SHORT",
+        "level": 0,
+        "durationSeconds": 1200,
+        "capacity": 6
+      },
+      {
+        "ship": "CHICKEN_ONE",
+        "missionId": "chicken-one-standard",
+        "durationType": "LONG",
+        "level": 0,
+        "durationSeconds": 3600,
+        "capacity": 7
+      },
+      {
+        "ship": "CHICKEN_ONE",
+        "missionId": "chicken-one-extended",
+        "durationType": "EPIC",
+        "level": 0,
+        "durationSeconds": 7200,
+        "capacity": 9
+      },
+      {
+        "ship": "CHICKEN_NINE",
+        "missionId": "chicken-nine-short",
+        "durationType": "SHORT",
+        "level": 2,
+        "durationSeconds": 1800,
+        "capacity": 13
+      },
+      {
+        "ship": "CHICKEN_NINE",
+        "missionId": "chicken-nine-standard",
+        "durationType": "LONG",
+        "level": 2,
+        "durationSeconds": 3600,
+        "capacity": 15
+      },
+      {
+        "ship": "CHICKEN_NINE",
+        "missionId": "chicken-nine-extended",
+        "durationType": "EPIC",
+        "level": 2,
+        "durationSeconds": 10800,
+        "capacity": 16
+      },
+      {
+        "ship": "CHICKEN_HEAVY",
+        "missionId": "chicken-heavy-short",
+        "durationType": "SHORT",
+        "level": 3,
+        "durationSeconds": 2700,
+        "capacity": 22
+      },
+      {
+        "ship": "CHICKEN_HEAVY",
+        "missionId": "chicken-heavy-standard",
+        "durationType": "LONG",
+        "level": 3,
+        "durationSeconds": 5400,
+        "capacity": 30
+      },
+      {
+        "ship": "CHICKEN_HEAVY",
+        "missionId": "chicken-heavy-extended",
+        "durationType": "EPIC",
+        "level": 3,
+        "durationSeconds": 14400,
+        "capacity": 31
+      },
+      {
+        "ship": "BCR",
+        "missionId": "bcr-short",
+        "durationType": "SHORT",
+        "level": 4,
+        "durationSeconds": 5400,
+        "capacity": 39
+      },
+      {
+        "ship": "BCR",
+        "missionId": "bcr-standard",
+        "durationType": "LONG",
+        "level": 4,
+        "durationSeconds": 14400,
+        "capacity": 42
+      },
+      {
+        "ship": "BCR",
+        "missionId": "bcr-extended",
+        "durationType": "EPIC",
+        "level": 4,
+        "durationSeconds": 28800,
+        "capacity": 51
+      },
+      {
+        "ship": "MILLENIUM_CHICKEN",
+        "missionId": "millenium-chicken-short",
+        "durationType": "SHORT",
+        "level": 4,
+        "durationSeconds": 4320,
+        "capacity": 21
+      },
+      {
+        "ship": "MILLENIUM_CHICKEN",
+        "missionId": "millenium-chicken-standard",
+        "durationType": "LONG",
+        "level": 4,
+        "durationSeconds": 8640,
+        "capacity": 30
+      },
+      {
+        "ship": "MILLENIUM_CHICKEN",
+        "missionId": "millenium-chicken-extended",
+        "durationType": "EPIC",
+        "level": 4,
+        "durationSeconds": 17280,
+        "capacity": 33
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "missionId": "corellihen-corvette-short",
+        "durationType": "SHORT",
+        "level": 4,
+        "durationSeconds": 5760,
+        "capacity": 45
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "missionId": "corellihen-corvette-standard",
+        "durationType": "LONG",
+        "level": 4,
+        "durationSeconds": 17280,
+        "capacity": 49
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "missionId": "corellihen-corvette-extended",
+        "durationType": "EPIC",
+        "level": 4,
+        "durationSeconds": 34560,
+        "capacity": 60
+      },
+      {
+        "ship": "GALEGGTICA",
+        "missionId": "galeggtica-short",
+        "durationType": "SHORT",
+        "level": 2,
+        "durationSeconds": 8640,
+        "capacity": 52
+      },
+      {
+        "ship": "GALEGGTICA",
+        "missionId": "galeggtica-standard",
+        "durationType": "LONG",
+        "level": 2,
+        "durationSeconds": 23040,
+        "capacity": 60
+      },
+      {
+        "ship": "GALEGGTICA",
+        "missionId": "galeggtica-extended",
+        "durationType": "EPIC",
+        "level": 2,
+        "durationSeconds": 43200,
+        "capacity": 70
+      },
+      {
+        "ship": "CHICKFIANT",
+        "missionId": "chickfiant-short",
+        "durationType": "SHORT",
+        "level": 2,
+        "durationSeconds": 11520,
+        "capacity": 39
+      },
+      {
+        "ship": "CHICKFIANT",
+        "missionId": "chickfiant-standard",
+        "durationType": "LONG",
+        "level": 2,
+        "durationSeconds": 34560,
+        "capacity": 48
+      },
+      {
+        "ship": "CHICKFIANT",
+        "missionId": "chickfiant-extended",
+        "durationType": "EPIC",
+        "level": 2,
+        "durationSeconds": 69120,
+        "capacity": 57
+      },
+      {
+        "ship": "VOYEGGER",
+        "missionId": "voyegger-short",
+        "durationType": "SHORT",
+        "level": 1,
+        "durationSeconds": 17280,
+        "capacity": 51
+      },
+      {
+        "ship": "VOYEGGER",
+        "missionId": "voyegger-standard",
+        "durationType": "LONG",
+        "level": 1,
+        "durationSeconds": 51840,
+        "capacity": 60
+      },
+      {
+        "ship": "VOYEGGER",
+        "missionId": "voyegger-extended",
+        "durationType": "EPIC",
+        "level": 1,
+        "durationSeconds": 103680,
+        "capacity": 69
+      },
+      {
+        "ship": "HENERPRISE",
+        "missionId": "henerprise-short",
+        "durationType": "SHORT",
+        "level": 3,
+        "durationSeconds": 34560,
+        "capacity": 90
+      },
+      {
+        "ship": "HENERPRISE",
+        "missionId": "henerprise-standard",
+        "durationType": "LONG",
+        "level": 3,
+        "durationSeconds": 69120,
+        "capacity": 102
+      },
+      {
+        "ship": "HENERPRISE",
+        "missionId": "henerprise-extended",
+        "durationType": "EPIC",
+        "level": 3,
+        "durationSeconds": 138240,
+        "capacity": 115
+      },
+      {
+        "ship": "ATREGGIES",
+        "missionId": "atreggies-short",
+        "durationType": "SHORT",
+        "level": 1,
+        "durationSeconds": 69120,
+        "capacity": 100
+      },
+      {
+        "ship": "ATREGGIES",
+        "missionId": "atreggies-standard",
+        "durationType": "LONG",
+        "level": 1,
+        "durationSeconds": 103680,
+        "capacity": 129
+      },
+      {
+        "ship": "ATREGGIES",
+        "missionId": "atreggies-extended",
+        "durationType": "EPIC",
+        "level": 1,
+        "durationSeconds": 138240,
+        "capacity": 144
+      }
+    ]
+  },
+  "advancedCompare": {
+    "availableCombos": [
+      {
+        "ship": "MILLENIUM_CHICKEN",
+        "durationType": "EPIC",
+        "targetAfxId": 10000
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 0
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 1
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 6
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 8
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 9
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 11
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 12
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 17
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 18
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 21
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 23
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 24
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 25
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 27
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 29
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 30
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 33
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 36
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 43
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 48
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 49
+      },
+      {
+        "ship": "CORELLIHEN_CORVETTE",
+        "durationType": "EPIC",
+        "targetAfxId": 10000
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "SHORT",
+        "targetAfxId": 10000
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "SHORT",
+        "targetAfxId": 0
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "SHORT",
+        "targetAfxId": 1
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "SHORT",
+        "targetAfxId": 6
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "SHORT",
+        "targetAfxId": 8
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "SHORT",
+        "targetAfxId": 9
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "SHORT",
+        "targetAfxId": 12
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "SHORT",
+        "targetAfxId": 17
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "SHORT",
+        "targetAfxId": 18
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "SHORT",
+        "targetAfxId": 23
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "SHORT",
+        "targetAfxId": 24
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "SHORT",
+        "targetAfxId": 27
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "SHORT",
+        "targetAfxId": 30
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "SHORT",
+        "targetAfxId": 33
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "SHORT",
+        "targetAfxId": 36
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "SHORT",
+        "targetAfxId": 46
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 0
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 1
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 6
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 7
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 9
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 11
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 12
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 17
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 18
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 21
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 23
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 24
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 27
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 28
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 30
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 10000
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 8
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 26
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 33
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 43
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 52
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 25
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 29
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 32
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 36
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 38
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 48
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 2
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 34
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "LONG",
+        "targetAfxId": 37
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 0
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 1
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 3
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 4
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 5
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 6
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 7
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 8
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 9
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 10
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 11
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 12
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 17
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 18
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 21
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 22
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 23
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 24
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 25
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 26
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 27
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 28
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 29
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 30
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 31
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 33
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 34
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 36
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 38
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 40
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 43
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 44
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 48
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 49
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 52
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 10000
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 39
+      },
+      {
+        "ship": "GALEGGTICA",
+        "durationType": "EPIC",
+        "targetAfxId": 32
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 0
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 1
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 3
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 4
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 5
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 6
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 7
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 8
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 9
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 10
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 11
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 12
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 17
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 18
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 21
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 23
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 24
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 25
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 26
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 27
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 28
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 29
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 30
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 32
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 33
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 34
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 36
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 38
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 39
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 40
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 43
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 44
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 48
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 50
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 52
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 10000
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 22
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 51
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 31
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "SHORT",
+        "targetAfxId": 46
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 0
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 1
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 3
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 4
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 6
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 8
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 9
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 10
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 11
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 12
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 17
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 18
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 23
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 24
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 25
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 26
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 27
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 28
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 30
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 33
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 34
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 38
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 39
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 40
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 43
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 48
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 52
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 10000
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 7
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 32
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "LONG",
+        "targetAfxId": 36
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 0
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 1
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 3
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 4
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 5
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 6
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 7
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 8
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 9
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 10
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 11
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 12
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 17
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 18
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 22
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 23
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 24
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 25
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 26
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 27
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 28
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 29
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 30
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 31
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 33
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 34
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 36
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 38
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 39
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 40
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 43
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 48
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 52
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 10000
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 21
+      },
+      {
+        "ship": "CHICKFIANT",
+        "durationType": "EPIC",
+        "targetAfxId": 37
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 0
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 1
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 3
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 4
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 5
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 6
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 7
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 8
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 9
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 10
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 11
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 12
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 17
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 18
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 21
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 22
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 23
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 24
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 25
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 26
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 27
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 28
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 29
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 30
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 31
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 32
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 33
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 34
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 36
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 37
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 38
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 39
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 40
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 43
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 44
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 45
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 48
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 52
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 10000
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 46
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 2
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "SHORT",
+        "targetAfxId": 47
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 0
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 1
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 4
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 5
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 6
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 7
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 8
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 9
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 10
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 11
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 12
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 17
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 18
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 21
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 23
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 24
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 25
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 26
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 27
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 28
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 30
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 31
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 40
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 43
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 52
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 10000
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 38
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 39
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 32
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 34
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 36
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 45
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "LONG",
+        "targetAfxId": 48
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 0
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 1
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 3
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 4
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 5
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 6
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 7
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 8
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 9
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 10
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 11
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 12
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 17
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 18
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 21
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 23
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 24
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 25
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 26
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 27
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 28
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 30
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 31
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 33
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 34
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 38
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 39
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 40
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 43
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 52
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 10000
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 22
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 32
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 36
+      },
+      {
+        "ship": "VOYEGGER",
+        "durationType": "EPIC",
+        "targetAfxId": 48
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 0
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 1
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 3
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 5
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 6
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 7
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 8
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 9
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 10
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 11
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 12
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 17
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 18
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 21
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 23
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 24
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 25
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 26
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 27
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 28
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 30
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 31
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 33
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 34
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 36
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 37
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 38
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 39
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 40
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 43
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 45
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 48
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 52
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 10000
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 4
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 44
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 29
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 32
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 47
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 2
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 22
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 46
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "SHORT",
+        "targetAfxId": 49
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 5
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 8
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 9
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 10
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 11
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 12
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 17
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 18
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 24
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 25
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 31
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 38
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 39
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 40
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 43
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 10000
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 1
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 26
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 34
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 0
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 23
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 30
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 6
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 27
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 4
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 7
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 28
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 33
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "LONG",
+        "targetAfxId": 48
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 0
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 1
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 3
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 4
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 5
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 6
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 7
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 8
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 9
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 10
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 11
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 12
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 17
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 18
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 21
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 23
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 24
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 25
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 26
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 27
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 28
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 29
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 30
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 31
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 33
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 34
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 36
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 37
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 38
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 39
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 40
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 43
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 10000
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 32
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 52
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 48
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 47
+      },
+      {
+        "ship": "HENERPRISE",
+        "durationType": "EPIC",
+        "targetAfxId": 22
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 0
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 1
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 2
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 3
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 4
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 5
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 6
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 7
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 8
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 9
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 10
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 11
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 12
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 17
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 18
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 21
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 22
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 23
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 24
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 25
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 26
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 27
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 28
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 29
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 30
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 31
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 32
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 33
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 34
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 36
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 37
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 38
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 39
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 40
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 43
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 44
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 45
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 46
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 47
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 48
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 49
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 50
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 52
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 10000
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "SHORT",
+        "targetAfxId": 51
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 0
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 1
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 3
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 4
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 5
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 6
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 7
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 8
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 9
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 10
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 11
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 12
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 17
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 18
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 21
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 22
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 23
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 24
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 25
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 26
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 27
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 28
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 29
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 30
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 31
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 33
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 34
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 36
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 37
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 38
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 39
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 40
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 43
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 44
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 47
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 48
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 49
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 51
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 52
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 10000
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 2
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 32
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 45
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 46
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "LONG",
+        "targetAfxId": 50
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 0
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 1
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 2
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 3
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 4
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 5
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 6
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 7
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 8
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 9
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 10
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 11
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 12
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 17
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 18
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 21
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 22
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 23
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 24
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 25
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 26
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 27
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 28
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 29
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 30
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 31
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 32
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 33
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 34
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 36
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 37
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 38
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 39
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 40
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 43
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 44
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 45
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 46
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 47
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 48
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 49
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 50
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 51
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 52
+      },
+      {
+        "ship": "ATREGGIES",
+        "durationType": "EPIC",
+        "targetAfxId": 10000
+      }
+    ],
+    "selectedCombos": []
+  }
+}

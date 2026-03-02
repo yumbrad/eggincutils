@@ -108,6 +108,28 @@ Reports are written under:
 
 Benchmark metadata paths are stored repo-relative (not absolute local filesystem paths).
 
+## Solve Input Snapshots
+
+Mission Craft Planner can export a reproducible solve-input snapshot (inputs only) from the **Advanced: Path Comparison** header via **Download solve snapshot**.
+
+Snapshot file includes:
+- Planner request settings (`targetItemId`, `quantity`, `priorityTime`, `fastMode`)
+- Source filters (inventory/drop rarity + slotted settings)
+- Full profile solve state (inventory, craft counts, ship history/levels, mission options)
+- Advanced compare combos (available + selected)
+
+Replay a snapshot from CLI:
+
+```bash
+npm run mission-craft:run-snapshot -- <snapshot.json>
+```
+
+Optional flags:
+- `--compare` also runs monolithic compare combos from the snapshot (uses selected combos, or falls back to available combos if none are selected)
+- `--json` prints full run diagnostics JSON (environment, parsed solver-note diagnostics, progress events, plan summary, full plan, and optional compare results)
+- `--out <file>` writes the same full diagnostics JSON to a file
+- `--progress` / `--no-progress` force-enable or disable live solver progress lines
+
 ## Deployment
 
 - Fly.io config: `fly.toml`

@@ -151,6 +151,36 @@ type MonolithicPathResult = {
   phases: Array<{ level: number; capacity: number; launches: number }>;
 };
 
+type SolveSnapshotRequest = {
+  targetItemId: string;
+  quantity: number;
+  priorityTime: number;
+  fastMode: boolean;
+};
+
+type LastSolveInputs = SolveSnapshotRequest & {
+  sourceFilters: PlannerSourceFilters;
+};
+
+type SolveSnapshotCombo = {
+  ship: string;
+  durationType: DurationType;
+  targetAfxId: number;
+};
+
+type SolveInputSnapshotFile = {
+  schemaVersion: 1;
+  kind: "mission-craft-planner-solve-input";
+  capturedAt: string;
+  request: SolveSnapshotRequest;
+  sourceFilters: PlannerSourceFilters;
+  profile: ProfileSnapshot;
+  advancedCompare: {
+    availableCombos: SolveSnapshotCombo[];
+    selectedCombos: SolveSnapshotCombo[];
+  };
+};
+
 type PlannerProgressPhase = "init" | "candidates" | "candidate" | "refinement" | "finalize" | "fallback";
 
 type PlannerProgressState = {
@@ -840,6 +870,7 @@ export default function MissionCraftPlannerPage() {
   const [compareResults, setCompareResults] = useState<MonolithicPathResult[] | null>(null);
   const [compareError, setCompareError] = useState<string | null>(null);
   const [compareExpandedRow, setCompareExpandedRow] = useState<number | null>(null);
+  const [lastSolveRequest, setLastSolveRequest] = useState<LastSolveInputs | null>(null);
   const [lootData, setLootData] = useState<LootJson | null>(null);
   const lootDataRef = useRef<LootJson | null>(null);
   const targetPickerRef = useRef<HTMLDivElement | null>(null);
@@ -1450,6 +1481,13 @@ export default function MissionCraftPlannerPage() {
 
   async function runBuildPlan() {
     const normalizedQuantity = Math.max(1, Math.min(9999, Math.round(Number(quantityInput) || quantity || 1)));
+    const snapshotRequest: LastSolveInputs = {
+      targetItemId,
+      quantity: normalizedQuantity,
+      priorityTime: priorityTimePct / 100,
+      fastMode,
+      sourceFilters: { ...sourceFilters },
+    };
     setQuantity(normalizedQuantity);
     setQuantityInput(String(normalizedQuantity));
 
@@ -1553,6 +1591,7 @@ export default function MissionCraftPlannerPage() {
         };
         setResponse(planResponse);
         setProfileSnapshot(profile);
+        setLastSolveRequest(snapshotRequest);
       } else {
         // Server-side fallback: stream from /api/plan/stream.
         const requestPayload = {
@@ -1674,6 +1713,7 @@ export default function MissionCraftPlannerPage() {
           const snapshot = await fetchProfileSnapshot(trimmedEid, sourceFilters);
           setProfileSnapshot(snapshot);
         }
+        setLastSolveRequest(snapshotRequest);
       }
     } catch (caught) {
       const message = caught instanceof Error && caught.message ? caught.message : "planning request failed";
@@ -1738,6 +1778,13 @@ export default function MissionCraftPlannerPage() {
 
       setResponse(data);
       setProfileSnapshot(liveProfile);
+      setLastSolveRequest({
+        targetItemId,
+        quantity: normalizedQuantity,
+        priorityTime: priorityTimePct / 100,
+        fastMode,
+        sourceFilters: { ...sourceFilters },
+      });
 
       const totalLaunches = deltas.missionLaunches.reduce((sum, launch) => sum + launch.launches, 0);
       const totalReturnItems = deltas.observedReturns.reduce((sum, item) => sum + item.quantity, 0);
@@ -1838,6 +1885,51 @@ export default function MissionCraftPlannerPage() {
 
   const comboKey = (c: { ship: string; durationType: string; targetAfxId: number }) =>
     `${c.ship}|${c.durationType}|${c.targetAfxId}`;
+
+  const downloadSolveSnapshot = (): void => {
+    if (!response || !profileSnapshot || !lastSolveRequest) {
+      setError("Build a plan first, then download the solve snapshot.");
+      return;
+    }
+    const availableCombos: SolveSnapshotCombo[] = response.plan.availableCombos.map((combo) => ({
+      ship: combo.ship,
+      durationType: combo.durationType as DurationType,
+      targetAfxId: combo.targetAfxId,
+    }));
+    const selectedCombos: SolveSnapshotCombo[] = availableCombos.filter((combo) => compareSelected.has(comboKey(combo)));
+    const sanitizedProfile: ProfileSnapshot = {
+      ...profileSnapshot,
+      eid: profileSnapshot.eid === "DEMO" ? "DEMO" : "REDACTED",
+    };
+    const payload: SolveInputSnapshotFile = {
+      schemaVersion: 1,
+      kind: "mission-craft-planner-solve-input",
+      capturedAt: new Date().toISOString(),
+      request: {
+        targetItemId: lastSolveRequest.targetItemId,
+        quantity: lastSolveRequest.quantity,
+        priorityTime: lastSolveRequest.priorityTime,
+        fastMode: lastSolveRequest.fastMode,
+      },
+      sourceFilters: lastSolveRequest.sourceFilters,
+      profile: sanitizedProfile,
+      advancedCompare: {
+        availableCombos,
+        selectedCombos,
+      },
+    };
+    const capturedDate = payload.capturedAt.slice(0, 19).replaceAll(":", "-").replace("T", "_");
+    const fileName = `mission-craft-solve-input-${capturedDate}.json`;
+    const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   const toggleCompareCombo = (key: string) => {
     setCompareSelected((prev) => {
@@ -2596,22 +2688,33 @@ export default function MissionCraftPlannerPage() {
 
           {response.plan.availableCombos.length > 0 && (
             <div className="panel">
-              <button
-                type="button"
-                className={styles.compareToggle}
-                onClick={() => {
-                  if (!compareOpen) {
-                    // Pre-select combos that appear in the solver's solution
-                    const solverCombos = new Set(
-                      response.plan.missions.map((m) => `${m.ship}|${m.durationType}|${m.targetAfxId}`)
-                    );
-                    setCompareSelected(solverCombos);
-                  }
-                  setCompareOpen((prev) => !prev);
-                }}
-              >
-                {compareOpen ? "▾" : "▸"} Advanced: Path Comparison
-              </button>
+              <div className={styles.compareHeader}>
+                <button
+                  type="button"
+                  className={styles.compareToggle}
+                  onClick={() => {
+                    if (!compareOpen) {
+                      // Pre-select combos that appear in the solver's solution
+                      const solverCombos = new Set(
+                        response.plan.missions.map((m) => `${m.ship}|${m.durationType}|${m.targetAfxId}`)
+                      );
+                      setCompareSelected(solverCombos);
+                    }
+                    setCompareOpen((prev) => !prev);
+                  }}
+                >
+                  {compareOpen ? "▾" : "▸"} Advanced: Path Comparison
+                </button>
+                <button
+                  type="button"
+                  className={styles.compareSnapshotButton}
+                  onClick={downloadSolveSnapshot}
+                  disabled={!profileSnapshot || !lastSolveRequest}
+                  title="Download a reproducible input snapshot (settings + profile state)"
+                >
+                  Download solve snapshot
+                </button>
+              </div>
               {compareOpen && (
                 <div className={styles.comparePanel}>
                   <p className="muted" style={{ margin: "0 0 8px", fontSize: 12 }}>

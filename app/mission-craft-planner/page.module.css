@@ -430,6 +430,34 @@
   color: var(--ink);
 }
 
+.compareHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.compareSnapshotButton {
+  padding: 5px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--stroke);
+  background: color-mix(in oklab, var(--panel), var(--card) 36%);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.compareSnapshotButton:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: color-mix(in oklab, var(--accent), var(--stroke) 45%);
+}
+
+.compareSnapshotButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .comparePanel {
   margin-top: 10px;
 }
