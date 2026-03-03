@@ -156,6 +156,7 @@ type SolveSnapshotRequest = {
   quantity: number;
   priorityTime: number;
   fastMode: boolean;
+  allowedShipDurations?: Array<{ ship: string; durationType: "SHORT" | "LONG" | "EPIC" }>;
 };
 
 type LastSolveInputs = SolveSnapshotRequest & {
@@ -756,6 +757,17 @@ function prepReasonLabel(reason: string): string {
 }
 
 function titleCaseShip(ship: string): string {
+  const overrides: Record<string, string> = {
+    ATREGGIES: "Henliner",
+    CHICKFIANT: "Defihent",
+    CORELLIHEN_CORVETTE: "Cornish-Hen Corvette",
+    MILLENIUM_CHICKEN: "Quintillion Chicken",
+    BCR: "BCR",
+  };
+  const override = overrides[ship];
+  if (override) {
+    return override;
+  }
   return ship
     .toLowerCase()
     .split("_")
@@ -974,7 +986,7 @@ export default function MissionCraftPlannerPage() {
     const totalShips = SHIP_DISPLAY_CONFIG.length;
     let selectedShips = 0;
     let allSelected = true;
-    const allowed: Array<{ ship: string; durationType: string }> = [];
+    const allowed: Array<{ ship: string; durationType: "SHORT" | "LONG" | "EPIC" }> = [];
     for (const entry of SHIP_DISPLAY_CONFIG) {
       const dur = shipDurations[entry.ship];
       if (!dur) {
@@ -1620,11 +1632,15 @@ export default function MissionCraftPlannerPage() {
 
   async function runBuildPlan() {
     const normalizedQuantity = Math.max(1, Math.min(9999, Math.round(Number(quantityInput) || quantity || 1)));
+    const allowedShipDurationsForSolve = shipSelectorSummary.allSelected
+      ? undefined
+      : shipSelectorSummary.allowed.map((entry) => ({ ...entry }));
     const snapshotRequest: LastSolveInputs = {
       targetItemId,
       quantity: normalizedQuantity,
       priorityTime: priorityTimePct / 100,
       fastMode,
+      allowedShipDurations: allowedShipDurationsForSolve,
       sourceFilters: { ...sourceFilters },
     };
     setQuantity(normalizedQuantity);
@@ -1699,7 +1715,7 @@ export default function MissionCraftPlannerPage() {
               epic: includeDropEpic,
               legendary: includeDropLegendary,
             },
-            allowedShipDurations: shipSelectorSummary.allSelected ? undefined : shipSelectorSummary.allowed,
+            allowedShipDurations: allowedShipDurationsForSolve,
             solverFn: highsRef.current.solve,
             lootData: lootDataRef.current!,
             onProgress: (progress: PlannerProgressEvent) => {
@@ -1747,7 +1763,7 @@ export default function MissionCraftPlannerPage() {
           includeDropEpic,
           includeDropLegendary,
           fastMode,
-          allowedShipDurations: shipSelectorSummary.allSelected ? undefined : shipSelectorSummary.allowed,
+          allowedShipDurations: allowedShipDurationsForSolve,
         };
 
         const planResp = await fetch("/api/plan/stream", {
@@ -1879,6 +1895,9 @@ export default function MissionCraftPlannerPage() {
     setRefreshSummary(null);
     setRefreshing(true);
     const normalizedQuantity = Math.max(1, Math.min(9999, Math.round(Number(quantityInput) || quantity || 1)));
+    const allowedShipDurationsForReplan = shipSelectorSummary.allSelected
+      ? undefined
+      : shipSelectorSummary.allowed.map((entry) => ({ ...entry }));
     setQuantity(normalizedQuantity);
     setQuantityInput(String(normalizedQuantity));
 
@@ -1901,7 +1920,7 @@ export default function MissionCraftPlannerPage() {
           includeDropRare,
           includeDropEpic,
           includeDropLegendary,
-          allowedShipDurations: shipSelectorSummary.allSelected ? undefined : shipSelectorSummary.allowed,
+          allowedShipDurations: allowedShipDurationsForReplan,
           observedReturns: [],
           missionLaunches: [],
         }),
@@ -1925,6 +1944,7 @@ export default function MissionCraftPlannerPage() {
         quantity: normalizedQuantity,
         priorityTime: priorityTimePct / 100,
         fastMode,
+        allowedShipDurations: allowedShipDurationsForReplan,
         sourceFilters: { ...sourceFilters },
       });
 
@@ -2052,6 +2072,7 @@ export default function MissionCraftPlannerPage() {
         quantity: lastSolveRequest.quantity,
         priorityTime: lastSolveRequest.priorityTime,
         fastMode: lastSolveRequest.fastMode,
+        allowedShipDurations: lastSolveRequest.allowedShipDurations,
       },
       sourceFilters: lastSolveRequest.sourceFilters,
       profile: sanitizedProfile,
@@ -2513,7 +2534,16 @@ export default function MissionCraftPlannerPage() {
                       </div>
                       <div className={styles.shipSelectorDurations}>
                         {SHIP_SELECTOR_DURATIONS.map((d) => (
-                          <label key={d.key} className={styles.shipSelectorDurLabel}>
+                          <label
+                            key={d.key}
+                            className={`${styles.shipSelectorDurLabel} ${
+                              d.key === "SHORT"
+                                ? styles.shipSelectorDurShort
+                                : d.key === "LONG"
+                                  ? styles.shipSelectorDurStandard
+                                  : styles.shipSelectorDurExtended
+                            }`}
+                          >
                             <input
                               type="checkbox"
                               checked={dur[d.key]}

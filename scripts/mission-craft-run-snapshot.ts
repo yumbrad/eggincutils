@@ -28,6 +28,9 @@ const solveInputSnapshotSchema = z.object({
     quantity: z.number().int().min(1),
     priorityTime: z.number().finite().min(0).max(1),
     fastMode: z.boolean(),
+    allowedShipDurations: z
+      .array(z.object({ ship: z.string().min(1), durationType: z.enum(["SHORT", "LONG", "EPIC"]) }))
+      .optional(),
   }),
   sourceFilters: z.object({
     includeSlotted: z.boolean(),
@@ -781,6 +784,7 @@ async function run(options: CliOptions): Promise<RunDiagnostics> {
         epic: loaded.snapshot.sourceFilters.includeDropEpic,
         legendary: loaded.snapshot.sourceFilters.includeDropLegendary,
       },
+      allowedShipDurations: loaded.snapshot.request.allowedShipDurations,
       onProgress: (event) => {
         progressEvents.push(event);
         if (options.progress) {

@@ -114,6 +114,7 @@ Mission Craft Planner can export a reproducible solve-input snapshot (inputs onl
 
 Snapshot file includes:
 - Planner request settings (`targetItemId`, `quantity`, `priorityTime`, `fastMode`)
+- Selected mission ship/duration filter subset (`allowedShipDurations`, when not all selected)
 - Source filters (inventory/drop rarity + slotted settings)
 - Full profile solve state (inventory, craft counts, ship history/levels, mission options)
 - Advanced compare combos (available + selected)

@@ -575,6 +575,7 @@
   gap: 10px;
   margin-bottom: 8px;
   font-size: 12px;
+  justify-content: flex-end;
 }
 
 .shipSelectorActions button {
@@ -653,6 +654,18 @@
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
+}
+
+.shipSelectorDurShort {
+  color: #4aa3ff;
+}
+
+.shipSelectorDurStandard {
+  color: #b78cff;
+}
+
+.shipSelectorDurExtended {
+  color: #f7c548;
 }
 
 .shipSelectorDurLabel input {

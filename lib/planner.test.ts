@@ -119,6 +119,102 @@ describe("planForTarget coverage handling", () => {
     expect(result.notes.some((note) => note.includes("unified HiGHS model"))).toBe(true);
   });
 
+  it("respects allowedShipDurations by filtering mission options before solve", async () => {
+    mockedLoadLootData.mockResolvedValue({
+      missions: [
+        {
+          afxShip: 0,
+          afxDurationType: 0,
+          missionId: "test-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "puzzle-cube-1",
+                      counts: [1, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          afxShip: 1,
+          afxDurationType: 1,
+          missionId: "test-long",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "puzzle-cube-1",
+                      counts: [1, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    mockedSolveWithHighs.mockResolvedValue({
+      Status: "Optimal",
+      Columns: {
+        m_0: { Primal: 2 },
+      },
+    });
+
+    const profile = baseProfile();
+    profile.missionOptions = [
+      {
+        ship: "CHICKEN_ONE",
+        missionId: "test-short",
+        durationType: "SHORT",
+        level: 0,
+        durationSeconds: 1200,
+        capacity: 1,
+      },
+      {
+        ship: "CHICKEN_NINE",
+        missionId: "test-long",
+        durationType: "LONG",
+        level: 0,
+        durationSeconds: 3600,
+        capacity: 1,
+      },
+    ];
+
+    const result = await planForTarget(profile, "puzzle-cube-1", 2, 0.5, {
+      allowedShipDurations: [{ ship: "CHICKEN_NINE", durationType: "LONG" }],
+    });
+
+    expect(result.missions).toHaveLength(1);
+    expect(result.missions[0]).toMatchObject({
+      missionId: "test-long",
+      ship: "CHICKEN_NINE",
+      durationType: "LONG",
+      launches: 2,
+    });
+    expect(
+      result.availableCombos.every((combo) => combo.ship === "CHICKEN_NINE" && combo.durationType === "LONG")
+    ).toBe(true);
+  });
+
   it("reports expected mission time as 3-slot makespan rather than slot-time average", async () => {
     mockedLoadLootData.mockResolvedValue({
       missions: [
