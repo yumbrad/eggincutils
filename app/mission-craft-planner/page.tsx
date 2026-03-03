@@ -2033,6 +2033,18 @@ export default function MissionCraftPlannerPage() {
               <p className="muted">{MISSION_CRAFT_COPY.longDescription}</p>
             </details>
           </div>
+          <Link href="/" className="brand-home-link" aria-label="Back to main menu" title="Back to main menu">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path
+                d="M3.5 10.5 12 3.5l8.5 7v9a1 1 0 0 1-1 1h-5.5v-6h-4v6H4.5a1 1 0 0 1-1-1z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </Link>
         </div>
       </div>
 

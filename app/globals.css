@@ -334,6 +334,7 @@ button:disabled {
 }
 
 .brand-header {
+  position: relative;
   display: flex;
   gap: 12px;
   align-items: flex-start;
@@ -361,6 +362,39 @@ button:disabled {
 
 .brand-copy {
   min-width: 0;
+}
+
+.brand-home-link {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid color-mix(in oklab, var(--stroke), var(--ink) 6%);
+  color: color-mix(in oklab, var(--stroke), var(--ink) 28%);
+  background: color-mix(in oklab, var(--panel), transparent 14%);
+  text-decoration: none;
+  transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease;
+}
+
+.brand-home-link:hover {
+  color: var(--ink);
+  border-color: color-mix(in oklab, var(--stroke), var(--ink) 30%);
+  background: color-mix(in oklab, var(--panel), white 5%);
+}
+
+.brand-home-link:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--accent), white 18%);
+  outline-offset: 2px;
+}
+
+.brand-home-link svg {
+  width: 16px;
+  height: 16px;
 }
 
 .brand-kicker {
@@ -406,6 +440,10 @@ button:disabled {
 
 .brand-header[data-compact="1"] {
   align-items: stretch;
+}
+
+.brand-header[data-compact="1"] .brand-copy {
+  padding-right: 42px;
 }
 
 .brand-header[data-compact="1"] .brand-mark-shell {
@@ -664,5 +702,10 @@ th {
   .theme-switcher {
     right: 8px;
     bottom: 8px;
+  }
+
+  .brand-home-link {
+    width: 28px;
+    height: 28px;
   }
 }
