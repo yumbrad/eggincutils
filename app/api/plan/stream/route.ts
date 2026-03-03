@@ -151,6 +151,7 @@ export async function POST(request: Request): Promise<Response> {
                 epic: parsedPayload.data.includeDropEpic,
                 legendary: parsedPayload.data.includeDropLegendary,
               },
+              allowedShipDurations: parsedPayload.data.allowedShipDurations,
               onProgress: (progress) => {
                 emitProgress({
                   ...progress,

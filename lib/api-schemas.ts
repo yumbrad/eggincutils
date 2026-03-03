@@ -71,6 +71,9 @@ export const planRequestSchema = z
     includeDropEpic: z.union([z.boolean(), z.number(), z.string()]).optional(),
     includeDropLegendary: z.union([z.boolean(), z.number(), z.string()]).optional(),
     fastMode: z.union([z.boolean(), z.number(), z.string()]).optional(),
+    allowedShipDurations: z
+      .array(z.object({ ship: z.string().min(1), durationType: z.enum(["SHORT", "LONG", "EPIC"]) }))
+      .optional(),
   })
   .transform((value) => ({
     eid: value.eid,
@@ -85,6 +88,7 @@ export const planRequestSchema = z
     includeDropEpic: parseEnabledByDefault(value.includeDropEpic, true),
     includeDropLegendary: parseEnabledByDefault(value.includeDropLegendary, true),
     fastMode: parseFastMode(value.fastMode),
+    allowedShipDurations: value.allowedShipDurations,
   }));
 
 export type PlanRequest = z.infer<typeof planRequestSchema>;
@@ -158,6 +162,9 @@ export const replanRequestSchema = z.object({
   includeDropRare: z.union([z.boolean(), z.number(), z.string()]).optional(),
   includeDropEpic: z.union([z.boolean(), z.number(), z.string()]).optional(),
   includeDropLegendary: z.union([z.boolean(), z.number(), z.string()]).optional(),
+  allowedShipDurations: z
+    .array(z.object({ ship: z.string().min(1), durationType: z.enum(["SHORT", "LONG", "EPIC"]) }))
+    .optional(),
   observedReturns: z.array(observedReturnSchema).optional().default([]),
   missionLaunches: z.array(missionLaunchUpdateSchema).optional().default([]),
 }).transform((value) => ({

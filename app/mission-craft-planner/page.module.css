@@ -530,3 +530,144 @@
     transparent 2px 4px
   );
 }
+
+.shipSelectorWrap {
+  margin-top: 6px;
+}
+
+.shipSelectorToggle {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.shipSelectorToggle:hover {
+  color: var(--ink);
+}
+
+.shipSelectorChevron {
+  display: inline-block;
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+.shipSelectorChevron[data-open="1"] {
+  transform: rotate(90deg);
+}
+
+.shipSelectorPanel {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--card), transparent 8%);
+  max-height: 340px;
+  overflow: auto;
+}
+
+.shipSelectorActions {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.shipSelectorActions button {
+  all: unset;
+  cursor: pointer;
+  color: var(--muted);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--muted), transparent 50%);
+}
+
+.shipSelectorActions button:hover {
+  color: var(--ink);
+}
+
+.shipSelectorList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.shipSelectorRow {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 30px;
+}
+
+.shipSelectorImage {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.shipSelectorImageFallback {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in oklab, var(--stroke), transparent 24%);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.shipSelectorNameBlock {
+  min-width: 0;
+}
+
+.shipSelectorName {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shipSelectorStars {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.shipSelectorDurations {
+  display: flex;
+  gap: 10px;
+}
+
+.shipSelectorDurLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.shipSelectorDurLabel input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+@media (max-width: 600px) {
+  .shipSelectorRow {
+    grid-template-columns: 28px 1fr;
+  }
+
+  .shipSelectorDurations {
+    grid-column: 1 / -1;
+    padding-left: 36px;
+  }
+}

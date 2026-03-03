@@ -122,6 +122,7 @@ export type SolverFunction = (
 export type PlannerOptions = {
   fastMode?: boolean;
   missionDropRarities?: Partial<ShinyRaritySelection>;
+  allowedShipDurations?: Array<{ ship: string; durationType: string }>;
   maxSolveMs?: number;
   onProgress?: (event: PlannerProgressEvent) => void;
   onBenchmarkSample?: (sample: PlannerBenchmarkSample) => void;
@@ -534,6 +535,46 @@ async function buildMissionActions(
   missionDropRarities?: Partial<ShinyRaritySelection>
 ): Promise<MissionAction[]> {
   return buildMissionActionsForOptions(profile.missionOptions, relevantItems, undefined, missionDropRarities);
+}
+
+/**
+ * Prune actions whose yields are entirely sub-dominated: every yielded item
+ * belongs to an artifact family where a higher-tier version is already available
+ * from other actions. Such actions are practically useless since the solver
+ * would never prefer farming lower-tier sub-components and crafting up when the
+ * higher-tier item can be obtained directly.
+ */
+function pruneSubDominatedActions(actions: MissionAction[]): MissionAction[] {
+  const maxDroppedTier: Record<string, number> = {};
+  for (const action of actions) {
+    for (const itemKey of Object.keys(action.yields)) {
+      const match = itemKey.match(/^(.+)_(\d+)$/);
+      if (match) {
+        const family = match[1];
+        const tier = parseInt(match[2], 10);
+        if (tier > (maxDroppedTier[family] || 0)) {
+          maxDroppedTier[family] = tier;
+        }
+      }
+    }
+  }
+
+  return actions.filter((action) => {
+    const yieldKeys = Object.keys(action.yields);
+    if (yieldKeys.length === 0) {
+      return false;
+    }
+    for (const itemKey of yieldKeys) {
+      const match = itemKey.match(/^(.+)_(\d+)$/);
+      if (!match) {
+        return true; // Unknown format → keep
+      }
+      if (parseInt(match[2], 10) >= (maxDroppedTier[match[1]] || 0)) {
+        return true; // At least one yield is not sub-dominated → keep
+      }
+    }
+    return false; // All yields sub-dominated → prune
+  });
 }
 
 function bestTimePerUnit(itemKey: string, actions: MissionAction[]): number {
@@ -2341,22 +2382,27 @@ function enumerateProgressionActions(state: ProgressionState, shipOrder: string[
   });
 }
 
-function buildProgressionCandidates(profile: PlayerProfile): ProgressionCandidate[] {
+function buildProgressionCandidates(
+  profile: PlayerProfile,
+  missionOptionFilter?: (options: MissionOption[]) => MissionOption[]
+): ProgressionCandidate[] {
+  const applyFilter = missionOptionFilter || ((opts: MissionOption[]) => opts);
   if (profile.shipLevels.length === 0) {
     return [
       {
         shipLevels: profile.shipLevels,
-        missionOptions: profile.missionOptions,
+        missionOptions: applyFilter(profile.missionOptions),
         prepSteps: [],
         prepSlotSeconds: 0,
       },
     ];
   }
 
-  const initialMissionOptions =
+  const initialMissionOptions = applyFilter(
     profile.missionOptions.length > 0
       ? profile.missionOptions
-      : buildMissionOptions(profile.shipLevels, profile.epicResearchFTLLevel, profile.epicResearchZerogLevel);
+      : buildMissionOptions(profile.shipLevels, profile.epicResearchFTLLevel, profile.epicResearchZerogLevel)
+  );
   const baseCandidate: ProgressionCandidate = {
     shipLevels: profile.shipLevels,
     missionOptions: initialMissionOptions,
@@ -2391,11 +2437,11 @@ function buildProgressionCandidates(profile: PlayerProfile): ProgressionCandidat
 
         const prepSlotSeconds = state.prepSlotSeconds + action.step.launches * action.step.durationSeconds;
         const prepSteps = [...state.prepSteps, action.step];
-        const nextMissionOptions = buildMissionOptions(
+        const nextMissionOptions = applyFilter(buildMissionOptions(
           action.nextShipLevels,
           profile.epicResearchFTLLevel,
           profile.epicResearchZerogLevel
-        );
+        ));
 
         nextFrontier.push({
           launchCounts: action.nextLaunchCounts,
@@ -2465,9 +2511,9 @@ async function planForTargetHeuristic(
   const closure = new Set<string>();
   collectClosure(targetKey, closure);
 
-  const actions = await buildMissionActionsForOptions(
+  const actions = pruneSubDominatedActions(await buildMissionActionsForOptions(
     profile.missionOptions, closure, plannerOptions.lootData, plannerOptions.missionDropRarities
-  );
+  ));
 
   const inventory: Record<string, number> = { ...profile.inventory };
   const craftCounts: Record<string, number> = { ...profile.craftCounts };
@@ -2659,6 +2705,14 @@ export async function planForTarget(
   const missionDropRarities = normalizeShinyRaritySelection(plannerOptions.missionDropRarities);
   const solverFn = plannerOptions.solverFn;
   const injectedLootData = plannerOptions.lootData;
+  const missionOptionFilter = plannerOptions.allowedShipDurations
+    ? (() => {
+        const allowed = new Set(
+          plannerOptions.allowedShipDurations!.map((sd) => `${sd.ship}|${sd.durationType}`)
+        );
+        return (options: MissionOption[]) => options.filter((o) => allowed.has(`${o.ship}|${o.durationType}`));
+      })()
+    : undefined;
   const benchmarkStartedAtMs = Date.now();
   let benchmarkExcludedMs = 0;
   const reportBenchmark = (result: PlannerResult, path: "primary" | "fallback") => {
@@ -2715,7 +2769,7 @@ export async function planForTarget(
   const closure = new Set<string>();
   collectClosure(targetKey, closure);
 
-  const progressionCandidatesRaw = buildProgressionCandidates(profile);
+  const progressionCandidatesRaw = buildProgressionCandidates(profile, missionOptionFilter);
   const progressionDeduped = dedupeProgressionCandidatesByMissionOptions(progressionCandidatesRaw);
 
   const fastCandidateLimit = priorityTime <= SCORE_EPS ? NORMAL_MODE_MAX_CANDIDATES : FAST_MODE_MAX_CANDIDATES;
@@ -2737,7 +2791,16 @@ export async function planForTarget(
     message: "Loaded mission loot data. Building mission action models...",
   });
   await yieldForProgressFlush();
-  const baseActions = await buildMissionActionsForOptions(referenceMissionOptions, closure, lootData, missionDropRarities);
+  const baseActionsRaw = await buildMissionActionsForOptions(referenceMissionOptions, closure, lootData, missionDropRarities);
+  const baseActions = pruneSubDominatedActions(baseActionsRaw);
+  const subDominatedPrunedCount = baseActionsRaw.length - baseActions.length;
+  if (subDominatedPrunedCount > 0) {
+    reportProgress({
+      phase: "init",
+      message: `Pruned ${subDominatedPrunedCount} sub-dominated actions (${baseActions.length} remaining).`,
+    });
+    await yieldForProgressFlush();
+  }
 
   const craftSkeleton = buildCraftModelSkeleton({
     profile,
@@ -2890,7 +2953,9 @@ export async function planForTarget(
       const candidateKey = missionOptionsFingerprint(combinedOptions);
       let candidateActions = actionCache.get(candidateKey);
       if (!candidateActions) {
-        candidateActions = await buildMissionActionsForOptions(combinedOptions, closure, lootData, missionDropRarities);
+        candidateActions = pruneSubDominatedActions(
+          await buildMissionActionsForOptions(combinedOptions, closure, lootData, missionDropRarities)
+        );
         actionCache.set(candidateKey, candidateActions);
       }
       const finalOptionKeys = new Set(candidate.missionOptions.map((option) => missionOptionKey(option)));
@@ -3514,6 +3579,9 @@ export async function planForTarget(
     if (evaluatedCount > 1) {
       notes.push(`Horizon search evaluated ${evaluatedCount} projected ship progression states.`);
     }
+    if (subDominatedPrunedCount > 0) {
+      notes.push(`Pruned ${subDominatedPrunedCount} sub-dominated mission actions (only yield lower-tier items already available at higher tiers).`);
+    }
     if (prunedCandidateCount > 0) {
       notes.push(`Pruned ${prunedCandidateCount} progression candidates using prep-time lower-bound screening.`);
     }
@@ -3655,7 +3723,10 @@ export async function planForTarget(
       etaMs: null,
     });
     await yieldForProgressFlush();
-    const fallback = await planForTargetHeuristic(profile, targetItemId, quantityInt, priorityTime, {
+    const fallbackProfile = missionOptionFilter
+      ? { ...profile, missionOptions: missionOptionFilter(profile.missionOptions) }
+      : profile;
+    const fallback = await planForTargetHeuristic(fallbackProfile, targetItemId, quantityInt, priorityTime, {
       missionDropRarities,
       solverFn,
       lootData: injectedLootData,

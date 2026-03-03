@@ -268,6 +268,37 @@ type MissionTimeline = {
 };
 
 const DURATION_TYPES: DurationType[] = ["TUTORIAL", "SHORT", "LONG", "EPIC"];
+const SHIP_SELECTOR_DURATIONS: Array<{ key: "SHORT" | "LONG" | "EPIC"; label: string }> = [
+  { key: "SHORT", label: "Short" },
+  { key: "LONG", label: "Standard" },
+  { key: "EPIC", label: "Extended" },
+];
+const SHIP_IMAGE_HOST = "https://eggincassets.pages.dev";
+const SHIP_IMAGE_HOST_FALLBACK = "https://eggincassets.tcl.sh";
+const SHIP_DISPLAY_CONFIG: Array<{ ship: string; imageFiles: string[] }> = [
+  { ship: "ATREGGIES", imageFiles: ["afx_ship_atreggies.png", "afx_ship_atreggies_henliner.png"] },
+  { ship: "HENERPRISE", imageFiles: ["afx_ship_henerprise.png"] },
+  { ship: "VOYEGGER", imageFiles: ["afx_ship_voyegger.png"] },
+  { ship: "CHICKFIANT", imageFiles: ["afx_ship_defihent.png"] },
+  { ship: "GALEGGTICA", imageFiles: ["afx_ship_galeggtica.png"] },
+  { ship: "CORELLIHEN_CORVETTE", imageFiles: ["afx_ship_corellihen_corvette.png", "afx_ship_cornish_hen_corvette.png", "afx_ship_cornish_hen.png"] },
+  { ship: "MILLENIUM_CHICKEN", imageFiles: ["afx_ship_millenium_chicken.png", "afx_ship_quintillion_chicken.png", "afx_ship_quintillion.png"] },
+  { ship: "BCR", imageFiles: ["afx_ship_bcr.png"] },
+  { ship: "CHICKEN_HEAVY", imageFiles: ["afx_ship_chicken_heavy.png"] },
+  { ship: "CHICKEN_NINE", imageFiles: ["afx_ship_chicken_9.png", "afx_ship_chicken_nine.png"] },
+  { ship: "CHICKEN_ONE", imageFiles: ["afx_ship_chicken_1.png", "afx_ship_chicken_one.png"] },
+];
+type ShipDurationSelection = Record<string, { SHORT: boolean; LONG: boolean; EPIC: boolean }>;
+function buildDefaultShipDurations(): ShipDurationSelection {
+  const result: ShipDurationSelection = {};
+  for (const entry of SHIP_DISPLAY_CONFIG) {
+    result[entry.ship] = { SHORT: true, LONG: true, EPIC: true };
+  }
+  return result;
+}
+function shipImageUrl(filename: string, host: string = SHIP_IMAGE_HOST): string {
+  return `${host}/128/egginc/${filename}`;
+}
 const ARTIFACT_DISPLAY = artifactDisplay as Record<string, { id: string; name: string; tierName: string; tierNumber: number }>;
 const SHARED_EID_KEYS = [LOCAL_PREF_KEYS.sharedEid, LOCAL_PREF_KEYS.legacyEid] as const;
 const SHARED_INCLUDE_SLOTTED_KEYS = [LOCAL_PREF_KEYS.sharedIncludeSlotted, LOCAL_PREF_KEYS.legacyIncludeSlotted] as const;
@@ -837,6 +868,53 @@ function buildDemoProfileSnapshot(response: PlanResponse): ProfileSnapshot {
   };
 }
 
+function ShipSelectorImage({ ship, imageFiles }: { ship: string; imageFiles: string[] }) {
+  const [candidateIndex, setCandidateIndex] = useState(0);
+  const [fallback, setFallback] = useState(false);
+
+  const candidates = useMemo(() => {
+    const urls: string[] = [];
+    for (const file of imageFiles) {
+      urls.push(shipImageUrl(file, SHIP_IMAGE_HOST));
+    }
+    for (const file of imageFiles) {
+      urls.push(shipImageUrl(file, SHIP_IMAGE_HOST_FALLBACK));
+    }
+    return urls;
+  }, [imageFiles]);
+
+  useEffect(() => {
+    setCandidateIndex(0);
+    setFallback(false);
+  }, [ship]);
+
+  if (fallback || candidateIndex >= candidates.length) {
+    const initials = ship
+      .split("_")
+      .map((w) => w.charAt(0))
+      .join("")
+      .slice(0, 2);
+    return <span className={styles.shipSelectorImageFallback}>{initials}</span>;
+  }
+
+  return (
+    <img
+      className={styles.shipSelectorImage}
+      src={candidates[candidateIndex]}
+      alt={titleCaseShip(ship)}
+      loading="lazy"
+      onError={() => {
+        const next = candidateIndex + 1;
+        if (next < candidates.length) {
+          setCandidateIndex(next);
+        } else {
+          setFallback(true);
+        }
+      }}
+    />
+  );
+}
+
 export default function MissionCraftPlannerPage() {
   const [eid, setEid] = useState("");
   const [targetItemId, setTargetItemId] = useState("soul-stone-2");
@@ -871,6 +949,8 @@ export default function MissionCraftPlannerPage() {
   const [compareError, setCompareError] = useState<string | null>(null);
   const [compareExpandedRow, setCompareExpandedRow] = useState<number | null>(null);
   const [lastSolveRequest, setLastSolveRequest] = useState<LastSolveInputs | null>(null);
+  const [shipDurations, setShipDurations] = useState<ShipDurationSelection>(buildDefaultShipDurations);
+  const [shipSelectorOpen, setShipSelectorOpen] = useState(false);
   const [lootData, setLootData] = useState<LootJson | null>(null);
   const lootDataRef = useRef<LootJson | null>(null);
   const targetPickerRef = useRef<HTMLDivElement | null>(null);
@@ -889,6 +969,34 @@ export default function MissionCraftPlannerPage() {
     includeDropEpic,
     includeDropLegendary,
   };
+
+  const shipSelectorSummary = useMemo(() => {
+    const totalShips = SHIP_DISPLAY_CONFIG.length;
+    let selectedShips = 0;
+    let allSelected = true;
+    const allowed: Array<{ ship: string; durationType: string }> = [];
+    for (const entry of SHIP_DISPLAY_CONFIG) {
+      const dur = shipDurations[entry.ship];
+      if (!dur) {
+        continue;
+      }
+      let hasAny = false;
+      for (const d of SHIP_SELECTOR_DURATIONS) {
+        if (dur[d.key]) {
+          allowed.push({ ship: entry.ship, durationType: d.key });
+          hasAny = true;
+        } else {
+          allSelected = false;
+        }
+      }
+      if (hasAny) {
+        selectedShips += 1;
+      } else {
+        allSelected = false;
+      }
+    }
+    return { totalShips, selectedShips, allSelected, allowed };
+  }, [shipDurations]);
 
   // Pre-fetch loot data for client-side solving.
   useEffect(() => {
@@ -1282,6 +1390,26 @@ export default function MissionCraftPlannerPage() {
       if (savedDemoNoticeDismissed != null) {
         setDemoNoticeDismissed(savedDemoNoticeDismissed);
       }
+      const savedShipDurations = readFirstStoredString([LOCAL_PREF_KEYS.plannerShipDurations]);
+      if (savedShipDurations) {
+        try {
+          const parsed = JSON.parse(savedShipDurations) as ShipDurationSelection;
+          const merged = buildDefaultShipDurations();
+          for (const entry of SHIP_DISPLAY_CONFIG) {
+            const saved = parsed[entry.ship];
+            if (saved && typeof saved === "object") {
+              merged[entry.ship] = {
+                SHORT: typeof saved.SHORT === "boolean" ? saved.SHORT : true,
+                LONG: typeof saved.LONG === "boolean" ? saved.LONG : true,
+                EPIC: typeof saved.EPIC === "boolean" ? saved.EPIC : true,
+              };
+            }
+          }
+          setShipDurations(merged);
+        } catch {
+          // Ignore malformed saved ship durations.
+        }
+      }
     } catch {
       // Ignore localStorage hydration errors.
     } finally {
@@ -1479,6 +1607,17 @@ export default function MissionCraftPlannerPage() {
     }
   }, [demoNoticeDismissed, prefsLoaded]);
 
+  useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
+    try {
+      writeStoredString([LOCAL_PREF_KEYS.plannerShipDurations], JSON.stringify(shipDurations));
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [shipDurations, prefsLoaded]);
+
   async function runBuildPlan() {
     const normalizedQuantity = Math.max(1, Math.min(9999, Math.round(Number(quantityInput) || quantity || 1)));
     const snapshotRequest: LastSolveInputs = {
@@ -1560,6 +1699,7 @@ export default function MissionCraftPlannerPage() {
               epic: includeDropEpic,
               legendary: includeDropLegendary,
             },
+            allowedShipDurations: shipSelectorSummary.allSelected ? undefined : shipSelectorSummary.allowed,
             solverFn: highsRef.current.solve,
             lootData: lootDataRef.current!,
             onProgress: (progress: PlannerProgressEvent) => {
@@ -1607,6 +1747,7 @@ export default function MissionCraftPlannerPage() {
           includeDropEpic,
           includeDropLegendary,
           fastMode,
+          allowedShipDurations: shipSelectorSummary.allSelected ? undefined : shipSelectorSummary.allowed,
         };
 
         const planResp = await fetch("/api/plan/stream", {
@@ -1760,6 +1901,7 @@ export default function MissionCraftPlannerPage() {
           includeDropRare,
           includeDropEpic,
           includeDropLegendary,
+          allowedShipDurations: shipSelectorSummary.allSelected ? undefined : shipSelectorSummary.allowed,
           observedReturns: [],
           missionLaunches: [],
         }),
@@ -2316,6 +2458,85 @@ export default function MissionCraftPlannerPage() {
               {refreshing ? "Replanning..." : "Replan after ship returns"}
             </button>
           </div>
+        </div>
+
+        <div className={styles.shipSelectorWrap}>
+          <button
+            type="button"
+            className={styles.shipSelectorToggle}
+            onClick={() => setShipSelectorOpen((prev) => !prev)}
+          >
+            <span className={styles.shipSelectorChevron} data-open={shipSelectorOpen ? "1" : "0"}>
+              &#x25B6;
+            </span>
+            {shipSelectorSummary.selectedShips} / {shipSelectorSummary.totalShips} ships selected
+          </button>
+
+          {shipSelectorOpen && (
+            <div className={styles.shipSelectorPanel}>
+              <div className={styles.shipSelectorActions}>
+                <button
+                  type="button"
+                  onClick={() => setShipDurations(buildDefaultShipDurations())}
+                >
+                  Select all
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const cleared: ShipDurationSelection = {};
+                    for (const entry of SHIP_DISPLAY_CONFIG) {
+                      cleared[entry.ship] = { SHORT: false, LONG: false, EPIC: false };
+                    }
+                    setShipDurations(cleared);
+                  }}
+                >
+                  Deselect all
+                </button>
+              </div>
+              <div className={styles.shipSelectorList}>
+                {SHIP_DISPLAY_CONFIG.map((entry) => {
+                  const dur = shipDurations[entry.ship] || { SHORT: true, LONG: true, EPIC: true };
+                  const shipLevel = profileSnapshot?.shipLevels?.find(
+                    (sl: ShipLevelInfo) => sl.ship === entry.ship
+                  );
+                  return (
+                    <div key={entry.ship} className={styles.shipSelectorRow}>
+                      <ShipSelectorImage ship={entry.ship} imageFiles={entry.imageFiles} />
+                      <div className={styles.shipSelectorNameBlock}>
+                        <div className={styles.shipSelectorName}>{titleCaseShip(entry.ship)}</div>
+                        {shipLevel != null && (
+                          <div className={styles.shipSelectorStars}>
+                            {shipLevel.level}/{shipLevel.maxLevel} ⭐
+                          </div>
+                        )}
+                      </div>
+                      <div className={styles.shipSelectorDurations}>
+                        {SHIP_SELECTOR_DURATIONS.map((d) => (
+                          <label key={d.key} className={styles.shipSelectorDurLabel}>
+                            <input
+                              type="checkbox"
+                              checked={dur[d.key]}
+                              onChange={() => {
+                                setShipDurations((prev) => ({
+                                  ...prev,
+                                  [entry.ship]: {
+                                    ...prev[entry.ship],
+                                    [d.key]: !prev[entry.ship][d.key],
+                                  },
+                                }));
+                              }}
+                            />
+                            {d.label}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </form>
 
