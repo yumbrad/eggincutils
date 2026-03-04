@@ -43,6 +43,7 @@ let inflight: Promise<LootJson> | null = null;
 let refreshInflight: Promise<void> | null = null;
 let cacheEtag: string | null = null;
 let cacheFetchedAtMs = 0;
+let lastRefreshAttemptAtMs = 0;
 
 const nonNegativeNumberSchema = z.number().finite().min(0);
 
@@ -118,6 +119,7 @@ function lootCacheTtlSeconds(): number {
 
 type PersistedLootCache = {
   fetchedAtMs: number;
+  lastRefreshAttemptAtMs?: number;
   etag?: string;
   payload: LootJson;
 };
@@ -157,6 +159,10 @@ function readPersistedCache(filePath: string): PersistedLootCache | null {
     if (parsed && parsed.payload && typeof parsed.fetchedAtMs === "number") {
       return {
         fetchedAtMs: Math.max(0, Math.round(parsed.fetchedAtMs)),
+        lastRefreshAttemptAtMs:
+          typeof parsed.lastRefreshAttemptAtMs === "number"
+            ? Math.max(0, Math.round(parsed.lastRefreshAttemptAtMs))
+            : undefined,
         etag: typeof parsed.etag === "string" && parsed.etag.length > 0 ? parsed.etag : undefined,
         payload: parseLootPayload(parsed.payload),
       };
@@ -189,6 +195,33 @@ function isCacheFresh(fetchedAtMs: number): boolean {
     return false;
   }
   return Date.now() - fetchedAtMs <= ttlMs;
+}
+
+function canAttemptRefresh(): boolean {
+  const ttlMs = lootCacheTtlSeconds() * 1000;
+  if (ttlMs <= 0) {
+    return true;
+  }
+  if (lastRefreshAttemptAtMs <= 0) {
+    return true;
+  }
+  return Date.now() - lastRefreshAttemptAtMs >= ttlMs;
+}
+
+function persistCurrentCacheStateBestEffort(filePath: string): void {
+  if (!cache) {
+    return;
+  }
+  try {
+    writePersistedCache(filePath, {
+      fetchedAtMs: cacheFetchedAtMs,
+      lastRefreshAttemptAtMs,
+      etag: cacheEtag || undefined,
+      payload: cache,
+    });
+  } catch {
+    // Ignore filesystem cache write failures.
+  }
 }
 
 async function fetchRemoteLoot(currentEtag?: string, allowNotModifiedPayload?: LootJson): Promise<PersistedLootCache> {
@@ -224,14 +257,23 @@ function triggerBackgroundRefresh(cachedPayload: LootJson | null): void {
   if (refreshInflight) {
     return;
   }
+  if (!canAttemptRefresh()) {
+    return;
+  }
+  lastRefreshAttemptAtMs = Date.now();
+  persistCurrentCacheStateBestEffort(lootCacheFilePath());
   refreshInflight = (async () => {
     try {
       const refreshed = await fetchRemoteLoot(cacheEtag || undefined, cachedPayload || undefined);
       cache = refreshed.payload;
       cacheEtag = refreshed.etag || null;
       cacheFetchedAtMs = refreshed.fetchedAtMs;
+      lastRefreshAttemptAtMs = refreshed.fetchedAtMs;
       try {
-        writePersistedCache(lootCacheFilePath(), refreshed);
+        writePersistedCache(lootCacheFilePath(), {
+          ...refreshed,
+          lastRefreshAttemptAtMs,
+        });
       } catch {
         // Ignore filesystem cache write failures.
       }
@@ -260,6 +302,10 @@ export async function loadLootData(): Promise<LootJson> {
       cache = persisted.payload;
       cacheEtag = persisted.etag || null;
       cacheFetchedAtMs = persisted.fetchedAtMs;
+      lastRefreshAttemptAtMs = Math.max(
+        persisted.lastRefreshAttemptAtMs || 0,
+        persisted.fetchedAtMs
+      );
       if (isCacheFresh(persisted.fetchedAtMs)) {
         return persisted.payload;
       }
@@ -272,16 +318,25 @@ export async function loadLootData(): Promise<LootJson> {
       cache = fallback.payload;
       cacheEtag = fallback.etag || null;
       cacheFetchedAtMs = fallback.fetchedAtMs;
+      lastRefreshAttemptAtMs = Math.max(
+        fallback.lastRefreshAttemptAtMs || 0,
+        fallback.fetchedAtMs
+      );
       triggerBackgroundRefresh(fallback.payload);
       return fallback.payload;
     }
 
+    lastRefreshAttemptAtMs = Date.now();
     const remote = await fetchRemoteLoot(cacheEtag || undefined, cache || undefined);
     cache = remote.payload;
     cacheEtag = remote.etag || null;
     cacheFetchedAtMs = remote.fetchedAtMs;
+    lastRefreshAttemptAtMs = remote.fetchedAtMs;
     try {
-      writePersistedCache(cacheFilePath, remote);
+      writePersistedCache(cacheFilePath, {
+        ...remote,
+        lastRefreshAttemptAtMs,
+      });
     } catch {
       // Ignore filesystem cache write failures.
     }
@@ -299,4 +354,5 @@ export function resetLootDataCacheForTests(): void {
   refreshInflight = null;
   cacheEtag = null;
   cacheFetchedAtMs = 0;
+  lastRefreshAttemptAtMs = 0;
 }
