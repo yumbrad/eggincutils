@@ -182,11 +182,68 @@ const INTEGRATED_MAX_PHASES = 9;
 const PHASED_BUDGET_LAUNCHES = 5000;
 const BINARY_BIG_M = 5000;
 const LP_SCREENING_MILP_RESOLVES = 2;
+const CLOSURE_CACHE_MAX_ENTRIES = 96;
+const PROGRESSION_CACHE_MAX_ENTRIES = 48;
+const MISSION_ACTION_CACHE_MAX_ENTRIES = 192;
+const CRAFT_SKELETON_CACHE_MAX_ENTRIES = 128;
+const BEST_CANDIDATE_CACHE_MAX_ENTRIES = 96;
 const DEFAULT_INCLUDE_SHINY_RARITIES: ShinyRaritySelection = {
   rare: true,
   epic: true,
   legendary: true,
 };
+
+class LruCache<K, V> {
+  private readonly maxEntries: number;
+  private readonly map = new Map<K, V>();
+
+  constructor(maxEntries: number) {
+    this.maxEntries = Math.max(1, Math.round(maxEntries));
+  }
+
+  get(key: K): V | undefined {
+    const value = this.map.get(key);
+    if (value === undefined) {
+      return undefined;
+    }
+    this.map.delete(key);
+    this.map.set(key, value);
+    return value;
+  }
+
+  set(key: K, value: V): void {
+    if (this.map.has(key)) {
+      this.map.delete(key);
+    }
+    this.map.set(key, value);
+    while (this.map.size > this.maxEntries) {
+      const oldestKey = this.map.keys().next().value as K | undefined;
+      if (oldestKey === undefined) {
+        break;
+      }
+      this.map.delete(oldestKey);
+    }
+  }
+}
+
+type ProgressionCacheEntry = {
+  unique: ProgressionCandidate[];
+  dedupedCount: number;
+};
+
+type MissionActionCacheEntry = {
+  actions: MissionAction[];
+  rawCount: number;
+  prunedCount: number;
+};
+
+const closureCache = new LruCache<string, Set<string>>(CLOSURE_CACHE_MAX_ENTRIES);
+const progressionCache = new LruCache<string, ProgressionCacheEntry>(PROGRESSION_CACHE_MAX_ENTRIES);
+const missionActionsCache = new LruCache<string, MissionActionCacheEntry>(MISSION_ACTION_CACHE_MAX_ENTRIES);
+const craftSkeletonCache = new LruCache<string, CraftModelSkeleton>(CRAFT_SKELETON_CACHE_MAX_ENTRIES);
+const bestCandidateFingerprintCache = new LruCache<string, string>(BEST_CANDIDATE_CACHE_MAX_ENTRIES);
+const lootObjectIds = new WeakMap<LootJson, number>();
+let nextLootObjectId = 1;
 
 function normalizeShinyRaritySelection(raw?: Partial<ShinyRaritySelection>): ShinyRaritySelection {
   if (!raw) {
@@ -1502,6 +1559,160 @@ function missionOptionsFingerprint(options: MissionOption[]): string {
     .join("||");
 }
 
+function missionDropRarityCacheKey(selection: ShinyRaritySelection): string {
+  return `${selection.rare ? 1 : 0}${selection.epic ? 1 : 0}${selection.legendary ? 1 : 0}`;
+}
+
+function allowedShipDurationsCacheKey(
+  allowedShipDurations?: Array<{ ship: string; durationType: string }>
+): string {
+  if (!allowedShipDurations || allowedShipDurations.length === 0) {
+    return "*";
+  }
+  const unique = new Set<string>();
+  for (const row of allowedShipDurations) {
+    unique.add(`${row.ship}|${row.durationType}`);
+  }
+  return Array.from(unique).sort().join(",");
+}
+
+function closureFingerprint(closure: Set<string>): string {
+  return Array.from(closure).sort().join(",");
+}
+
+function getTargetClosureCached(targetKey: string): Set<string> {
+  const cached = closureCache.get(targetKey);
+  if (cached) {
+    return new Set(cached);
+  }
+  const closure = new Set<string>();
+  collectClosure(targetKey, closure);
+  closureCache.set(targetKey, new Set(closure));
+  return closure;
+}
+
+function shipLevelsFingerprint(shipLevels: ShipLevelInfo[]): string {
+  return shipLevels
+    .slice()
+    .sort((a, b) => a.ship.localeCompare(b.ship))
+    .map(
+      (row) =>
+        `${row.ship}:${row.unlocked ? 1 : 0}:${row.level}:${row.maxLevel}:${row.launches}:${row.launchPoints}`
+    )
+    .join("|");
+}
+
+function profileProgressionCacheKey(
+  profile: PlayerProfile,
+  allowedDurationsKey: string
+): string {
+  const profileMissionOptionsKey =
+    profile.missionOptions.length > 0 ? missionOptionsFingerprint(profile.missionOptions) : "none";
+  return [
+    shipLevelsFingerprint(profile.shipLevels),
+    `ftl:${profile.epicResearchFTLLevel}`,
+    `zerog:${profile.epicResearchZerogLevel}`,
+    `opts:${profileMissionOptionsKey}`,
+    `allow:${allowedDurationsKey}`,
+  ].join("::");
+}
+
+function getLootObjectId(lootData: LootJson): number {
+  const existing = lootObjectIds.get(lootData);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = nextLootObjectId;
+  nextLootObjectId += 1;
+  lootObjectIds.set(lootData, created);
+  return created;
+}
+
+function missionActionsCacheKey(options: {
+  missionOptions: MissionOption[];
+  closureKey: string;
+  missionDropRarities: ShinyRaritySelection;
+  lootData: LootJson;
+}): string {
+  return [
+    `opts:${missionOptionsFingerprint(options.missionOptions)}`,
+    `closure:${options.closureKey}`,
+    `rar:${missionDropRarityCacheKey(options.missionDropRarities)}`,
+    `loot:${getLootObjectId(options.lootData)}`,
+  ].join("::");
+}
+
+async function getMissionActionsForOptionsCached(options: {
+  missionOptions: MissionOption[];
+  relevantItems: Set<string>;
+  closureKey: string;
+  lootData: LootJson;
+  missionDropRarities: ShinyRaritySelection;
+}): Promise<MissionActionCacheEntry> {
+  const cacheKey = missionActionsCacheKey({
+    missionOptions: options.missionOptions,
+    closureKey: options.closureKey,
+    missionDropRarities: options.missionDropRarities,
+    lootData: options.lootData,
+  });
+  const cached = missionActionsCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const builtRaw = await buildMissionActionsForOptions(
+    options.missionOptions,
+    options.relevantItems,
+    options.lootData,
+    options.missionDropRarities
+  );
+  const builtPruned = pruneSubDominatedActions(
+    builtRaw
+  );
+  const created: MissionActionCacheEntry = {
+    actions: builtPruned,
+    rawCount: builtRaw.length,
+    prunedCount: Math.max(0, builtRaw.length - builtPruned.length),
+  };
+  missionActionsCache.set(cacheKey, created);
+  return created;
+}
+
+function craftCountsFingerprintForClosure(craftCounts: Record<string, number>, closure: Set<string>): string {
+  return Array.from(closure)
+    .sort()
+    .map((itemKey) => `${itemKey}:${Math.max(0, Math.round(craftCounts[itemKey] || 0))}`)
+    .join("|");
+}
+
+function craftSkeletonCacheKey(options: {
+  targetKey: string;
+  quantity: number;
+  closure: Set<string>;
+  profile: PlayerProfile;
+}): string {
+  return [
+    `target:${options.targetKey}`,
+    `qty:${Math.max(1, Math.round(options.quantity))}`,
+    `counts:${craftCountsFingerprintForClosure(options.profile.craftCounts, options.closure)}`,
+  ].join("::");
+}
+
+function getCraftSkeletonCached(options: {
+  profile: PlayerProfile;
+  targetKey: string;
+  quantity: number;
+  closure: Set<string>;
+}): CraftModelSkeleton {
+  const key = craftSkeletonCacheKey(options);
+  const cached = craftSkeletonCache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const created = buildCraftModelSkeleton(options);
+  craftSkeletonCache.set(key, created);
+  return created;
+}
+
 function cloneLaunchCounts(launchCounts: ShipLaunchCounts): ShipLaunchCounts {
   const clone: ShipLaunchCounts = {};
   for (const [ship, byDuration] of Object.entries(launchCounts)) {
@@ -2511,13 +2722,19 @@ async function planForTargetHeuristic(
   const priorityTime = Math.max(0, Math.min(1, priorityTimeRaw));
   const effectivePriorityTime = Math.max(priorityTime, MIN_MISSION_TIME_OBJECTIVE_WEIGHT);
   const quantityInt = Math.max(1, Math.round(quantity));
+  const missionDropRarities = normalizeShinyRaritySelection(plannerOptions.missionDropRarities);
 
-  const closure = new Set<string>();
-  collectClosure(targetKey, closure);
-
-  const actions = pruneSubDominatedActions(await buildMissionActionsForOptions(
-    profile.missionOptions, closure, plannerOptions.lootData, plannerOptions.missionDropRarities
-  ));
+  const closure = getTargetClosureCached(targetKey);
+  const closureKey = closureFingerprint(closure);
+  const lootData = plannerOptions.lootData ?? await getDefaultLootData();
+  const actionsEntry = await getMissionActionsForOptionsCached({
+    missionOptions: profile.missionOptions,
+    relevantItems: closure,
+    closureKey,
+    lootData,
+    missionDropRarities,
+  });
+  const actions = actionsEntry.actions;
 
   const inventory: Record<string, number> = { ...profile.inventory };
   const craftCounts: Record<string, number> = { ...profile.craftCounts };
@@ -2668,7 +2885,7 @@ async function planForTargetHeuristic(
     "Planner currently uses expected-drop values with solver-backed mission allocation and 3 mission slots. Re-run after returns."
   );
   notes.push("Target quantity is interpreted as additional copies beyond current inventory.");
-  notes.push(missionDropRarityNote(normalizeShinyRaritySelection(plannerOptions.missionDropRarities)));
+  notes.push(missionDropRarityNote(missionDropRarities));
   notes.push(
     "Ship progression snapshot reflects projected levels after applying all launches in this plan (prep + farming), and is not persisted."
   );
@@ -2707,8 +2924,10 @@ export async function planForTarget(
   const quantityInt = Math.max(1, Math.round(quantity));
   const fastMode = Boolean(plannerOptions.fastMode);
   const missionDropRarities = normalizeShinyRaritySelection(plannerOptions.missionDropRarities);
+  const missionDropRarityKey = missionDropRarityCacheKey(missionDropRarities);
   const solverFn = plannerOptions.solverFn;
   const injectedLootData = plannerOptions.lootData;
+  const allowedDurationsKey = allowedShipDurationsCacheKey(plannerOptions.allowedShipDurations);
   const missionOptionFilter = plannerOptions.allowedShipDurations
     ? (() => {
         const allowed = new Set(
@@ -2770,15 +2989,41 @@ export async function planForTarget(
   });
   await yieldForProgressFlush();
 
-  const closure = new Set<string>();
-  collectClosure(targetKey, closure);
+  const closure = getTargetClosureCached(targetKey);
+  const closureKey = closureFingerprint(closure);
 
-  const progressionCandidatesRaw = buildProgressionCandidates(profile, missionOptionFilter);
-  const progressionDeduped = dedupeProgressionCandidatesByMissionOptions(progressionCandidatesRaw);
+  const progressionKey = profileProgressionCacheKey(profile, allowedDurationsKey);
+  const cachedProgression = progressionCache.get(progressionKey);
+  const progressionDeduped = cachedProgression
+    ? cachedProgression
+    : (() => {
+        const progressionCandidatesRaw = buildProgressionCandidates(profile, missionOptionFilter);
+        const deduped = dedupeProgressionCandidatesByMissionOptions(progressionCandidatesRaw);
+        progressionCache.set(progressionKey, deduped);
+        return deduped;
+      })();
 
   const fastCandidateLimit = priorityTime <= SCORE_EPS ? NORMAL_MODE_MAX_CANDIDATES : FAST_MODE_MAX_CANDIDATES;
   const candidateLimit = fastMode ? fastCandidateLimit : NORMAL_MODE_MAX_CANDIDATES;
   const progressionCandidates = progressionDeduped.unique.slice(0, candidateLimit);
+  const candidateReuseKey = [
+    progressionKey,
+    `target:${targetKey}`,
+    `qty:${quantityInt}`,
+    `rar:${missionDropRarityKey}`,
+    `mode:${priorityTime <= SCORE_EPS ? "ge" : "mix"}`,
+    `fast:${fastMode ? 1 : 0}`,
+  ].join("::");
+  const preferredCandidateFingerprint = bestCandidateFingerprintCache.get(candidateReuseKey);
+  if (preferredCandidateFingerprint) {
+    const preferredIndex = progressionCandidates.findIndex(
+      (candidate) => missionOptionsFingerprint(candidate.missionOptions) === preferredCandidateFingerprint
+    );
+    if (preferredIndex > 0) {
+      const [preferred] = progressionCandidates.splice(preferredIndex, 1);
+      progressionCandidates.unshift(preferred);
+    }
+  }
   reportProgress({
     phase: "candidates",
     message: `Prepared ${progressionCandidates.length.toLocaleString()} progression candidates. Loading mission loot dataset...`,
@@ -2786,7 +3031,7 @@ export async function planForTarget(
     total: progressionCandidates.length,
   });
   await yieldForProgressFlush();
-  const referenceMissionOptions = progressionCandidates[0]?.missionOptions || profile.missionOptions;
+  const referenceMissionOptions = progressionDeduped.unique[0]?.missionOptions || profile.missionOptions;
   const lootLoadStartedAtMs = Date.now();
   const lootData = injectedLootData ?? await getDefaultLootData();
   benchmarkExcludedMs += Math.max(0, Date.now() - lootLoadStartedAtMs);
@@ -2795,9 +3040,15 @@ export async function planForTarget(
     message: "Loaded mission loot data. Building mission action models...",
   });
   await yieldForProgressFlush();
-  const baseActionsRaw = await buildMissionActionsForOptions(referenceMissionOptions, closure, lootData, missionDropRarities);
-  const baseActions = pruneSubDominatedActions(baseActionsRaw);
-  const subDominatedPrunedCount = baseActionsRaw.length - baseActions.length;
+  const baseActionsEntry = await getMissionActionsForOptionsCached({
+    missionOptions: referenceMissionOptions,
+    relevantItems: closure,
+    closureKey,
+    lootData,
+    missionDropRarities,
+  });
+  const baseActions = baseActionsEntry.actions;
+  const subDominatedPrunedCount = baseActionsEntry.prunedCount;
   if (subDominatedPrunedCount > 0) {
     reportProgress({
       phase: "init",
@@ -2806,7 +3057,7 @@ export async function planForTarget(
     await yieldForProgressFlush();
   }
 
-  const craftSkeleton = buildCraftModelSkeleton({
+  const craftSkeleton = getCraftSkeletonCached({
     profile,
     targetKey,
     quantity: quantityInt,
@@ -2957,9 +3208,14 @@ export async function planForTarget(
       const candidateKey = missionOptionsFingerprint(combinedOptions);
       let candidateActions = actionCache.get(candidateKey);
       if (!candidateActions) {
-        candidateActions = pruneSubDominatedActions(
-          await buildMissionActionsForOptions(combinedOptions, closure, lootData, missionDropRarities)
-        );
+        const candidateEntry = await getMissionActionsForOptionsCached({
+          missionOptions: combinedOptions,
+          relevantItems: closure,
+          closureKey,
+          lootData,
+          missionDropRarities,
+        });
+        candidateActions = candidateEntry.actions;
         actionCache.set(candidateKey, candidateActions);
       }
       const finalOptionKeys = new Set(candidate.missionOptions.map((option) => missionOptionKey(option)));
@@ -3528,6 +3784,11 @@ export async function planForTarget(
     });
     await yieldForProgressFlush();
 
+    bestCandidateFingerprintCache.set(
+      candidateReuseKey,
+      missionOptionsFingerprint(best.candidate.missionOptions)
+    );
+
     const missionRows = buildMissionRows(best.actions, best.unified.missionCounts);
     const craftRows = buildCraftRows(best.unified.crafts);
     const targetBreakdown = buildTargetBreakdown({
@@ -3811,9 +4072,10 @@ export async function computeMonolithicPaths(options: {
   const { profile, targetItemId, quantity, priorityTime, selectedCombos, missionDropRarities, solverFn: solverFnOption, lootData: injectedLootData } = options;
   const targetKey = itemIdToCanonicalKey(targetItemId);
   const quantityInt = Math.max(1, Math.round(quantity));
+  const missionDropRaritySelection = normalizeShinyRaritySelection(missionDropRarities);
 
-  const closure = new Set<string>();
-  collectClosure(targetKey, closure);
+  const closure = getTargetClosureCached(targetKey);
+  const closureKey = closureFingerprint(closure);
 
   const lootData = injectedLootData ?? await getDefaultLootData();
   const allOptions = profile.missionOptions.length > 0
@@ -3821,7 +4083,7 @@ export async function computeMonolithicPaths(options: {
     : buildMissionOptions(profile.shipLevels, profile.epicResearchFTLLevel, profile.epicResearchZerogLevel);
   const baseLaunchCounts = shipLevelsToLaunchCounts(profile.shipLevels);
 
-  const craftSkeleton = buildCraftModelSkeleton({
+  const craftSkeleton = getCraftSkeletonCached({
     profile,
     targetKey,
     quantity: quantityInt,
@@ -3847,7 +4109,14 @@ export async function computeMonolithicPaths(options: {
         : allOptions.filter((o) => o.ship === combo.ship && o.durationType === combo.durationType);
 
       // Build actions filtered to only this combo's target
-      const comboActions = await buildMissionActionsForOptions(phasedOptions, closure, lootData, missionDropRarities);
+      const comboActionsEntry = await getMissionActionsForOptionsCached({
+        missionOptions: phasedOptions,
+        relevantItems: closure,
+        closureKey,
+        lootData,
+        missionDropRarities: missionDropRaritySelection,
+      });
+      const comboActions = comboActionsEntry.actions;
       const filteredActions = comboActions.filter((a) => a.targetAfxId === combo.targetAfxId);
 
       if (filteredActions.length === 0) {
