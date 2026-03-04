@@ -1148,7 +1148,7 @@ export default function MissionCraftPlannerPage() {
       .map((itemKey) => {
         const requiredQty = requiredByItemKey[itemKey] || 0;
         const requiredForChain = Math.max(0, requiredQty);
-        const itemId = ARTIFACT_DISPLAY[itemKey]?.id || itemKeyToId(itemKey);
+        const itemId = itemKeyToId(itemKey);
         const plannedCraftCount = plannedCraftCountByItemId.get(itemId) || 0;
         if (requiredForChain <= 0 && plannedCraftCount <= 0) {
           return null;
@@ -1161,7 +1161,7 @@ export default function MissionCraftPlannerPage() {
           if (recipe) {
             const lines = Object.entries(recipe.ingredients)
               .map(([ingredientKey, ingredientQty]) => ({
-                itemId: ARTIFACT_DISPLAY[ingredientKey]?.id || itemKeyToId(ingredientKey),
+                itemId: itemKeyToId(ingredientKey),
                 quantity: plannedCraftCount * ingredientQty,
               }))
               .filter((entry) => entry.quantity > 0)
