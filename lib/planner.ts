@@ -1,6 +1,6 @@
 import type { LootJson, MissionLevelLootStore, MissionTargetLootStore } from "./loot-data";
 import type { HighsSolveResult } from "./highs";
-import { itemIdToCanonicalKey, itemIdToKey, itemKeyToDisplayName, itemKeyToId } from "./item-utils";
+import { isUntargetedTargetAfxId, itemIdToCanonicalKey, itemIdToKey, itemKeyToDisplayName, itemKeyToId } from "./item-utils";
 import { getRecipe, recipes } from "./recipes";
 import {
   buildMissionOptions,
@@ -175,6 +175,7 @@ const FAST_MODE_MAX_CANDIDATES = 4;
 const NORMAL_MODE_MAX_CANDIDATES = 12;
 const MIN_MISSION_TIME_OBJECTIVE_WEIGHT = 1e-5;
 const MISSION_LAUNCH_TIEBREAKER_SECONDS = 300;
+const TARGETED_MISSION_TIEBREAKER_SECONDS = 1;
 const PLAN_SCORE_TIE_TOLERANCE_FRACTION = 0.01;
 const REFINEMENT_MAX_PHASES_PER_OPTION = 3;
 const INTEGRATED_MAX_PHASES = 9;
@@ -1100,9 +1101,12 @@ async function solveUnifiedCraftMissionPlan(options: {
   const missionObjectiveWeight = strictGeObjective ? 0 : Math.max(priorityTime, MIN_MISSION_TIME_OBJECTIVE_WEIGHT);
   if (missionObjectiveWeight > 0) {
     const missionLaunchTiebreakCoeff = (missionObjectiveWeight * MISSION_LAUNCH_TIEBREAKER_SECONDS) / normalizedTimeRef;
+    const targetedTiebreakCoeff = (missionObjectiveWeight * TARGETED_MISSION_TIEBREAKER_SECONDS) / normalizedTimeRef;
     for (let index = 0; index < actions.length; index += 1) {
       const coefficient =
-        (missionObjectiveWeight * (actions[index].durationSeconds / 3)) / normalizedTimeRef + missionLaunchTiebreakCoeff;
+        (missionObjectiveWeight * (actions[index].durationSeconds / 3)) / normalizedTimeRef +
+        missionLaunchTiebreakCoeff +
+        (isUntargetedTargetAfxId(actions[index].targetAfxId) ? 0 : targetedTiebreakCoeff);
       objectiveTerms.push({
         coefficient,
         variable: missionVars[index],
