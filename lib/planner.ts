@@ -2670,7 +2670,7 @@ async function planForTargetHeuristic(
   );
 
   return {
-    targetItemId,
+    targetItemId: itemKeyToId(targetKey),
     quantity: quantityInt,
     priorityTime,
     geCost,
@@ -3691,7 +3691,7 @@ export async function planForTarget(
     }
 
     const result: PlannerResult = {
-      targetItemId,
+      targetItemId: itemKeyToId(targetKey),
       quantity: quantityInt,
       priorityTime,
       geCost: best.unified.geCost,
