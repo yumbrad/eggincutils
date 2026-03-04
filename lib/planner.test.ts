@@ -61,6 +61,113 @@ describe("planForTarget coverage handling", () => {
     await expect(planForTarget(baseProfile(), "puzzle-cube-1", 1, 0.5)).rejects.toBeInstanceOf(MissionCoverageError);
   });
 
+  it("resolves gusset-4 display ID to ornate_gusset_4 and finds mission coverage", async () => {
+    // gusset-{n} is the display ID in artifact-display.json for the canonical key ornate_gusset_{n}.
+    // The planner must normalize the incoming item ID so recipes and loot data match.
+    mockedLoadLootData.mockResolvedValue({
+      missions: [
+        {
+          afxShip: 0,
+          afxDurationType: 0,
+          missionId: "test-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 8,
+                      afxLevel: 4,
+                      itemId: "ornate-gusset-4",
+                      counts: [1, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    mockedSolveWithHighs.mockResolvedValue({
+      Status: "Optimal",
+      Columns: { m_0: { Primal: 1 } },
+    });
+
+    const profile = baseProfile();
+    profile.missionOptions = [
+      {
+        ship: "CHICKEN_ONE",
+        missionId: "test-short",
+        durationType: "SHORT",
+        level: 0,
+        durationSeconds: 1200,
+        capacity: 1,
+      },
+    ];
+
+    // "gusset-4" is the shortened display ID; must NOT throw MissionCoverageError.
+    const result = await planForTarget(profile, "gusset-4", 1, 0.5);
+    expect(result.missions).toHaveLength(1);
+    expect(result.targetBreakdown.requested).toBe(1);
+  });
+
+  it("resolves vial-of-martian-dust-2 display ID to vial_martian_dust_2 and finds mission coverage", async () => {
+    // vial-of-martian-dust-{n} is the display ID in artifact-display.json for key vial_martian_dust_{n}.
+    mockedLoadLootData.mockResolvedValue({
+      missions: [
+        {
+          afxShip: 0,
+          afxDurationType: 0,
+          missionId: "test-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 7,
+                      afxLevel: 2,
+                      itemId: "vial-martian-dust-2",
+                      counts: [1, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    mockedSolveWithHighs.mockResolvedValue({
+      Status: "Optimal",
+      Columns: { m_0: { Primal: 1 } },
+    });
+
+    const profile = baseProfile();
+    profile.missionOptions = [
+      {
+        ship: "CHICKEN_ONE",
+        missionId: "test-short",
+        durationType: "SHORT",
+        level: 0,
+        durationSeconds: 1200,
+        capacity: 1,
+      },
+    ];
+
+    // "vial-of-martian-dust-2" is the expanded display ID; must NOT throw MissionCoverageError.
+    const result = await planForTarget(profile, "vial-of-martian-dust-2", 1, 0.5);
+    expect(result.missions).toHaveLength(1);
+    expect(result.targetBreakdown.requested).toBe(1);
+  });
+
   it("uses HiGHS mission allocation when solver returns an optimal solution", async () => {
     mockedLoadLootData.mockResolvedValue({
       missions: [

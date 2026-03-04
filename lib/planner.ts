@@ -1,6 +1,6 @@
 import type { LootJson, MissionLevelLootStore, MissionTargetLootStore } from "./loot-data";
 import type { HighsSolveResult } from "./highs";
-import { itemIdToKey, itemKeyToDisplayName, itemKeyToId } from "./item-utils";
+import { itemIdToCanonicalKey, itemIdToKey, itemKeyToDisplayName, itemKeyToId } from "./item-utils";
 import { getRecipe, recipes } from "./recipes";
 import {
   buildMissionOptions,
@@ -2503,7 +2503,7 @@ async function planForTargetHeuristic(
   priorityTimeRaw: number,
   plannerOptions: Pick<PlannerOptions, "missionDropRarities" | "solverFn" | "lootData"> = {}
 ): Promise<PlannerResult> {
-  const targetKey = itemIdToKey(targetItemId);
+  const targetKey = itemIdToCanonicalKey(targetItemId);
   const priorityTime = Math.max(0, Math.min(1, priorityTimeRaw));
   const effectivePriorityTime = Math.max(priorityTime, MIN_MISSION_TIME_OBJECTIVE_WEIGHT);
   const quantityInt = Math.max(1, Math.round(quantity));
@@ -2698,7 +2698,7 @@ export async function planForTarget(
   priorityTimeRaw: number,
   plannerOptions: PlannerOptions = {}
 ): Promise<PlannerResult> {
-  const targetKey = itemIdToKey(targetItemId);
+  const targetKey = itemIdToCanonicalKey(targetItemId);
   const priorityTime = Math.max(0, Math.min(1, priorityTimeRaw));
   const quantityInt = Math.max(1, Math.round(quantity));
   const fastMode = Boolean(plannerOptions.fastMode);
@@ -3805,7 +3805,7 @@ export async function computeMonolithicPaths(options: {
   lootData?: LootJson;
 }): Promise<MonolithicPathResult[]> {
   const { profile, targetItemId, quantity, priorityTime, selectedCombos, missionDropRarities, solverFn: solverFnOption, lootData: injectedLootData } = options;
-  const targetKey = itemIdToKey(targetItemId);
+  const targetKey = itemIdToCanonicalKey(targetItemId);
   const quantityInt = Math.max(1, Math.round(quantity));
 
   const closure = new Set<string>();

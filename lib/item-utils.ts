@@ -34,6 +34,40 @@ export function itemKeyToId(itemKey: string): string {
   return itemKey.replaceAll("_", "-");
 }
 
+// Lazy-built reverse map from display entry ID → canonical artifact key.
+// Needed because some artifact-display.json entries have `id` fields that
+// differ from the canonical key (e.g. id="gusset-4" for key="ornate_gusset_4",
+// id="vial-of-martian-dust-2" for key="vial_martian_dust_2").
+let _displayIdToKey: Map<string, string> | null = null;
+function displayIdToKeyMap(): Map<string, string> {
+  if (!_displayIdToKey) {
+    _displayIdToKey = new Map();
+    for (const [key, entry] of Object.entries(artifactDisplayMap)) {
+      _displayIdToKey.set(entry.id, key);
+    }
+  }
+  return _displayIdToKey;
+}
+
+/**
+ * Convert an arbitrary item ID (from the UI, API, or legacy data) to the
+ * canonical artifact key used by recipes and loot data.
+ *
+ * Handles two known mismatch cases in artifact-display.json:
+ *   - "gusset-{n}"             → "ornate_gusset_{n}"
+ *   - "vial-of-martian-dust-{n}" → "vial_martian_dust_{n}"
+ *
+ * Falls back to plain `itemIdToKey(itemId)` for all normal cases.
+ */
+export function itemIdToCanonicalKey(itemId: string): string {
+  const simpleKey = itemIdToKey(itemId);
+  if (artifactDisplayMap[simpleKey]) {
+    return simpleKey; // Already canonical (normal case).
+  }
+  // Try reverse lookup via the display entry's `id` field.
+  return displayIdToKeyMap().get(itemId) ?? simpleKey;
+}
+
 export function itemKeyToDisplayName(itemKey: string): string {
   const entry = artifactDisplayMap[itemKey];
   if (!entry) {
