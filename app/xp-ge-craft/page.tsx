@@ -17,7 +17,7 @@ import { Highs, Solution, optimizeCrafts, simulateGeEfficiencyPlan, type Sequent
 import { XP_GE_CRAFT_COPY } from "../../lib/xp-ge-craft-copy";
 import styles from "./page.module.css";
 
-type SortKey = "xpPerGe" | "xp" | "familyTier" | "name";
+type SortKey = "xpPerGe" | "xp" | "tierXpPerGe" | "familyTier" | "name";
 type InventoryResponse = {
   inventory?: Record<string, number>;
   craftCounts?: Record<string, number>;
@@ -76,7 +76,7 @@ function getSortedArtifacts(solution: Solution, sortKey: SortKey): string[] {
 
   const compareByName = (a: string, b: string): number => getArtifactDisplayLabel(a).localeCompare(getArtifactDisplayLabel(b));
   const familyKey = (artifact: string): string => artifact.replace(/_\d+$/, "");
-  const tierNumber = (artifact: string): number => {
+  const getTierNumber = (artifact: string): number => {
     const display = getArtifactDisplayData(artifact);
     if (display && Number.isFinite(display.tierNumber)) {
       return display.tierNumber;
@@ -93,7 +93,7 @@ function getSortedArtifacts(solution: Solution, sortKey: SortKey): string[] {
     if (familyCompare !== 0) {
       return familyCompare;
     }
-    const tierCompare = tierNumber(a) - tierNumber(b);
+    const tierCompare = getTierNumber(a) - getTierNumber(b);
     if (tierCompare !== 0) {
       return tierCompare;
     }
@@ -107,6 +107,13 @@ function getSortedArtifacts(solution: Solution, sortKey: SortKey): string[] {
       return keys.sort((a, b) => solution.crafts[b].xp - solution.crafts[a].xp || compareByName(a, b));
     case "xpPerGe":
       return keys.sort((a, b) => solution.crafts[b].xpPerGe - solution.crafts[a].xpPerGe || compareByName(a, b));
+    case "tierXpPerGe":
+      return keys.sort(
+        (a, b) =>
+          getTierNumber(b) - getTierNumber(a) ||
+          solution.crafts[b].xpPerGe - solution.crafts[a].xpPerGe ||
+          compareByName(a, b)
+      );
     case "familyTier":
       return keys.sort(compareByFamilyTier);
     default:
@@ -162,6 +169,19 @@ function getModeComparisonRows(solution: Solution, sortKey: SortKey): ModeCompar
           getArtifactDisplayLabel(a.artifact).localeCompare(getArtifactDisplayLabel(b.artifact)) ||
           a.modeLabel.localeCompare(b.modeLabel)
       );
+    case "tierXpPerGe":
+      return rows.sort((a, b) => {
+        const tierA = getArtifactDisplayData(a.artifact)?.tierNumber ?? Number(a.artifact.match(/_(\d+)$/)?.[1] || Number.MAX_SAFE_INTEGER);
+        const tierB = getArtifactDisplayData(b.artifact)?.tierNumber ?? Number(b.artifact.match(/_(\d+)$/)?.[1] || Number.MAX_SAFE_INTEGER);
+        if (tierA !== tierB) {
+          return tierB - tierA;
+        }
+        return (
+          b.xpPerGe - a.xpPerGe ||
+          getArtifactDisplayLabel(a.artifact).localeCompare(getArtifactDisplayLabel(b.artifact)) ||
+          a.modeLabel.localeCompare(b.modeLabel)
+        );
+      });
     case "name":
     default:
       return rows.sort(
@@ -264,7 +284,7 @@ export default function XpGeCraftPage(): JSX.Element {
   const [includeSlotted, setIncludeSlotted] = useState<boolean>(true);
   const [solution, setSolution] = useState<Solution | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("xpPerGe");
-  const [hideUncraftable, setHideUncraftable] = useState<boolean>(false);
+  const [hideUncraftable, setHideUncraftable] = useState<boolean>(true);
   const [minEfficiencyXpPerGe, setMinEfficiencyXpPerGe] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -496,6 +516,12 @@ export default function XpGeCraftPage(): JSX.Element {
                 onClick={() => setSortKey("xp")}
               >
                 Total XP
+              </button>
+              <button
+                className={`${styles.sortButton} ${sortKey === "tierXpPerGe" ? styles.activeButton : ""}`}
+                onClick={() => setSortKey("tierXpPerGe")}
+              >
+                Tier+XP/GE
               </button>
               <button
                 className={`${styles.sortButton} ${sortKey === "familyTier" ? styles.activeButton : ""}`}
