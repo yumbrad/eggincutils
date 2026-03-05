@@ -13,7 +13,7 @@ import {
   writeStoredString,
 } from "../../lib/local-preferences";
 import useHighsClient from "../../lib/use-highs-client";
-import { Highs, Solution, optimizeCrafts } from "../../lib/xp-ge-optimize";
+import { Highs, Solution, optimizeCrafts, simulateGeEfficiencyPlan, type SequentialMode } from "../../lib/xp-ge-optimize";
 import { XP_GE_CRAFT_COPY } from "../../lib/xp-ge-craft-copy";
 import styles from "./page.module.css";
 
@@ -28,6 +28,7 @@ type InventoryResponse = {
 type ModeComparisonRow = {
   key: string;
   artifact: string;
+  mode: SequentialMode;
   modeLabel: string;
   count: number;
   xp: number;
@@ -35,10 +36,16 @@ type ModeComparisonRow = {
   xpPerGe: number;
 };
 
+type OptimizePayload = {
+  solution: Solution;
+  inventory: Record<string, number>;
+  craftCounts: Record<string, number>;
+};
+
 const SHARED_EID_KEYS = [LOCAL_PREF_KEYS.sharedEid, LOCAL_PREF_KEYS.legacyEid] as const;
 const SHARED_INCLUDE_SLOTTED_KEYS = [LOCAL_PREF_KEYS.sharedIncludeSlotted, LOCAL_PREF_KEYS.legacyIncludeSlotted] as const;
 
-async function getOptimalCrafts(highs: Highs, eid: string, includeSlotted: boolean): Promise<Solution> {
+async function getOptimalCrafts(highs: Highs, eid: string, includeSlotted: boolean): Promise<OptimizePayload> {
   const response = await fetch(
     `/api/inventory?eid=${encodeURIComponent(eid)}&includeSlotted=${includeSlotted ? "true" : "false"}`
   );
@@ -55,7 +62,13 @@ async function getOptimalCrafts(highs: Highs, eid: string, includeSlotted: boole
   if (!data?.inventory) {
     throw new Error("No inventory data returned from the server.");
   }
-  return optimizeCrafts(highs, data.inventory, data.craftCounts || {});
+  const inventory = data.inventory;
+  const craftCounts = data.craftCounts || {};
+  return {
+    solution: optimizeCrafts(highs, inventory, craftCounts),
+    inventory,
+    craftCounts,
+  };
 }
 
 function getSortedArtifacts(solution: Solution, sortKey: SortKey): string[] {
@@ -108,6 +121,7 @@ function getModeComparisonRows(solution: Solution, sortKey: SortKey): ModeCompar
     rows.push({
       key: `${artifact}:direct`,
       artifact,
+      mode: "direct",
       modeLabel: "direct craft",
       count: craft.modeComparison.direct.count,
       xp: craft.modeComparison.direct.xp,
@@ -122,6 +136,7 @@ function getModeComparisonRows(solution: Solution, sortKey: SortKey): ModeCompar
         rows.push({
           key: `${artifact}:auto`,
           artifact,
+          mode: "auto",
           modeLabel: "auto-craftable beyond direct",
           count: autoExtraCount,
           xp: autoExtraXp,
@@ -250,9 +265,12 @@ export default function XpGeCraftPage(): JSX.Element {
   const [solution, setSolution] = useState<Solution | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("xpPerGe");
   const [hideUncraftable, setHideUncraftable] = useState<boolean>(false);
+  const [minEfficiencyXpPerGe, setMinEfficiencyXpPerGe] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [prefsLoaded, setPrefsLoaded] = useState<boolean>(false);
+  const [planSourceInventory, setPlanSourceInventory] = useState<Record<string, number> | null>(null);
+  const [planSourceCraftCounts, setPlanSourceCraftCounts] = useState<Record<string, number>>({});
 
   useEffect(() => {
     const savedEid = readFirstStoredString(SHARED_EID_KEYS);
@@ -292,10 +310,14 @@ export default function XpGeCraftPage(): JSX.Element {
 
     setError(null);
     setSolution(null);
+    setPlanSourceInventory(null);
+    setPlanSourceCraftCounts({});
     setIsLoading(true);
     try {
       const result = await getOptimalCrafts(highs, eid, includeSlotted);
-      setSolution(result);
+      setSolution(result.solution);
+      setPlanSourceInventory(result.inventory);
+      setPlanSourceCraftCounts(result.craftCounts);
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : "Unable to load inventory.";
       setError(message);
@@ -309,6 +331,29 @@ export default function XpGeCraftPage(): JSX.Element {
     solution && hideUncraftable ? sortedArtifacts.filter((artifact) => solution.crafts[artifact].count > 0) : sortedArtifacts;
   const sortedModeRows = solution ? getModeComparisonRows(solution, sortKey) : [];
   const visibleModeRows = hideUncraftable ? sortedModeRows.filter((row) => row.count > 0) : sortedModeRows;
+  const xpPerGeModeRows = solution ? getModeComparisonRows(solution, "xpPerGe") : [];
+  const efficiencySliderMax = xpPerGeModeRows.length > 0 ? Math.max(0, xpPerGeModeRows[0].xpPerGe) : 0;
+  const efficiencySliderStep = efficiencySliderMax > 100 ? 1 : efficiencySliderMax > 10 ? 0.1 : 0.01;
+
+  useEffect(() => {
+    setMinEfficiencyXpPerGe((previous) => Math.min(previous, efficiencySliderMax));
+  }, [efficiencySliderMax]);
+
+  const geEfficiencyPlan =
+    solution && planSourceInventory
+      ? simulateGeEfficiencyPlan(
+          planSourceInventory,
+          planSourceCraftCounts,
+          xpPerGeModeRows.map((row) => ({
+            artifact: row.artifact,
+            mode: row.mode,
+            referenceXpPerGe: row.xpPerGe,
+          })),
+          minEfficiencyXpPerGe
+        )
+      : null;
+  const geEfficiencyOverallXpPerGe =
+    geEfficiencyPlan && geEfficiencyPlan.totalCost > 0 ? geEfficiencyPlan.totalXp / geEfficiencyPlan.totalCost : 0;
 
   return (
     <main className="page">
@@ -374,13 +419,67 @@ export default function XpGeCraftPage(): JSX.Element {
         {solution && (
           <>
             <div className={styles.summary}>
-              <div className={styles.summaryCard}>
-                <div className={styles.summaryLabel}>Total XP</div>
-                <div className={styles.summaryValue}>{solution.totalXp.toLocaleString()}</div>
+              <div className={styles.summaryGroup}>
+                <div
+                  className={styles.summaryGroupLabel}
+                  title="Global LP integer plan that maximizes total XP from your current inventory under full ingredient-consumption constraints."
+                >
+                  Max XP Plan
+                </div>
+                <div className={styles.summaryGroupCards}>
+                  <div className={styles.summaryCard}>
+                    <div className={styles.summaryLabel}>Total XP</div>
+                    <div className={styles.summaryValue}>{solution.totalXp.toLocaleString()}</div>
+                  </div>
+                  <div className={styles.summaryCard}>
+                    <div className={styles.summaryLabel}>Total GE Cost</div>
+                    <div className={styles.summaryValue}>{solution.totalCost.toLocaleString()}</div>
+                  </div>
+                </div>
               </div>
-              <div className={styles.summaryCard}>
-                <div className={styles.summaryLabel}>Total GE Cost</div>
-                <div className={styles.summaryValue}>{solution.totalCost.toLocaleString()}</div>
+
+              <div className={styles.summaryGroup}>
+                <div
+                  className={styles.summaryGroupLabel}
+                  title="Sequential accumulator: walk the XP/GE-ranked standalone rows top-down and craft each row as much as still possible from remaining inventory, stopping at the first row below your minimum XP/GE threshold."
+                >
+                  Max GE Efficiency Plan
+                </div>
+                <div className={styles.efficiencyControl}>
+                  <div className={styles.efficiencyControlHeader}>
+                    <label htmlFor="minEfficiencyXpPerGe">
+                      Min XP / GE: <strong>{minEfficiencyXpPerGe.toFixed(2)}</strong>
+                    </label>
+                    <span>Overall XP/GE: {geEfficiencyOverallXpPerGe.toFixed(2)}</span>
+                  </div>
+                  <input
+                    id="minEfficiencyXpPerGe"
+                    type="range"
+                    min={0}
+                    max={efficiencySliderMax}
+                    step={efficiencySliderStep}
+                    value={Math.min(minEfficiencyXpPerGe, efficiencySliderMax)}
+                    onChange={(event) => setMinEfficiencyXpPerGe(Number(event.target.value))}
+                    disabled={xpPerGeModeRows.length === 0}
+                  />
+                </div>
+                <div className={styles.summaryGroupCards}>
+                  <div className={styles.summaryCard}>
+                    <div className={styles.summaryLabel}>Accumulated XP</div>
+                    <div className={styles.summaryValue}>{Math.round(geEfficiencyPlan?.totalXp || 0).toLocaleString()}</div>
+                  </div>
+                  <div className={styles.summaryCard}>
+                    <div className={styles.summaryLabel}>Accumulated GE Cost</div>
+                    <div className={styles.summaryValue}>{Math.round(geEfficiencyPlan?.totalCost || 0).toLocaleString()}</div>
+                  </div>
+                </div>
+                {geEfficiencyPlan && (
+                  <div className={styles.summaryMeta}>
+                    Crafted from {geEfficiencyPlan.craftedRowCount.toLocaleString()} of{" "}
+                    {geEfficiencyPlan.processedRowCount.toLocaleString()} processed XP/GE rows (
+                    {geEfficiencyPlan.stopReason === "threshold" ? "stopped at threshold" : "reached end of ranked list"}).
+                  </div>
+                )}
               </div>
             </div>
 

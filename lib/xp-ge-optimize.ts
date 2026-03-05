@@ -57,6 +57,33 @@ export interface Solution {
   totalCost: number;
 }
 
+export type SequentialMode = "direct" | "auto";
+
+export interface GeEfficiencyPlanRowInput {
+  artifact: string;
+  mode: SequentialMode;
+  referenceXpPerGe: number;
+}
+
+export interface GeEfficiencyPlanRowResult {
+  artifact: string;
+  mode: SequentialMode;
+  referenceXpPerGe: number;
+  craftedCount: number;
+  xp: number;
+  cost: number;
+  effectiveXpPerGe: number;
+}
+
+export interface GeEfficiencyPlanResult {
+  rows: GeEfficiencyPlanRowResult[];
+  totalXp: number;
+  totalCost: number;
+  processedRowCount: number;
+  craftedRowCount: number;
+  stopReason: "threshold" | "exhausted";
+}
+
 const MAX_CRAFT_COUNT_FOR_DISCOUNT = 300;
 const MAX_DISCOUNT_FACTOR = 0.9;
 const DISCOUNT_CURVE_EXPONENT = 0.2;
@@ -93,6 +120,74 @@ export function optimizeCrafts(highs: Highs, inventory: Inventory, craftCounts: 
   }
 
   return result;
+}
+
+export function simulateGeEfficiencyPlan(
+  inventory: Inventory,
+  craftCounts: CraftCounts = {},
+  rows: GeEfficiencyPlanRowInput[],
+  minXpPerGe: number
+): GeEfficiencyPlanResult {
+  let simulationInventory = cloneCountMap(inventory);
+  let simulationCraftCounts = cloneCountMap(craftCounts);
+  const safeMinXpPerGe = Math.max(0, Number.isFinite(minXpPerGe) ? minXpPerGe : 0);
+
+  const results: GeEfficiencyPlanRowResult[] = [];
+  let totalXp = 0;
+  let totalCost = 0;
+  let processedRowCount = 0;
+  let craftedRowCount = 0;
+  let stopReason: "threshold" | "exhausted" = "exhausted";
+
+  for (const row of rows) {
+    if (row.referenceXpPerGe + ZERO_TOLERANCE < safeMinXpPerGe) {
+      stopReason = "threshold";
+      break;
+    }
+
+    const recipe = recipes[row.artifact];
+    if (!recipe) {
+      continue;
+    }
+
+    const simulated = simulateCraftModeWithState(
+      recipes,
+      simulationInventory,
+      simulationCraftCounts,
+      row.artifact,
+      row.mode === "auto"
+    );
+
+    simulationInventory = simulated.inventory;
+    simulationCraftCounts = simulated.craftCounts;
+
+    const xp = simulated.count * recipe.xp;
+    const effectiveXpPerGe = simulated.cost > 0 ? xp / simulated.cost : 0;
+    results.push({
+      artifact: row.artifact,
+      mode: row.mode,
+      referenceXpPerGe: row.referenceXpPerGe,
+      craftedCount: simulated.count,
+      xp,
+      cost: simulated.cost,
+      effectiveXpPerGe,
+    });
+    processedRowCount += 1;
+    if (simulated.count > 0) {
+      craftedRowCount += 1;
+    }
+    totalXp += xp;
+    totalCost += simulated.cost;
+  }
+
+  return {
+    rows: results,
+    totalXp,
+    totalCost,
+    processedRowCount,
+    craftedRowCount,
+    stopReason,
+  };
 }
 
 function normalizeCount(value: number): number {
@@ -262,6 +357,54 @@ function simulateCraftMode(
   return {
     count: craftedCount,
     cost: totalCost,
+  };
+}
+
+function simulateCraftModeWithState(
+  recipeMap: Recipes,
+  inventory: Record<string, number>,
+  craftCounts: Record<string, number>,
+  artifact: string,
+  allowAutocraft: boolean
+): {
+  count: number;
+  cost: number;
+  inventory: Record<string, number>;
+  craftCounts: Record<string, number>;
+} {
+  let simulationInventory = cloneCountMap(inventory);
+  let simulationCraftCounts = cloneCountMap(craftCounts);
+  let totalCost = 0;
+  let craftedCount = 0;
+
+  while (true) {
+    const attemptInventory = cloneCountMap(simulationInventory);
+    const attemptCraftCounts = cloneCountMap(simulationCraftCounts);
+    let attemptCost = 0;
+    const didCraft = craftOne(
+      recipeMap,
+      attemptInventory,
+      attemptCraftCounts,
+      artifact,
+      allowAutocraft,
+      (cost) => {
+        attemptCost += cost;
+      }
+    );
+    if (!didCraft) {
+      break;
+    }
+    simulationInventory = attemptInventory;
+    simulationCraftCounts = attemptCraftCounts;
+    totalCost += attemptCost;
+    craftedCount += 1;
+  }
+
+  return {
+    count: craftedCount,
+    cost: totalCost,
+    inventory: simulationInventory,
+    craftCounts: simulationCraftCounts,
   };
 }
 
