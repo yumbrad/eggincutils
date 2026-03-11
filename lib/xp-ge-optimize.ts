@@ -39,6 +39,7 @@ export interface CostDetails {
   discountPercent: number;
   recursiveCost: number;
   ingredients: IngredientCost[];
+  saleApplied: boolean;
 }
 
 export interface SolutionCraftRow {
@@ -108,12 +109,18 @@ export interface MaxXpExecutionPlan {
 const MAX_CRAFT_COUNT_FOR_DISCOUNT = 300;
 const MAX_DISCOUNT_FACTOR = 0.9;
 const DISCOUNT_CURVE_EXPONENT = 0.2;
+const CRAFTING_SALE_FACTOR = 0.7;
 const ZERO_TOLERANCE = 1e-9;
 const HIGHS_SOLVE_OPTIONS = {
   presolve: "on",
 };
 
-export function optimizeCrafts(highs: Highs, inventory: Inventory, craftCounts: CraftCounts = {}): Solution {
+export function optimizeCrafts(
+  highs: Highs,
+  inventory: Inventory,
+  craftCounts: CraftCounts = {},
+  saleEnabled: boolean = false
+): Solution {
   const problem = getProblem(inventory);
   const solution = highs.solve(problem, HIGHS_SOLVE_OPTIONS);
 
@@ -130,10 +137,10 @@ export function optimizeCrafts(highs: Highs, inventory: Inventory, craftCounts: 
     const count = normalizeCount(solution.Columns[artifact].Primal);
     const xpPerCraft = recipes[artifact]!.xp;
     const xp = count * xpPerCraft;
-    const costDetails = getCostDetails(recipes, craftCounts, artifact, count);
+    const costDetails = getCostDetails(recipes, craftCounts, artifact, count, saleEnabled);
     const cost = costDetails.totalDirectCost;
     const xpPerGe = cost > 0 ? xp / cost : 0;
-    const modeComparison = getCraftModeComparison(recipes, inventory, craftCounts, artifact, xpPerCraft);
+    const modeComparison = getCraftModeComparison(recipes, inventory, craftCounts, artifact, xpPerCraft, saleEnabled);
 
     result.crafts[artifact] = { count, xp, cost, xpPerGe, xpPerCraft, costDetails, modeComparison };
     result.totalXp += xp;
@@ -147,7 +154,8 @@ export function simulateGeEfficiencyPlan(
   inventory: Inventory,
   craftCounts: CraftCounts = {},
   rows: GeEfficiencyPlanRowInput[],
-  minXpPerGe: number
+  minXpPerGe: number,
+  saleEnabled: boolean = false
 ): GeEfficiencyPlanResult {
   let simulationInventory = cloneCountMap(inventory);
   let simulationCraftCounts = cloneCountMap(craftCounts);
@@ -176,7 +184,8 @@ export function simulateGeEfficiencyPlan(
       simulationInventory,
       simulationCraftCounts,
       row.artifact,
-      row.mode === "auto"
+      row.mode === "auto",
+      saleEnabled
     );
 
     simulationInventory = simulated.inventory;
@@ -217,7 +226,8 @@ export function buildMaxXpExecutionPlan(
   solution: Solution,
   inventory: Inventory,
   craftCounts: CraftCounts = {},
-  artifactOrder: string[] = []
+  artifactOrder: string[] = [],
+  saleEnabled: boolean = false
 ): MaxXpExecutionPlan {
   const plannedCounts = getPlannedCraftCounts(solution);
   const demandCounts = getIngredientDemandCounts(recipes, plannedCounts);
@@ -248,7 +258,8 @@ export function buildMaxXpExecutionPlan(
         remainingPlannedCounts,
         initialConsumptionBudget,
         artifact,
-        "click"
+        "click",
+        saleEnabled
       );
       mergeExecutionPlanNode(step, node);
     }
@@ -418,6 +429,7 @@ function executePlannedCraft(
   initialConsumptionBudget: Record<string, number>,
   artifact: string,
   mode: "click" | "auto",
+  saleEnabled: boolean,
   stack: Set<string> = new Set()
 ): MaxXpExecutionPlanNode {
   const recipe = recipeMap[artifact];
@@ -457,13 +469,14 @@ function executePlannedCraft(
           initialConsumptionBudget,
           ingredient,
           node,
+          saleEnabled,
           stack
         );
       }
     }
 
     const craftCount = craftCounts[artifact] || 0;
-    const { discountedCost } = getDiscountedCost(recipe.cost, craftCount);
+    const { discountedCost } = getDiscountedCost(recipe.cost, craftCount, saleEnabled);
     craftCounts[artifact] = craftCount + 1;
     remainingPlannedCounts[artifact] = Math.max(0, (remainingPlannedCounts[artifact] || 0) - 1);
     craftedInventory[artifact] = (craftedInventory[artifact] || 0) + 1;
@@ -485,6 +498,7 @@ function consumeCraftableIngredient(
   initialConsumptionBudget: Record<string, number>,
   ingredient: string,
   parentNode: MaxXpExecutionPlanNode,
+  saleEnabled: boolean,
   stack: Set<string>
 ): void {
   const remainingBudget = initialConsumptionBudget[ingredient] || 0;
@@ -507,6 +521,7 @@ function consumeCraftableIngredient(
       initialConsumptionBudget,
       ingredient,
       "auto",
+      saleEnabled,
       stack
     );
     const existingChild = parentNode.children.find(
@@ -525,7 +540,13 @@ function consumeCraftableIngredient(
   craftedInventory[ingredient] -= 1;
 }
 
-function getCostDetails(recipeMap: Recipes, craftCounts: CraftCounts, artifact: string, plannedCrafts: number): CostDetails {
+function getCostDetails(
+  recipeMap: Recipes,
+  craftCounts: CraftCounts,
+  artifact: string,
+  plannedCrafts: number,
+  saleEnabled: boolean
+): CostDetails {
   const recipe = recipeMap[artifact];
   if (!recipe) {
     return {
@@ -536,23 +557,30 @@ function getCostDetails(recipeMap: Recipes, craftCounts: CraftCounts, artifact: 
       discountPercent: 0,
       recursiveCost: 0,
       ingredients: [],
+      saleApplied: saleEnabled,
     };
   }
 
   const craftCount = craftCounts[artifact] || 0;
-  const { discountedCost, discountPercent } = getDiscountedCost(recipe.cost, craftCount);
+  const { discountedCost, discountPercent } = getDiscountedCost(recipe.cost, craftCount, saleEnabled);
   return {
     baseCost: recipe.cost,
     discountedCost,
-    totalDirectCost: getBatchDirectCost(recipe.cost, craftCount, plannedCrafts),
+    totalDirectCost: getBatchDirectCost(recipe.cost, craftCount, plannedCrafts, saleEnabled),
     craftCount,
     discountPercent,
-    recursiveCost: getRecursiveCost(recipeMap, craftCounts, artifact),
-    ingredients: getIngredientCosts(recipeMap, craftCounts, artifact),
+    recursiveCost: getRecursiveCost(recipeMap, craftCounts, artifact, saleEnabled),
+    ingredients: getIngredientCosts(recipeMap, craftCounts, artifact, saleEnabled),
+    saleApplied: saleEnabled,
   };
 }
 
-function getIngredientCosts(recipeMap: Recipes, craftCounts: CraftCounts, artifact: string): IngredientCost[] {
+function getIngredientCosts(
+  recipeMap: Recipes,
+  craftCounts: CraftCounts,
+  artifact: string,
+  saleEnabled: boolean
+): IngredientCost[] {
   const recipe = recipeMap[artifact];
   if (!recipe) {
     return [];
@@ -561,25 +589,30 @@ function getIngredientCosts(recipeMap: Recipes, craftCounts: CraftCounts, artifa
     const ingredientRecipe = recipeMap[name];
     const baseCost = ingredientRecipe ? ingredientRecipe.cost : 0;
     const craftCount = craftCounts[name] || 0;
-    const { discountedCost, discountPercent } = getDiscountedCost(baseCost, craftCount);
+    const { discountedCost, discountPercent } = getDiscountedCost(baseCost, craftCount, saleEnabled);
     return {
       name,
       quantity,
       baseCost,
       discountedCost,
-      totalCost: getBatchDirectCost(baseCost, craftCount, quantity),
+      totalCost: getBatchDirectCost(baseCost, craftCount, quantity, saleEnabled),
       craftCount,
       discountPercent,
     };
   });
 }
 
-function getRecursiveCost(recipeMap: Recipes, craftCounts: CraftCounts, artifact: string): number {
+function getRecursiveCost(recipeMap: Recipes, craftCounts: CraftCounts, artifact: string, saleEnabled: boolean): number {
   const projectedCraftCounts = { ...craftCounts };
-  return getRecursiveCraftCost(recipeMap, projectedCraftCounts, artifact);
+  return getRecursiveCraftCost(recipeMap, projectedCraftCounts, artifact, saleEnabled);
 }
 
-function getRecursiveCraftCost(recipeMap: Recipes, projectedCraftCounts: CraftCounts, artifact: string): number {
+function getRecursiveCraftCost(
+  recipeMap: Recipes,
+  projectedCraftCounts: CraftCounts,
+  artifact: string,
+  saleEnabled: boolean
+): number {
   const recipe = recipeMap[artifact];
   if (!recipe) {
     return 0;
@@ -591,25 +624,25 @@ function getRecursiveCraftCost(recipeMap: Recipes, projectedCraftCounts: CraftCo
       continue;
     }
     for (let index = 0; index < quantity; index += 1) {
-      totalCost += getRecursiveCraftCost(recipeMap, projectedCraftCounts, ingredient);
+      totalCost += getRecursiveCraftCost(recipeMap, projectedCraftCounts, ingredient, saleEnabled);
     }
   }
 
   const craftCount = projectedCraftCounts[artifact] || 0;
-  const { discountedCost } = getDiscountedCost(recipe.cost, craftCount);
+  const { discountedCost } = getDiscountedCost(recipe.cost, craftCount, saleEnabled);
   totalCost += discountedCost;
   projectedCraftCounts[artifact] = craftCount + 1;
   return totalCost;
 }
 
-function getBatchDirectCost(baseCost: number, craftCount: number, quantity: number): number {
+function getBatchDirectCost(baseCost: number, craftCount: number, quantity: number, saleEnabled: boolean): number {
   if (baseCost <= 0 || quantity <= 0) {
     return 0;
   }
   const craftTotal = Math.max(0, Math.round(quantity));
   let totalCost = 0;
   for (let index = 0; index < craftTotal; index += 1) {
-    totalCost += getDiscountedCost(baseCost, craftCount + index).discountedCost;
+    totalCost += getDiscountedCost(baseCost, craftCount + index, saleEnabled).discountedCost;
   }
   return totalCost;
 }
@@ -619,9 +652,10 @@ function getCraftModeComparison(
   inventory: Inventory,
   craftCounts: CraftCounts,
   artifact: string,
-  xpPerCraft: number
+  xpPerCraft: number,
+  saleEnabled: boolean
 ): CraftModeComparison {
-  const directResult = simulateCraftMode(recipeMap, inventory, craftCounts, artifact, false);
+  const directResult = simulateCraftMode(recipeMap, inventory, craftCounts, artifact, false, saleEnabled);
   const direct: CraftModeMetrics = {
     count: directResult.count,
     xp: directResult.count * xpPerCraft,
@@ -639,7 +673,7 @@ function getCraftModeComparison(
     return { direct, auto: null };
   }
 
-  const autoResult = simulateCraftMode(recipeMap, inventory, craftCounts, artifact, true);
+  const autoResult = simulateCraftMode(recipeMap, inventory, craftCounts, artifact, true, saleEnabled);
   const auto: CraftModeMetrics = {
     count: autoResult.count,
     xp: autoResult.count * xpPerCraft,
@@ -654,7 +688,8 @@ function simulateCraftMode(
   inventory: Inventory,
   craftCounts: CraftCounts,
   artifact: string,
-  allowAutocraft: boolean
+  allowAutocraft: boolean,
+  saleEnabled: boolean
 ): { count: number; cost: number } {
   let simulationInventory = cloneCountMap(inventory);
   let simulationCraftCounts = cloneCountMap(craftCounts);
@@ -670,6 +705,7 @@ function simulateCraftMode(
       attemptCraftCounts,
       artifact,
       allowAutocraft,
+      saleEnabled,
       (cost) => {
         attemptCost += cost;
       }
@@ -693,7 +729,8 @@ function simulateCraftModeWithState(
   inventory: Record<string, number>,
   craftCounts: Record<string, number>,
   artifact: string,
-  allowAutocraft: boolean
+  allowAutocraft: boolean,
+  saleEnabled: boolean
 ): {
   count: number;
   cost: number;
@@ -715,6 +752,7 @@ function simulateCraftModeWithState(
       attemptCraftCounts,
       artifact,
       allowAutocraft,
+      saleEnabled,
       (cost) => {
         attemptCost += cost;
       }
@@ -742,6 +780,7 @@ function craftOne(
   craftCounts: Record<string, number>,
   artifact: string,
   allowAutocraft: boolean,
+  saleEnabled: boolean,
   onCost: (cost: number) => void,
   stack: Set<string> = new Set()
 ): boolean {
@@ -761,7 +800,7 @@ function craftOne(
         stack.delete(artifact);
         return false;
       }
-      const didCraftIngredient = craftOne(recipeMap, inventory, craftCounts, ingredient, true, onCost, stack);
+      const didCraftIngredient = craftOne(recipeMap, inventory, craftCounts, ingredient, true, saleEnabled, onCost, stack);
       if (!didCraftIngredient) {
         stack.delete(artifact);
         return false;
@@ -775,7 +814,7 @@ function craftOne(
   }
 
   const craftCount = craftCounts[artifact] || 0;
-  const { discountedCost } = getDiscountedCost(recipe.cost, craftCount);
+  const { discountedCost } = getDiscountedCost(recipe.cost, craftCount, saleEnabled);
   onCost(discountedCost);
   craftCounts[artifact] = craftCount + 1;
   inventory[artifact] = (inventory[artifact] || 0) + 1;
@@ -806,15 +845,26 @@ function combineInventories(
   return combined;
 }
 
-function getDiscountedCost(baseCost: number, craftCount: number): { discountedCost: number; discountPercent: number } {
+function getDiscountedCost(
+  baseCost: number,
+  craftCount: number,
+  saleEnabled: boolean = false
+): { discountedCost: number; discountPercent: number } {
   if (baseCost <= 0) {
     return { discountedCost: 0, discountPercent: 0 };
   }
   const progress = Math.min(1, craftCount / MAX_CRAFT_COUNT_FOR_DISCOUNT);
   const multiplier = 1 - MAX_DISCOUNT_FACTOR * Math.pow(progress, DISCOUNT_CURVE_EXPONENT);
-  const discountedCost = Math.floor(baseCost * multiplier);
+  const discountedCost = applyCraftingSale(Math.floor(baseCost * multiplier), saleEnabled);
   const discountPercent = baseCost > 0 ? 1 - discountedCost / baseCost : 0;
   return { discountedCost, discountPercent };
+}
+
+function applyCraftingSale(cost: number, saleEnabled: boolean): number {
+  if (!saleEnabled || cost <= 0) {
+    return Math.max(0, Math.floor(cost));
+  }
+  return Math.max(0, Math.floor(cost * CRAFTING_SALE_FACTOR));
 }
 
 function getProblem(inventory: Inventory): string {

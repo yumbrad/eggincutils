@@ -82,7 +82,9 @@ type OptimizePayload = {
 
 const SHARED_EID_KEYS = [LOCAL_PREF_KEYS.sharedEid, LOCAL_PREF_KEYS.legacyEid] as const;
 const SHARED_INCLUDE_SLOTTED_KEYS = [LOCAL_PREF_KEYS.sharedIncludeSlotted, LOCAL_PREF_KEYS.legacyIncludeSlotted] as const;
+const SHARED_CRAFTING_SALE_KEYS = [LOCAL_PREF_KEYS.sharedCraftingSale] as const;
 const INVENTORY_MATRIX_FAMILIES: InventoryMatrixFamily[] = [
+  { key: "tachyon_deflector", label: "Deflector" },
   { key: "dilithium_monocle", label: "Monocle" },
   { key: "quantum_metronome", label: "Metronome" },
   { key: "carved_rainstick", label: "Rainstick" },
@@ -118,7 +120,12 @@ const INVENTORY_MATRIX_FAMILIES: InventoryMatrixFamily[] = [
   { key: "tau_ceti_geode", label: "Geode" },
 ];
 
-async function getOptimalCrafts(highs: Highs, eid: string, includeSlotted: boolean): Promise<OptimizePayload> {
+async function getOptimalCrafts(
+  highs: Highs,
+  eid: string,
+  includeSlotted: boolean,
+  saleEnabled: boolean
+): Promise<OptimizePayload> {
   const response = await fetch(
     `/api/inventory?eid=${encodeURIComponent(eid)}&includeSlotted=${includeSlotted ? "true" : "false"}`
   );
@@ -138,7 +145,7 @@ async function getOptimalCrafts(highs: Highs, eid: string, includeSlotted: boole
   const inventory = data.inventory;
   const craftCounts = data.craftCounts || {};
   return {
-    solution: optimizeCrafts(highs, inventory, craftCounts),
+    solution: optimizeCrafts(highs, inventory, craftCounts, saleEnabled),
     inventory,
     craftCounts,
   };
@@ -514,6 +521,9 @@ function getCostTooltip(artifact: string, craft: Solution["crafts"][string]): st
     `Direct GE cost in table (${plannedCrafts.toLocaleString()} ${craftLabel}): ${costDetails.totalDirectCost.toLocaleString()} GE`,
     `Standalone direct craftability: ${craft.modeComparison.direct.count.toLocaleString()} crafts (${craft.modeComparison.direct.cost.toLocaleString()} GE total)`,
   ];
+  if (costDetails.saleApplied) {
+    lines.push("30% crafting sale applied to all GE costs shown here.");
+  }
   if (craft.modeComparison.auto) {
     lines.push(
       `Standalone auto-craft craftability: ${craft.modeComparison.auto.count.toLocaleString()} crafts (${craft.modeComparison.auto.cost.toLocaleString()} GE total)`
@@ -541,6 +551,7 @@ export default function XpGeCraftPage(): JSX.Element {
   const highs = useHighsClient();
   const [eid, setEID] = useState<string>("");
   const [includeSlotted, setIncludeSlotted] = useState<boolean>(true);
+  const [craftingSale, setCraftingSale] = useState<boolean>(false);
   const [solution, setSolution] = useState<Solution | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("xpPerGe");
   const [hideUncraftable, setHideUncraftable] = useState<boolean>(true);
@@ -560,6 +571,10 @@ export default function XpGeCraftPage(): JSX.Element {
     if (savedIncludeSlotted != null) {
       setIncludeSlotted(savedIncludeSlotted);
     }
+    const savedCraftingSale = readStoredBoolean(SHARED_CRAFTING_SALE_KEYS);
+    if (savedCraftingSale != null) {
+      setCraftingSale(savedCraftingSale);
+    }
     setPrefsLoaded(true);
   }, []);
 
@@ -577,6 +592,13 @@ export default function XpGeCraftPage(): JSX.Element {
     writeStoredBoolean(SHARED_INCLUDE_SLOTTED_KEYS, includeSlotted);
   }, [includeSlotted, prefsLoaded]);
 
+  useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
+    writeStoredBoolean(SHARED_CRAFTING_SALE_KEYS, craftingSale);
+  }, [craftingSale, prefsLoaded]);
+
   async function runOptimize(): Promise<void> {
     if (!highs) {
       setError("Solver is still loading. Please try again in a moment.");
@@ -593,7 +615,7 @@ export default function XpGeCraftPage(): JSX.Element {
     setPlanSourceCraftCounts({});
     setIsLoading(true);
     try {
-      const result = await getOptimalCrafts(highs, eid, includeSlotted);
+      const result = await getOptimalCrafts(highs, eid, includeSlotted, craftingSale);
       setSolution(result.solution);
       setPlanSourceInventory(result.inventory);
       setPlanSourceCraftCounts(result.craftCounts);
@@ -626,7 +648,8 @@ export default function XpGeCraftPage(): JSX.Element {
             mode: row.mode,
             referenceXpPerGe: row.xpPerGe,
           })),
-          minEfficiencyXpPerGe
+          minEfficiencyXpPerGe,
+          craftingSale
         )
       : null;
   const geEfficiencyOverallXpPerGe =
@@ -636,7 +659,13 @@ export default function XpGeCraftPage(): JSX.Element {
   let maxXpExecutionPlanError = null as string | null;
   if (solution && planSourceInventory) {
     try {
-      maxXpExecutionPlan = buildMaxXpExecutionPlan(solution, planSourceInventory, planSourceCraftCounts, sortedArtifacts);
+      maxXpExecutionPlan = buildMaxXpExecutionPlan(
+        solution,
+        planSourceInventory,
+        planSourceCraftCounts,
+        sortedArtifacts,
+        craftingSale
+      );
     } catch (caughtError) {
       maxXpExecutionPlanError =
         caughtError instanceof Error ? caughtError.message : "Unable to derive the Max-XP click order from this plan.";
@@ -696,6 +725,14 @@ export default function XpGeCraftPage(): JSX.Element {
               onChange={(event) => setIncludeSlotted(event.target.checked)}
             />
             Include slotted stones as ingredients
+          </label>
+          <label className={styles.inputCheckbox}>
+            <input
+              type="checkbox"
+              checked={craftingSale}
+              onChange={(event) => setCraftingSale(event.target.checked)}
+            />
+            30% off crafting sale
           </label>
         </div>
 
@@ -824,7 +861,8 @@ export default function XpGeCraftPage(): JSX.Element {
               <div className={styles.summaryMeta}>
                 Standalone craft menu from your current inventory. Status shows whether each row would be fully used, partly used,
                 blocked, or skipped in the Max GE Efficiency Plan. Sorting changes the display only; crafting out of order can
-                change the plan.
+                change the plan. <span className={styles.inlineWarningLabel}>Warning:</span> auto-crafted artifacts cannot be shiny,
+                so you may want to manually craft high-value targets instead of following the plan blindly.
               </div>
               <div className={styles.statusLegend}>
                 <span className={styles.statusLegendItem}>
@@ -923,7 +961,9 @@ export default function XpGeCraftPage(): JSX.Element {
                 <>
                   <div className={styles.summaryMeta}>
                     Craft the unindented rows in order. Indented rows show the artifacts the game will auto-craft underneath those
-                    crafts after using any inventory the LP plan leaves available for ingredient consumption first.
+                    crafts after using any inventory the LP plan leaves available for ingredient consumption first.{" "}
+                    <span className={styles.inlineWarningLabel}>Warning:</span> auto-crafted artifacts cannot be shiny, so you may
+                    want to manually craft high-value targets instead of following this order blindly.
                   </div>
                   <table className={styles.resultsTable}>
                     <thead>

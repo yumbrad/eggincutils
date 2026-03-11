@@ -123,6 +123,11 @@
   line-height: 1.35;
 }
 
+.inlineWarningLabel {
+  color: var(--navy);
+  font-weight: 700;
+}
+
 .summaryMetaRow {
   display: flex;
   align-items: baseline;

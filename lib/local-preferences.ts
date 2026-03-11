@@ -1,6 +1,7 @@
 export const LOCAL_PREF_KEYS = {
   sharedEid: "eggincutils-eid",
   sharedIncludeSlotted: "eggincutils-include-slotted",
+  sharedCraftingSale: "eggincutils-crafting-sale",
   legacyEid: "eid",
   legacyIncludeSlotted: "includeSlottedStones",
   plannerTargetItemId: "eggincutils-planner-target-item-id",
