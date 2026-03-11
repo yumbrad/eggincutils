@@ -599,6 +599,13 @@ export default function XpGeCraftPage(): JSX.Element {
     writeStoredBoolean(SHARED_CRAFTING_SALE_KEYS, craftingSale);
   }, [craftingSale, prefsLoaded]);
 
+  useEffect(() => {
+    if (!highs || !planSourceInventory) {
+      return;
+    }
+    setSolution(optimizeCrafts(highs, planSourceInventory, planSourceCraftCounts, craftingSale));
+  }, [highs, planSourceCraftCounts, planSourceInventory, craftingSale]);
+
   async function runOptimize(): Promise<void> {
     if (!highs) {
       setError("Solver is still loading. Please try again in a moment.");
