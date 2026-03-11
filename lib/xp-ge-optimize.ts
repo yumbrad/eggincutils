@@ -82,6 +82,27 @@ export interface GeEfficiencyPlanResult {
   processedRowCount: number;
   craftedRowCount: number;
   stopReason: "threshold" | "exhausted";
+  finalInventory: Inventory;
+  finalCraftCounts: CraftCounts;
+}
+
+export interface MaxXpExecutionPlanNode {
+  artifact: string;
+  mode: "click" | "auto";
+  count: number;
+  xp: number;
+  cost: number;
+  children: MaxXpExecutionPlanNode[];
+}
+
+export interface MaxXpExecutionPlan {
+  steps: MaxXpExecutionPlanNode[];
+  totalXp: number;
+  totalCost: number;
+  totalTopLevelRows: number;
+  totalTopLevelCrafts: number;
+  remainingInventory: Inventory;
+  finalCraftCounts: CraftCounts;
 }
 
 const MAX_CRAFT_COUNT_FOR_DISCOUNT = 300;
@@ -187,6 +208,69 @@ export function simulateGeEfficiencyPlan(
     processedRowCount,
     craftedRowCount,
     stopReason,
+    finalInventory: simulationInventory,
+    finalCraftCounts: simulationCraftCounts,
+  };
+}
+
+export function buildMaxXpExecutionPlan(
+  solution: Solution,
+  inventory: Inventory,
+  craftCounts: CraftCounts = {},
+  artifactOrder: string[] = []
+): MaxXpExecutionPlan {
+  const plannedCounts = getPlannedCraftCounts(solution);
+  const demandCounts = getIngredientDemandCounts(recipes, plannedCounts);
+  const topLevelCounts = getTopLevelCraftCounts(plannedCounts, demandCounts);
+  const initialInventory = cloneCountMap(inventory);
+  const craftedInventory = {} as Record<string, number>;
+  const projectedCraftCounts = cloneCountMap(craftCounts);
+  const remainingPlannedCounts = { ...plannedCounts };
+  const initialConsumptionBudget = getInitialConsumptionBudget(plannedCounts, demandCounts);
+  const orderedTopLevelArtifacts = getOrderedTopLevelArtifacts(topLevelCounts, artifactOrder);
+  const steps: MaxXpExecutionPlanNode[] = [];
+  let totalTopLevelCrafts = 0;
+
+  for (const artifact of orderedTopLevelArtifacts) {
+    const topLevelCount = topLevelCounts[artifact] || 0;
+    if (topLevelCount <= 0) {
+      continue;
+    }
+
+    totalTopLevelCrafts += topLevelCount;
+    const step = createExecutionPlanNode(artifact, "click");
+    for (let index = 0; index < topLevelCount; index += 1) {
+      const node = executePlannedCraft(
+        recipes,
+        initialInventory,
+        craftedInventory,
+        projectedCraftCounts,
+        remainingPlannedCounts,
+        initialConsumptionBudget,
+        artifact,
+        "click"
+      );
+      mergeExecutionPlanNode(step, node);
+    }
+    steps.push(step);
+  }
+
+  const remainingArtifacts = Object.entries(remainingPlannedCounts).filter(([, count]) => count > 0);
+  if (remainingArtifacts.length > 0) {
+    const remainingList = remainingArtifacts
+      .map(([artifact, count]) => `${artifact} x${count.toLocaleString()}`)
+      .join(", ");
+    throw new Error(`Unable to derive a complete Max-XP click order; leftover planned crafts remain: ${remainingList}`);
+  }
+
+  return {
+    steps,
+    totalXp: solution.totalXp,
+    totalCost: solution.totalCost,
+    totalTopLevelRows: steps.length,
+    totalTopLevelCrafts,
+    remainingInventory: combineInventories(initialInventory, craftedInventory),
+    finalCraftCounts: projectedCraftCounts,
   };
 }
 
@@ -195,6 +279,250 @@ function normalizeCount(value: number): number {
     return 0;
   }
   return value < 0 ? 0 : value;
+}
+
+function getPlannedCraftCounts(solution: Solution): Record<string, number> {
+  const counts = {} as Record<string, number>;
+  for (const [artifact, craft] of Object.entries(solution.crafts)) {
+    counts[artifact] = Math.max(0, Math.round(craft.count));
+  }
+  return counts;
+}
+
+function getIngredientDemandCounts(recipeMap: Recipes, plannedCounts: Record<string, number>): Record<string, number> {
+  const demandCounts = {} as Record<string, number>;
+  for (const [artifact, craftCount] of Object.entries(plannedCounts)) {
+    if (craftCount <= 0) {
+      continue;
+    }
+    const recipe = recipeMap[artifact];
+    if (!recipe) {
+      continue;
+    }
+    for (const [ingredient, rawQuantity] of Object.entries(recipe.ingredients)) {
+      const quantity = Math.max(0, Math.round(rawQuantity));
+      if (quantity <= 0 || !recipeMap[ingredient]) {
+        continue;
+      }
+      demandCounts[ingredient] = (demandCounts[ingredient] || 0) + craftCount * quantity;
+    }
+  }
+  return demandCounts;
+}
+
+function getTopLevelCraftCounts(
+  plannedCounts: Record<string, number>,
+  demandCounts: Record<string, number>
+): Record<string, number> {
+  const topLevelCounts = {} as Record<string, number>;
+  for (const [artifact, craftCount] of Object.entries(plannedCounts)) {
+    const topLevelCount = Math.max(0, craftCount - (demandCounts[artifact] || 0));
+    if (topLevelCount > 0) {
+      topLevelCounts[artifact] = topLevelCount;
+    }
+  }
+  return topLevelCounts;
+}
+
+function getInitialConsumptionBudget(
+  plannedCounts: Record<string, number>,
+  demandCounts: Record<string, number>
+): Record<string, number> {
+  const budget = {} as Record<string, number>;
+  for (const artifact of Object.keys(demandCounts)) {
+    budget[artifact] = Math.max(0, (demandCounts[artifact] || 0) - (plannedCounts[artifact] || 0));
+  }
+  return budget;
+}
+
+function getOrderedTopLevelArtifacts(topLevelCounts: Record<string, number>, artifactOrder: string[]): string[] {
+  const preferredIndex = new Map<string, number>();
+  artifactOrder.forEach((artifact, index) => {
+    preferredIndex.set(artifact, index);
+  });
+
+  return Object.keys(topLevelCounts).sort((left, right) => {
+    const depthDifference = getRecipeDepth(recipes, right) - getRecipeDepth(recipes, left);
+    if (depthDifference !== 0) {
+      return depthDifference;
+    }
+
+    const leftIndex = preferredIndex.get(left) ?? Number.MAX_SAFE_INTEGER;
+    const rightIndex = preferredIndex.get(right) ?? Number.MAX_SAFE_INTEGER;
+    if (leftIndex !== rightIndex) {
+      return leftIndex - rightIndex;
+    }
+
+    return left.localeCompare(right);
+  });
+}
+
+const recipeDepthCache = new Map<string, number>();
+
+function getRecipeDepth(recipeMap: Recipes, artifact: string): number {
+  const cachedDepth = recipeDepthCache.get(artifact);
+  if (cachedDepth != null) {
+    return cachedDepth;
+  }
+
+  const recipe = recipeMap[artifact];
+  if (!recipe) {
+    recipeDepthCache.set(artifact, 0);
+    return 0;
+  }
+
+  let depth = 0;
+  for (const ingredient of Object.keys(recipe.ingredients)) {
+    if (!recipeMap[ingredient]) {
+      continue;
+    }
+    depth = Math.max(depth, 1 + getRecipeDepth(recipeMap, ingredient));
+  }
+  recipeDepthCache.set(artifact, depth);
+  return depth;
+}
+
+function createExecutionPlanNode(artifact: string, mode: "click" | "auto"): MaxXpExecutionPlanNode {
+  return {
+    artifact,
+    mode,
+    count: 0,
+    xp: 0,
+    cost: 0,
+    children: [],
+  };
+}
+
+function mergeExecutionPlanNode(target: MaxXpExecutionPlanNode, source: MaxXpExecutionPlanNode): void {
+  target.count += source.count;
+  target.xp += source.xp;
+  target.cost += source.cost;
+  for (const child of source.children) {
+    const existingChild = target.children.find(
+      (candidate) => candidate.artifact === child.artifact && candidate.mode === child.mode
+    );
+    if (existingChild) {
+      mergeExecutionPlanNode(existingChild, child);
+      continue;
+    }
+    target.children.push(child);
+  }
+}
+
+function executePlannedCraft(
+  recipeMap: Recipes,
+  initialInventory: Record<string, number>,
+  craftedInventory: Record<string, number>,
+  craftCounts: Record<string, number>,
+  remainingPlannedCounts: Record<string, number>,
+  initialConsumptionBudget: Record<string, number>,
+  artifact: string,
+  mode: "click" | "auto",
+  stack: Set<string> = new Set()
+): MaxXpExecutionPlanNode {
+  const recipe = recipeMap[artifact];
+  if (!recipe) {
+    throw new Error(`No recipe found while building Max-XP click order for ${artifact}`);
+  }
+
+  if ((remainingPlannedCounts[artifact] || 0) <= 0) {
+    throw new Error(`Max-XP click order exceeded the planned craft count for ${artifact}`);
+  }
+
+  if (stack.has(artifact)) {
+    throw new Error(`Cycle detected while building Max-XP click order for ${artifact}`);
+  }
+
+  stack.add(artifact);
+  try {
+    const node = createExecutionPlanNode(artifact, mode);
+
+    for (const [ingredient, rawQuantity] of Object.entries(recipe.ingredients)) {
+      const requiredQuantity = Math.max(0, Math.round(rawQuantity));
+      for (let index = 0; index < requiredQuantity; index += 1) {
+        if (!recipeMap[ingredient]) {
+          if ((initialInventory[ingredient] || 0) <= 0) {
+            throw new Error(`Max-XP click order ran out of ${ingredient}`);
+          }
+          initialInventory[ingredient] -= 1;
+          continue;
+        }
+
+        consumeCraftableIngredient(
+          recipeMap,
+          initialInventory,
+          craftedInventory,
+          craftCounts,
+          remainingPlannedCounts,
+          initialConsumptionBudget,
+          ingredient,
+          node,
+          stack
+        );
+      }
+    }
+
+    const craftCount = craftCounts[artifact] || 0;
+    const { discountedCost } = getDiscountedCost(recipe.cost, craftCount);
+    craftCounts[artifact] = craftCount + 1;
+    remainingPlannedCounts[artifact] = Math.max(0, (remainingPlannedCounts[artifact] || 0) - 1);
+    craftedInventory[artifact] = (craftedInventory[artifact] || 0) + 1;
+    node.count = 1;
+    node.xp = recipe.xp;
+    node.cost = discountedCost;
+    return node;
+  } finally {
+    stack.delete(artifact);
+  }
+}
+
+function consumeCraftableIngredient(
+  recipeMap: Recipes,
+  initialInventory: Record<string, number>,
+  craftedInventory: Record<string, number>,
+  craftCounts: Record<string, number>,
+  remainingPlannedCounts: Record<string, number>,
+  initialConsumptionBudget: Record<string, number>,
+  ingredient: string,
+  parentNode: MaxXpExecutionPlanNode,
+  stack: Set<string>
+): void {
+  const remainingBudget = initialConsumptionBudget[ingredient] || 0;
+  if (remainingBudget > 0 && (initialInventory[ingredient] || 0) > 0) {
+    initialInventory[ingredient] -= 1;
+    initialConsumptionBudget[ingredient] = remainingBudget - 1;
+    return;
+  }
+
+  if ((craftedInventory[ingredient] || 0) <= 0) {
+    if ((remainingPlannedCounts[ingredient] || 0) <= 0) {
+      throw new Error(`Max-XP click order could not supply ${ingredient} from planned crafts or inventory`);
+    }
+    const childNode = executePlannedCraft(
+      recipeMap,
+      initialInventory,
+      craftedInventory,
+      craftCounts,
+      remainingPlannedCounts,
+      initialConsumptionBudget,
+      ingredient,
+      "auto",
+      stack
+    );
+    const existingChild = parentNode.children.find(
+      (candidate) => candidate.artifact === childNode.artifact && candidate.mode === childNode.mode
+    );
+    if (existingChild) {
+      mergeExecutionPlanNode(existingChild, childNode);
+    } else {
+      parentNode.children.push(childNode);
+    }
+  }
+
+  if ((craftedInventory[ingredient] || 0) <= 0) {
+    throw new Error(`Max-XP click order failed to consume crafted ${ingredient}`);
+  }
+  craftedInventory[ingredient] -= 1;
 }
 
 function getCostDetails(recipeMap: Recipes, craftCounts: CraftCounts, artifact: string, plannedCrafts: number): CostDetails {
@@ -461,6 +789,21 @@ function cloneCountMap(values: Record<string, number>): Record<string, number> {
     clone[key] = Math.max(0, Math.round(value || 0));
   }
   return clone;
+}
+
+function combineInventories(
+  left: Record<string, number>,
+  right: Record<string, number>
+): Record<string, number> {
+  const combined = cloneCountMap(left);
+  for (const [key, value] of Object.entries(right)) {
+    const quantity = Math.max(0, Math.round(value || 0));
+    if (quantity <= 0) {
+      continue;
+    }
+    combined[key] = (combined[key] || 0) + quantity;
+  }
+  return combined;
 }
 
 function getDiscountedCost(baseCost: number, craftCount: number): { discountedCost: number; discountPercent: number } {

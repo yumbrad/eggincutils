@@ -13,7 +13,15 @@ import {
   writeStoredString,
 } from "../../lib/local-preferences";
 import useHighsClient from "../../lib/use-highs-client";
-import { Highs, Solution, optimizeCrafts, simulateGeEfficiencyPlan, type SequentialMode } from "../../lib/xp-ge-optimize";
+import {
+  buildMaxXpExecutionPlan,
+  Highs,
+  MaxXpExecutionPlanNode,
+  Solution,
+  optimizeCrafts,
+  simulateGeEfficiencyPlan,
+  type SequentialMode,
+} from "../../lib/xp-ge-optimize";
 import { XP_GE_CRAFT_COPY } from "../../lib/xp-ge-craft-copy";
 import styles from "./page.module.css";
 
@@ -36,6 +44,36 @@ type ModeComparisonRow = {
   xpPerGe: number;
 };
 
+type ExecutionPlanRow = {
+  key: string;
+  artifact: string;
+  mode: "click" | "auto";
+  count: number;
+  xp: number;
+  cost: number;
+  depth: number;
+  prefix: string;
+};
+
+type EfficiencyStatusKind = "full" | "partial" | "blocked" | "belowThreshold";
+
+type EfficiencyStatus = {
+  kind: EfficiencyStatusKind;
+  realizedCount: number;
+  label: string;
+  title: string;
+};
+
+type InventoryMatrixFamily = {
+  key: string;
+  label: string;
+};
+
+type InventoryMatrixRow = {
+  label: string;
+  counts: number[];
+};
+
 type OptimizePayload = {
   solution: Solution;
   inventory: Record<string, number>;
@@ -44,6 +82,41 @@ type OptimizePayload = {
 
 const SHARED_EID_KEYS = [LOCAL_PREF_KEYS.sharedEid, LOCAL_PREF_KEYS.legacyEid] as const;
 const SHARED_INCLUDE_SLOTTED_KEYS = [LOCAL_PREF_KEYS.sharedIncludeSlotted, LOCAL_PREF_KEYS.legacyIncludeSlotted] as const;
+const INVENTORY_MATRIX_FAMILIES: InventoryMatrixFamily[] = [
+  { key: "dilithium_monocle", label: "Monocle" },
+  { key: "quantum_metronome", label: "Metronome" },
+  { key: "carved_rainstick", label: "Rainstick" },
+  { key: "beak_of_midas", label: "Beak" },
+  { key: "ornate_gusset", label: "Gusset" },
+  { key: "neodymium_medallion", label: "Medallion" },
+  { key: "lunar_totem", label: "Totem" },
+  { key: "mercurys_lens", label: "Lens" },
+  { key: "interstellar_compass", label: "Compass" },
+  { key: "puzzle_cube", label: "Cube" },
+  { key: "aurelian_brooch", label: "Brooch" },
+  { key: "the_chalice", label: "Chalice" },
+  { key: "titanium_actuator", label: "Actuator" },
+  { key: "demeters_necklace", label: "Necklace" },
+  { key: "tungsten_ankh", label: "Ankh" },
+  { key: "vial_martian_dust", label: "Vial" },
+  { key: "book_of_basan", label: "Book" },
+  { key: "ship_in_a_bottle", label: "Ship" },
+  { key: "phoenix_feather", label: "Feather" },
+  { key: "light_of_eggendil", label: "LoE" },
+  { key: "clarity_stone", label: "Clarity stone" },
+  { key: "dilithium_stone", label: "Dilithium stone" },
+  { key: "life_stone", label: "Life stone" },
+  { key: "lunar_stone", label: "Lunar stone" },
+  { key: "prophecy_stone", label: "Prophecy stone" },
+  { key: "quantum_stone", label: "Quantum stone" },
+  { key: "shell_stone", label: "Shell stone" },
+  { key: "soul_stone", label: "Soul stone" },
+  { key: "tachyon_stone", label: "Tachyon stone" },
+  { key: "terra_stone", label: "Terra stone" },
+  { key: "gold_meteorite", label: "Gold" },
+  { key: "solar_titanium", label: "Titanium" },
+  { key: "tau_ceti_geode", label: "Geode" },
+];
 
 async function getOptimalCrafts(highs: Highs, eid: string, includeSlotted: boolean): Promise<OptimizePayload> {
   const response = await fetch(
@@ -69,6 +142,10 @@ async function getOptimalCrafts(highs: Highs, eid: string, includeSlotted: boole
     inventory,
     craftCounts,
   };
+}
+
+function getModeRowKey(artifact: string, mode: SequentialMode): string {
+  return `${artifact}:${mode}`;
 }
 
 function getSortedArtifacts(solution: Solution, sortKey: SortKey): string[] {
@@ -126,7 +203,7 @@ function getModeComparisonRows(solution: Solution, sortKey: SortKey): ModeCompar
   for (const artifact of getSortedArtifacts(solution, sortKey)) {
     const craft = solution.crafts[artifact];
     rows.push({
-      key: `${artifact}:direct`,
+      key: getModeRowKey(artifact, "direct"),
       artifact,
       mode: "direct",
       modeLabel: "direct craft",
@@ -141,7 +218,7 @@ function getModeComparisonRows(solution: Solution, sortKey: SortKey): ModeCompar
         const autoExtraXp = autoExtraCount * craft.xpPerCraft;
         const autoExtraCost = Math.max(0, craft.modeComparison.auto.cost - craft.modeComparison.direct.cost);
         rows.push({
-          key: `${artifact}:auto`,
+          key: getModeRowKey(artifact, "auto"),
           artifact,
           mode: "auto",
           modeLabel: "auto-craftable beyond direct",
@@ -212,6 +289,127 @@ function getModeComparisonRows(solution: Solution, sortKey: SortKey): ModeCompar
   }
 }
 
+function getExecutionPlanRows(nodes: MaxXpExecutionPlanNode[]): ExecutionPlanRow[] {
+  const rows: ExecutionPlanRow[] = [];
+
+  const walk = (
+    node: MaxXpExecutionPlanNode,
+    key: string,
+    depth: number,
+    ancestorHasNext: boolean[],
+    isRoot: boolean,
+    isLast: boolean
+  ): void => {
+    const prefix = isRoot
+      ? ""
+      : `${ancestorHasNext.map((hasNext) => (hasNext ? "|  " : "   ")).join("")}|_ `;
+    rows.push({
+      key,
+      artifact: node.artifact,
+      mode: node.mode,
+      count: node.count,
+      xp: node.xp,
+      cost: node.cost,
+      depth,
+      prefix,
+    });
+
+    node.children.forEach((child, index) => {
+      walk(child, `${key}.${index}`, depth + 1, [...ancestorHasNext, !isLast], false, index === node.children.length - 1);
+    });
+  };
+
+  nodes.forEach((node, index) => {
+    walk(node, `execution-${index}`, 0, [], true, index === nodes.length - 1);
+  });
+
+  return rows;
+}
+
+function getGeEfficiencyStatusMap(
+  planRows: ModeComparisonRow[],
+  geEfficiencyPlan: ReturnType<typeof simulateGeEfficiencyPlan> | null,
+  minXpPerGe: number
+): Record<string, EfficiencyStatus> {
+  if (!geEfficiencyPlan) {
+    return {};
+  }
+
+  const statusByRowKey = {} as Record<string, EfficiencyStatus>;
+  const realizedCountsByRowKey = new Map<string, number>();
+  for (const row of geEfficiencyPlan.rows) {
+    realizedCountsByRowKey.set(getModeRowKey(row.artifact, row.mode), row.craftedCount);
+  }
+
+  for (const row of planRows) {
+    if (row.xpPerGe + Number.EPSILON < minXpPerGe) {
+      statusByRowKey[row.key] = {
+        kind: "belowThreshold",
+        realizedCount: 0,
+        label: "Below threshold",
+        title: "Below the current minimum XP/GE threshold, so this row is not considered in the Max GE Efficiency Plan.",
+      };
+      continue;
+    }
+
+    const realizedCount = realizedCountsByRowKey.get(row.key) ?? 0;
+    if (realizedCount >= row.count) {
+      statusByRowKey[row.key] = {
+        kind: "full",
+        realizedCount,
+        label: "Fully included",
+        title: `Fully included in the Max GE Efficiency Plan (${realizedCount.toLocaleString()} of ${row.count.toLocaleString()} crafts).`,
+      };
+      continue;
+    }
+
+    if (realizedCount > 0) {
+      statusByRowKey[row.key] = {
+        kind: "partial",
+        realizedCount,
+        label: "Partially included",
+        title: `Partially included in the Max GE Efficiency Plan (${realizedCount.toLocaleString()} of ${row.count.toLocaleString()} crafts).`,
+      };
+      continue;
+    }
+
+    statusByRowKey[row.key] = {
+      kind: "blocked",
+      realizedCount: 0,
+      label: "Blocked",
+      title: "No longer craftable by the time this row is reached in the Max GE Efficiency Plan because earlier rows consumed what it needs.",
+    };
+  }
+
+  return statusByRowKey;
+}
+
+function getModeRowCountLabel(row: ModeComparisonRow, status: EfficiencyStatus | undefined): string {
+  if (!status || status.kind === "full" || status.kind === "belowThreshold") {
+    return row.count.toLocaleString();
+  }
+  return `${row.count.toLocaleString()} -> ${status.realizedCount.toLocaleString()}`;
+}
+
+function getInventoryMatrixRows(inventory: Record<string, number> | null | undefined): InventoryMatrixRow[] {
+  if (!inventory) {
+    return [];
+  }
+
+  const rows: InventoryMatrixRow[] = [];
+  for (const family of INVENTORY_MATRIX_FAMILIES) {
+    const counts = [1, 2, 3, 4].map((tier) => Math.max(0, Math.round(inventory[`${family.key}_${tier}`] || 0)));
+    if (counts.every((count) => count === 0)) {
+      continue;
+    }
+    rows.push({
+      label: family.label,
+      counts,
+    });
+  }
+  return rows;
+}
+
 function ArtifactCell({ artifact, modeLabel }: { artifact: string; modeLabel?: string }): JSX.Element {
   const displayData = getArtifactDisplayData(artifact);
   if (!displayData) {
@@ -230,6 +428,67 @@ function ArtifactCell({ artifact, modeLabel }: { artifact: string; modeLabel?: s
         {modeLabel && <span className={styles.artifactMode}>({modeLabel})</span>}
       </span>
     </span>
+  );
+}
+
+function StatusDot({ status }: { status: EfficiencyStatus }): JSX.Element {
+  const className =
+    status.kind === "full"
+      ? styles.statusFull
+      : status.kind === "partial"
+        ? styles.statusPartial
+        : status.kind === "blocked"
+          ? styles.statusBlocked
+          : styles.statusBelowThreshold;
+  return <span className={`${styles.statusDot} ${className}`} title={status.title} aria-label={status.label} />;
+}
+
+function RemainingInventoryDisclosure({
+  label,
+  planLabel,
+  inventory,
+}: {
+  label: string;
+  planLabel: string;
+  inventory: Record<string, number> | null | undefined;
+}): JSX.Element {
+  const rows = getInventoryMatrixRows(inventory);
+  return (
+    <details className={`${styles.inventoryDisclosure} inventory-disclosure`}>
+      <summary className={styles.inventoryDisclosureSummary}>{label}</summary>
+      <div className={`${styles.inventoryDisclosurePanel} inventoryDisclosurePanel`}>
+        <div className={styles.inventoryDisclosureTitle}>{planLabel}</div>
+        {rows.length > 0 ? (
+          <div className={styles.inventoryTableWrap}>
+            <table className={styles.inventoryTable}>
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th className={styles.num}>T1</th>
+                  <th className={styles.num}>T2</th>
+                  <th className={styles.num}>T3</th>
+                  <th className={styles.num}>T4</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.label}>
+                    <td>{row.label}</td>
+                    {row.counts.map((count, index) => (
+                      <td key={`${row.label}-${index}`} className={styles.num}>
+                        {count > 0 ? count.toLocaleString() : "-"}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className={styles.summaryMeta}>Nothing left in tracked inventory.</div>
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -347,8 +606,6 @@ export default function XpGeCraftPage(): JSX.Element {
   }
 
   const sortedArtifacts = solution ? getSortedArtifacts(solution, sortKey) : [];
-  const visibleArtifacts =
-    solution && hideUncraftable ? sortedArtifacts.filter((artifact) => solution.crafts[artifact].count > 0) : sortedArtifacts;
   const sortedModeRows = solution ? getModeComparisonRows(solution, sortKey) : [];
   const visibleModeRows = hideUncraftable ? sortedModeRows.filter((row) => row.count > 0) : sortedModeRows;
   const xpPerGeModeRows = solution ? getModeComparisonRows(solution, "xpPerGe") : [];
@@ -374,6 +631,18 @@ export default function XpGeCraftPage(): JSX.Element {
       : null;
   const geEfficiencyOverallXpPerGe =
     geEfficiencyPlan && geEfficiencyPlan.totalCost > 0 ? geEfficiencyPlan.totalXp / geEfficiencyPlan.totalCost : 0;
+  const geEfficiencyStatusByRowKey = getGeEfficiencyStatusMap(xpPerGeModeRows, geEfficiencyPlan, minEfficiencyXpPerGe);
+  let maxXpExecutionPlan = null as ReturnType<typeof buildMaxXpExecutionPlan> | null;
+  let maxXpExecutionPlanError = null as string | null;
+  if (solution && planSourceInventory) {
+    try {
+      maxXpExecutionPlan = buildMaxXpExecutionPlan(solution, planSourceInventory, planSourceCraftCounts, sortedArtifacts);
+    } catch (caughtError) {
+      maxXpExecutionPlanError =
+        caughtError instanceof Error ? caughtError.message : "Unable to derive the Max-XP click order from this plan.";
+    }
+  }
+  const maxXpExecutionRows = maxXpExecutionPlan ? getExecutionPlanRows(maxXpExecutionPlan.steps) : [];
 
   return (
     <main className="page">
@@ -442,7 +711,7 @@ export default function XpGeCraftPage(): JSX.Element {
               <div className={styles.summaryGroup}>
                 <div
                   className={styles.summaryGroupLabel}
-                  title="Global LP integer plan that maximizes total XP from your current inventory under full ingredient-consumption constraints."
+                  title="Global LP integer plan that maximizes total XP from your current inventory under full ingredient-consumption constraints. Total GE cost sums all craft rows in that LP plan, including intermediate rows."
                 >
                   Max XP Plan
                 </div>
@@ -455,6 +724,14 @@ export default function XpGeCraftPage(): JSX.Element {
                     <div className={styles.summaryLabel}>Total GE Cost</div>
                     <div className={styles.summaryValue}>{solution.totalCost.toLocaleString()}</div>
                   </div>
+                </div>
+                <div className={styles.summaryMetaRow}>
+                  <span className={styles.summaryMeta}>Follow the second table below.</span>
+                  <RemainingInventoryDisclosure
+                    label="Remaining inventory"
+                    planLabel="Remaining inventory after Max XP Plan"
+                    inventory={maxXpExecutionPlan?.remainingInventory}
+                  />
                 </div>
               </div>
 
@@ -493,13 +770,14 @@ export default function XpGeCraftPage(): JSX.Element {
                     <div className={styles.summaryValue}>{Math.round(geEfficiencyPlan?.totalCost || 0).toLocaleString()}</div>
                   </div>
                 </div>
-                {geEfficiencyPlan && (
-                  <div className={styles.summaryMeta}>
-                    Crafted from {geEfficiencyPlan.craftedRowCount.toLocaleString()} of{" "}
-                    {geEfficiencyPlan.processedRowCount.toLocaleString()} processed XP/GE rows (
-                    {geEfficiencyPlan.stopReason === "threshold" ? "stopped at threshold" : "reached end of ranked list"}).
-                  </div>
-                )}
+                <div className={styles.summaryMetaRow}>
+                  <span className={styles.summaryMeta}>Follow the first table below, sorted by XP / GE.</span>
+                  <RemainingInventoryDisclosure
+                    label="Remaining inventory"
+                    planLabel="Remaining inventory after Max GE Efficiency Plan"
+                    inventory={geEfficiencyPlan?.finalInventory}
+                  />
+                </div>
               </div>
             </div>
 
@@ -521,13 +799,13 @@ export default function XpGeCraftPage(): JSX.Element {
                 className={`${styles.sortButton} ${sortKey === "tierXpPerGe" ? styles.activeButton : ""}`}
                 onClick={() => setSortKey("tierXpPerGe")}
               >
-                Tier+XP/GE
+                Tier
               </button>
               <button
                 className={`${styles.sortButton} ${sortKey === "familyTier" ? styles.activeButton : ""}`}
                 onClick={() => setSortKey("familyTier")}
               >
-                Family+tier
+                Family
               </button>
               <button
                 className={`${styles.sortButton} ${sortKey === "name" ? styles.activeButton : ""}`}
@@ -543,23 +821,84 @@ export default function XpGeCraftPage(): JSX.Element {
 
             <div className={styles.tableSection}>
               <h3>Standalone Craft Options (Direct vs Auto-Crafting)</h3>
+              <div className={styles.summaryMeta}>
+                Standalone craft menu from your current inventory. Status shows whether each row would be fully used, partly used,
+                blocked, or skipped in the Max GE Efficiency Plan. Sorting changes the display only; crafting out of order can
+                change the plan.
+              </div>
+              <div className={styles.statusLegend}>
+                <span className={styles.statusLegendItem}>
+                  <StatusDot
+                    status={{
+                      kind: "full",
+                      realizedCount: 0,
+                      label: "Fully included",
+                      title: "Fully included in the Max GE Efficiency Plan.",
+                    }}
+                  />{" "}
+                  Full
+                </span>
+                <span className={styles.statusLegendItem}>
+                  <StatusDot
+                    status={{
+                      kind: "partial",
+                      realizedCount: 0,
+                      label: "Partially included",
+                      title: "Partially included in the Max GE Efficiency Plan.",
+                    }}
+                  />{" "}
+                  Part
+                </span>
+                <span className={styles.statusLegendItem}>
+                  <StatusDot
+                    status={{
+                      kind: "blocked",
+                      realizedCount: 0,
+                      label: "Blocked",
+                      title: "No longer craftable by the time the plan reaches this row.",
+                    }}
+                  />{" "}
+                  Blocked
+                </span>
+                <span className={styles.statusLegendItem}>
+                  <StatusDot
+                    status={{
+                      kind: "belowThreshold",
+                      realizedCount: 0,
+                      label: "Below threshold",
+                      title: "Below the current minimum XP/GE threshold.",
+                    }}
+                  />{" "}
+                  Below threshold
+                </span>
+              </div>
               <table className={styles.resultsTable}>
                 <thead>
                   <tr>
                     <th>Artifact</th>
-                    <th className={styles.num}>Craftable Count</th>
+                    <th
+                      className={styles.num}
+                      title="Standalone craftable count from your current inventory. Yellow and red rows show standalone -> realized count in the current Max GE Efficiency Plan."
+                    >
+                      Count
+                    </th>
                     <th className={styles.num}>Total XP</th>
                     <th className={styles.num}>GE Cost</th>
                     <th className={styles.num}>XP / GE</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleModeRows.map((row) => (
+                  {visibleModeRows.map((row) => {
+                    const status = geEfficiencyStatusByRowKey[row.key];
+                    return (
                     <tr key={row.key}>
                       <td>
-                        <ArtifactCell artifact={row.artifact} modeLabel={row.modeLabel} />
+                        <span className={styles.statusArtifactCell}>
+                          {status && <StatusDot status={status} />}
+                          <ArtifactCell artifact={row.artifact} modeLabel={row.modeLabel} />
+                        </span>
                       </td>
-                      <td className={styles.num}>{row.count.toLocaleString()}</td>
+                      <td className={styles.num}>{getModeRowCountLabel(row, status)}</td>
                       <td className={styles.num}>
                         <span className={styles.valueTooltip} title={getXpTooltip(solution.crafts[row.artifact].xpPerCraft, row.count)}>
                           {row.xp.toLocaleString()}
@@ -572,55 +911,59 @@ export default function XpGeCraftPage(): JSX.Element {
                       </td>
                       <td className={styles.num}>{row.xpPerGe.toFixed(2)}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
             <div className={styles.tableSection}>
-              <h3>Max-XP LP Plan (Reference)</h3>
-              <table className={styles.resultsTable}>
-                <thead>
-                  <tr>
-                    <th>Artifact</th>
-                    <th className={styles.num}>Count</th>
-                    <th className={styles.num}>XP</th>
-                    <th className={styles.num}>GE Cost</th>
-                    <th className={styles.num}>XP / GE</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleArtifacts.map((artifact) => (
-                    <tr key={artifact}>
-                      <td>
-                        <ArtifactCell artifact={artifact} />
-                      </td>
-                      <td className={styles.num}>{solution.crafts[artifact].count.toLocaleString()}</td>
-                      <td className={styles.num}>
-                        <span
-                          className={styles.valueTooltip}
-                          title={getXpTooltip(solution.crafts[artifact].xpPerCraft, solution.crafts[artifact].count)}
+              <h3>Max-XP Craft Order</h3>
+              {maxXpExecutionPlan ? (
+                <>
+                  <div className={styles.summaryMeta}>
+                    Craft the unindented rows in order. Indented rows show the artifacts the game will auto-craft underneath those
+                    crafts after using any inventory the LP plan leaves available for ingredient consumption first.
+                  </div>
+                  <table className={styles.resultsTable}>
+                    <thead>
+                      <tr>
+                        <th>Craft</th>
+                        <th className={styles.num}>Count</th>
+                        <th className={styles.num}>XP</th>
+                        <th
+                          className={styles.num}
+                          title="Direct craft spend for the rows shown here. Summing the whole tree matches the Max XP Plan total above."
                         >
-                          {solution.crafts[artifact].xp.toLocaleString()}
-                        </span>
-                      </td>
-                      <td className={styles.num}>
-                        <span className={styles.valueTooltip} title={getCostTooltip(artifact, solution.crafts[artifact])}>
-                          {solution.crafts[artifact].cost.toLocaleString()}
-                        </span>
-                      </td>
-                      <td className={styles.num}>{solution.crafts[artifact].xpPerGe.toFixed(2)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                          Direct GE Cost
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {maxXpExecutionRows.map((row) => (
+                        <tr key={row.key} data-depth={row.depth} className={row.mode === "click" ? styles.executionRootRow : ""}>
+                          <td>
+                            <span className={styles.executionArtifactCell}>
+                              {row.prefix && <span className={styles.executionPrefix}>{row.prefix}</span>}
+                              <ArtifactCell artifact={row.artifact} />
+                            </span>
+                          </td>
+                          <td className={styles.num}>{row.count.toLocaleString()}</td>
+                          <td className={styles.num}>{row.xp.toLocaleString()}</td>
+                          <td className={styles.num}>{row.cost.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className={styles.summaryMeta}>
+                    {maxXpExecutionPlan.totalTopLevelCrafts.toLocaleString()} total manual crafts across{" "}
+                    {maxXpExecutionPlan.totalTopLevelRows.toLocaleString()} top-level entries.
+                  </div>
+                </>
+              ) : (
+                <div className={styles.summaryMeta}>{maxXpExecutionPlanError || "No Max-XP click order available."}</div>
+              )}
             </div>
-
-            <p className={styles.footnote}>
-              Counts and costs include intermediate crafts needed for higher tiers, and GE cost uses your personal craft-history
-              discount progression. Standalone rows are per-item simulations from your current state and are not additive across
-              different artifacts.
-            </p>
           </>
         )}
 

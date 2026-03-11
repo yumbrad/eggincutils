@@ -123,6 +123,85 @@
   line-height: 1.35;
 }
 
+.summaryMetaRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.inventoryDisclosure {
+  position: relative;
+  display: inline-block;
+}
+
+.inventoryDisclosureSummary {
+  display: inline;
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.inventoryDisclosureSummary::-webkit-details-marker {
+  display: none;
+}
+
+.inventoryDisclosurePanel {
+  margin: 0;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(540px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--stroke);
+  background: color-mix(in oklab, var(--panel), black 4%);
+  box-shadow: var(--panel-shadow);
+  transform: translateX(var(--info-disclosure-shift, 0px));
+  z-index: 80;
+}
+
+.inventoryDisclosureTitle {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.inventoryTableWrap {
+  overflow-x: auto;
+}
+
+.inventoryTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.inventoryTable thead th {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--stroke);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.inventoryTable thead th.num {
+  text-align: right;
+}
+
+.inventoryTable tbody td {
+  padding: 4px 6px;
+  border-bottom: 1px solid color-mix(in oklab, var(--stroke), transparent 35%);
+  white-space: nowrap;
+}
+
 .sortSection {
   margin-top: 12px;
   display: flex;
@@ -269,6 +348,68 @@
 .artifactMode {
   color: var(--muted);
   font-size: 12px;
+}
+
+.statusArtifactCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.statusDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, black, transparent 68%);
+}
+
+.statusFull {
+  background: #39a96b;
+}
+
+.statusPartial {
+  background: #d9a441;
+}
+
+.statusBlocked {
+  background: #d95c4f;
+}
+
+.statusBelowThreshold {
+  background: #6b7280;
+}
+
+.statusLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin: 6px 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.statusLegendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.executionArtifactCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+}
+
+.executionPrefix {
+  font-family: "Iosevka Term", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  color: var(--muted);
+  white-space: pre;
+  margin-right: 2px;
+}
+
+.executionRootRow td {
+  background: color-mix(in oklab, var(--accent), transparent 96%);
 }
 
 .valueTooltip {

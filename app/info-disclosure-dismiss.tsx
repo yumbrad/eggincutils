@@ -4,11 +4,12 @@ import { useEffect } from "react";
 
 export default function InfoDisclosureDismiss() {
   useEffect(() => {
-    const DISCLOSURE_SELECTOR = "details.info-disclosure";
+    const DISCLOSURE_SELECTOR = "details.info-disclosure, details.inventory-disclosure";
     const OPEN_DISCLOSURE_SELECTOR = `${DISCLOSURE_SELECTOR}[open]`;
     const VIEWPORT_MARGIN_PX = 8;
 
-    const disclosureBody = (disclosure: HTMLDetailsElement) => disclosure.querySelector<HTMLElement>(":scope > p");
+    const disclosureBody = (disclosure: HTMLDetailsElement) =>
+      disclosure.querySelector<HTMLElement>(":scope > p, :scope > .inventoryDisclosurePanel");
 
     const clearDisclosureShift = (disclosure: HTMLDetailsElement) => {
       const body = disclosureBody(disclosure);
