@@ -33,6 +33,7 @@ const solveInputSnapshotSchema = z.object({
       .optional(),
   }),
   sourceFilters: z.object({
+    inventorySource: z.enum(["main", "virtue"]).optional().default("main"),
     includeSlotted: z.boolean(),
     includeInventoryRare: z.boolean(),
     includeInventoryEpic: z.boolean(),
@@ -686,7 +687,9 @@ function printPlanSummary(diag: RunDiagnostics): void {
     )} | fastMode=${String(snapshot.request.fastMode)}`
   );
   console.log(
-    `Filters: slotted=${String(snapshot.sourceFilters.includeSlotted)} inv R/E/L=${String(
+    `Filters: inventorySource=${snapshot.sourceFilters.inventorySource} slotted=${String(
+      snapshot.sourceFilters.includeSlotted
+    )} inv R/E/L=${String(
       snapshot.sourceFilters.includeInventoryRare
     )}/${String(snapshot.sourceFilters.includeInventoryEpic)}/${String(
       snapshot.sourceFilters.includeInventoryLegendary

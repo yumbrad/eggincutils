@@ -7,6 +7,7 @@ import { buildMissionOptions, computeShipLevels, MissionRecord, ShipLevelInfo } 
 
 export type Inventory = Record<string, number>;
 export type CraftCounts = Record<string, number>;
+export type InventorySource = "main" | "virtue";
 export type ShinyRaritySelection = {
   rare: boolean;
   epic: boolean;
@@ -56,6 +57,17 @@ type BackupMissionInfo = {
 type GetPlayerProfileOptions = {
   includeArtifactRarities?: Partial<ShinyRaritySelection>;
   includeShinyArtifacts?: boolean;
+  inventorySource?: InventorySource;
+};
+
+type BackupArtifactsDb = {
+  inventoryItems?: BackupInventoryItem[];
+  artifactStatus?: BackupCraftableArtifact[];
+  missionArchive?: BackupMissionInfo[];
+  missionInfos?: BackupMissionInfo[];
+  virtueAfxDb?: {
+    inventoryItems?: BackupInventoryItem[];
+  };
 };
 
 interface AuthenticatedMessagePayload {
@@ -102,6 +114,7 @@ export async function getPlayerProfile(
   const includeArtifactRarities = normalizeShinyRaritySelection(
     options.includeArtifactRarities ?? options.includeShinyArtifacts
   );
+  const inventorySource = options.inventorySource || "main";
 
   let lastError: unknown = null;
 
@@ -152,12 +165,7 @@ export async function getPlayerProfile(
           game?: {
             epicResearch?: Array<{ id?: string; level?: number }>;
           };
-          artifactsDb?: {
-            inventoryItems?: BackupInventoryItem[];
-            artifactStatus?: BackupCraftableArtifact[];
-            missionArchive?: BackupMissionInfo[];
-            missionInfos?: BackupMissionInfo[];
-          };
+          artifactsDb?: BackupArtifactsDb;
         };
       };
 
@@ -165,8 +173,9 @@ export async function getPlayerProfile(
         throw new Error(data.errorMessage || "error fetching backup");
       }
 
+      const inventoryItems = inventoryItemsForSource(data.backup?.artifactsDb, inventorySource);
       const inventory = parseInventory(
-        data.backup?.artifactsDb?.inventoryItems || [],
+        inventoryItems,
         includeSlotted,
         includeArtifactRarities
       );
@@ -205,6 +214,16 @@ export async function getPlayerProfile(
 
   const details = lastError instanceof Error ? lastError.message : String(lastError);
   throw new Error(`unable to fetch profile for EID ${eid}: ${details}`);
+}
+
+export function inventoryItemsForSource(
+  artifactsDb: BackupArtifactsDb | undefined,
+  inventorySource: InventorySource
+): BackupInventoryItem[] {
+  if (inventorySource === "virtue") {
+    return artifactsDb?.virtueAfxDb?.inventoryItems || [];
+  }
+  return artifactsDb?.inventoryItems || [];
 }
 
 async function getProtoRoot(): Promise<protobuf.Root> {

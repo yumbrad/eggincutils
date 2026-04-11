@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatSpecName, parseCraftCounts, parseInventory, parseMissions } from "./profile";
+import { formatSpecName, inventoryItemsForSource, parseCraftCounts, parseInventory, parseMissions } from "./profile";
 
 describe("formatSpecName", () => {
   it("normalizes stone fragments, stones, and regular artifacts", () => {
@@ -160,5 +160,36 @@ describe("parseCraftCounts and parseMissions", () => {
 
     expect(craftCounts).toEqual({ gusset_2: 9 });
     expect(missions).toEqual([{ ship: "CHICKEN_ONE", durationType: "SHORT", status: "RETURNED" }]);
+  });
+});
+
+describe("inventoryItemsForSource", () => {
+  it("selects the requested inventory pool", () => {
+    const mainItems = [{ quantity: 1 }];
+    const virtueItems = [{ quantity: 2 }];
+
+    expect(
+      inventoryItemsForSource(
+        {
+          inventoryItems: mainItems,
+          virtueAfxDb: {
+            inventoryItems: virtueItems,
+          },
+        },
+        "main"
+      )
+    ).toBe(mainItems);
+    expect(
+      inventoryItemsForSource(
+        {
+          inventoryItems: mainItems,
+          virtueAfxDb: {
+            inventoryItems: virtueItems,
+          },
+        },
+        "virtue"
+      )
+    ).toBe(virtueItems);
+    expect(inventoryItemsForSource(undefined, "virtue")).toEqual([]);
   });
 });

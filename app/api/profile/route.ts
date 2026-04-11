@@ -9,6 +9,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const parsedQuery = profileQuerySchema.safeParse({
     eid: request.nextUrl.searchParams.get("eid") ?? "",
     includeSlotted: request.nextUrl.searchParams.get("includeSlotted") ?? undefined,
+    inventorySource: request.nextUrl.searchParams.get("inventorySource") ?? undefined,
     includeInventoryRare: request.nextUrl.searchParams.get("includeInventoryRare") ?? undefined,
     includeInventoryEpic: request.nextUrl.searchParams.get("includeInventoryEpic") ?? undefined,
     includeInventoryLegendary: request.nextUrl.searchParams.get("includeInventoryLegendary") ?? undefined,
@@ -25,6 +26,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   try {
     const profile = await getPlayerProfile(parsedQuery.data.eid, parsedQuery.data.includeSlotted, {
+      inventorySource: parsedQuery.data.inventorySource,
       includeArtifactRarities: {
         rare: parsedQuery.data.includeInventoryRare,
         epic: parsedQuery.data.includeInventoryEpic,

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const DURATION_TYPES = ["TUTORIAL", "SHORT", "LONG", "EPIC"] as const;
+const INVENTORY_SOURCES = ["main", "virtue"] as const;
 const FALSEY_STRINGS = new Set(["0", "false", "no", "off"]);
 
 const nonNegativeFiniteSchema = z.number().finite().min(0);
@@ -30,10 +31,18 @@ function parseFastMode(raw: unknown): boolean {
   return parseEnabledByDefault(raw, false);
 }
 
+function parseInventorySource(raw: unknown): (typeof INVENTORY_SOURCES)[number] {
+  if (typeof raw === "string" && raw.trim().toLowerCase() === "virtue") {
+    return "virtue";
+  }
+  return "main";
+}
+
 export const profileQuerySchema = z
   .object({
     eid: z.string().trim().min(1, "eid is required"),
     includeSlotted: z.string().optional(),
+    inventorySource: z.string().optional(),
     includeInventoryRare: z.string().optional(),
     includeInventoryEpic: z.string().optional(),
     includeInventoryLegendary: z.string().optional(),
@@ -41,6 +50,7 @@ export const profileQuerySchema = z
   .transform((value) => ({
     eid: value.eid,
     includeSlotted: parseIncludeSlotted(value.includeSlotted),
+    inventorySource: parseInventorySource(value.inventorySource),
     includeInventoryRare: parseEnabledByDefault(value.includeInventoryRare, true),
     includeInventoryEpic: parseEnabledByDefault(value.includeInventoryEpic, true),
     includeInventoryLegendary: parseEnabledByDefault(value.includeInventoryLegendary, true),
@@ -63,6 +73,7 @@ export const planRequestSchema = z
       .finite()
       .default(0.5)
       .transform((value) => Math.max(0, Math.min(1, value))),
+    inventorySource: z.string().optional(),
     includeSlotted: z.union([z.boolean(), z.number(), z.string()]).optional(),
     includeInventoryRare: z.union([z.boolean(), z.number(), z.string()]).optional(),
     includeInventoryEpic: z.union([z.boolean(), z.number(), z.string()]).optional(),
@@ -80,6 +91,7 @@ export const planRequestSchema = z
     targetItemId: value.targetItemId,
     quantity: value.quantity,
     priorityTime: value.priorityTime,
+    inventorySource: parseInventorySource(value.inventorySource),
     includeSlotted: parseIncludeSlotted(value.includeSlotted),
     includeInventoryRare: parseEnabledByDefault(value.includeInventoryRare, true),
     includeInventoryEpic: parseEnabledByDefault(value.includeInventoryEpic, true),

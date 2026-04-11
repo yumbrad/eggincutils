@@ -45,6 +45,8 @@ type ShipLevelInfoDetailed = ShipLevelInfo & {
   launchesByDuration: Record<DurationType, number>;
 };
 
+type InventorySource = "main" | "virtue";
+
 type MissionOption = {
   ship: string;
   missionId: string;
@@ -65,6 +67,7 @@ type ProfileSnapshot = {
 };
 
 type PlannerSourceFilters = {
+  inventorySource: InventorySource;
   includeSlotted: boolean;
   includeInventoryRare: boolean;
   includeInventoryEpic: boolean;
@@ -808,6 +811,7 @@ function targetTierNumber(itemKey: string, displayTierNumber?: number): number {
 function profileUrl(eid: string, filters: PlannerSourceFilters): string {
   const params = new URLSearchParams({
     eid,
+    inventorySource: filters.inventorySource,
     includeSlotted: filters.includeSlotted ? "1" : "0",
     includeInventoryRare: filters.includeInventoryRare ? "1" : "0",
     includeInventoryEpic: filters.includeInventoryEpic ? "1" : "0",
@@ -936,6 +940,7 @@ export default function MissionCraftPlannerPage() {
   const [quantity, setQuantity] = useState(1);
   const [quantityInput, setQuantityInput] = useState("1");
   const [priorityTimePct, setPriorityTimePct] = useState(50);
+  const [inventorySource, setInventorySource] = useState<InventorySource>("main");
   const [includeSlotted, setIncludeSlotted] = useState(false);
   const [includeInventoryRare, setIncludeInventoryRare] = useState(false);
   const [includeInventoryEpic, setIncludeInventoryEpic] = useState(false);
@@ -973,6 +978,7 @@ export default function MissionCraftPlannerPage() {
   const isDemoMode = trimmedEid.length === 0;
   const showDemoNotice = isDemoMode && !demoNoticeDismissed;
   const sourceFilters: PlannerSourceFilters = {
+    inventorySource,
     includeSlotted,
     includeInventoryRare,
     includeInventoryEpic,
@@ -1357,6 +1363,10 @@ export default function MissionCraftPlannerPage() {
       if (savedIncludeSlotted != null) {
         setIncludeSlotted(savedIncludeSlotted);
       }
+      const savedInventorySource = readFirstStoredString([LOCAL_PREF_KEYS.plannerInventorySource]);
+      if (savedInventorySource === "main" || savedInventorySource === "virtue") {
+        setInventorySource(savedInventorySource);
+      }
       const savedTarget = readFirstStoredString([LOCAL_PREF_KEYS.plannerTargetItemId]);
       if (savedTarget && targetOptions.some((option) => option.itemId === savedTarget)) {
         setTargetItemId(savedTarget);
@@ -1475,6 +1485,17 @@ export default function MissionCraftPlannerPage() {
       window.removeEventListener("mousedown", handleMouseDown);
     };
   }, [selectedTargetOption, targetPickerOpen]);
+
+  useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
+    try {
+      writeStoredString([LOCAL_PREF_KEYS.plannerInventorySource], inventorySource);
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [inventorySource, prefsLoaded]);
 
   useEffect(() => {
     if (!prefsLoaded) {
@@ -1662,6 +1683,7 @@ export default function MissionCraftPlannerPage() {
 
     try {
       writeStoredString(SHARED_EID_KEYS, trimmedEid);
+      writeStoredString([LOCAL_PREF_KEYS.plannerInventorySource], inventorySource);
       writeStoredBoolean(SHARED_INCLUDE_SLOTTED_KEYS, includeSlotted);
       writeStoredString([LOCAL_PREF_KEYS.plannerTargetItemId], targetItemId);
       writeStoredString([LOCAL_PREF_KEYS.plannerQuantity], String(normalizedQuantity));
@@ -1755,6 +1777,7 @@ export default function MissionCraftPlannerPage() {
           targetItemId,
           quantity: normalizedQuantity,
           priorityTime: priorityTimePct / 100,
+          inventorySource,
           includeSlotted,
           includeInventoryRare,
           includeInventoryEpic,
@@ -2385,23 +2408,29 @@ export default function MissionCraftPlannerPage() {
         )}
 
         <div className="row" style={{ marginTop: 20, alignItems: "stretch" }}>
-          <div className="field" style={{ minWidth: 340, flex: 1 }}>
-            <label htmlFor="priority">Optimization priority ({priorityTimePct}% time / {100 - priorityTimePct}% GE)</label>
-            <input
-              id="priority"
-              type="range"
-              min={0}
-              max={100}
-              value={priorityTimePct}
-              onChange={(event) => setPriorityTimePct(Number(event.target.value))}
-            />
-          </div>
 
           <div className={`field ${styles.sourceMatrixField}`} style={{ minWidth: 340, flex: 1 }}>
-            <label>Ingredient source filters</label>
-            <div className="muted" style={{ fontSize: 12 }}>
-              Use = included in planning. Skip = excluded.
-            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'stretch', gap: 16 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+                <label>Ingredient sources</label>
+                <div className="muted" style={{ fontSize: 12 }}>
+                  Use = included in planning. Skip = excluded.
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                <label htmlFor="planner-inventory-source">Inventory source</label>
+                <select
+                  id="planner-inventory-source"
+                  value={inventorySource}
+                  onChange={(event) => setInventorySource(event.target.value as InventorySource)}
+                  style={{ marginBottom: 8 }}
+                >
+                  <option value="main">Main farm</option>
+                  <option value="virtue">Path of Virtue</option>
+                </select>
+              </div>
+            </div>    
             <div className={styles.sourceMatrix} role="group" aria-label="Ingredient source filters">
               <span className={styles.matrixSpacer} aria-hidden="true" />
               <span className={`${styles.matrixHeader} ${styles.matrixHeaderRare}`} title="Rare shiny">
@@ -2455,9 +2484,6 @@ export default function MissionCraftPlannerPage() {
               </span>
               <span className={`${styles.matrixCell} ${styles.matrixCellMuted}`}>n/a</span>
             </div>
-            <div className="muted" style={{ fontSize: 12 }}>
-              Common rarity is always included for both inventory and drops.
-            </div>
           </div>
 
           <div className={styles.actionColumn}>
@@ -2465,6 +2491,18 @@ export default function MissionCraftPlannerPage() {
               <button type="submit" disabled={loading}>
                 {loading ? "Planning..." : "Build plan"}
               </button>
+              <div className="field" style={{ minWidth: 340, flex: 1 }}>
+                <label htmlFor="priority">Optimization priority ({priorityTimePct}% time / {100 - priorityTimePct}% GE)</label>
+                <input
+                  id="priority"
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={priorityTimePct}
+                  onChange={(event) => setPriorityTimePct(Number(event.target.value))}
+                />
+              </div>
+
               <label className={styles.fastModeToggle} htmlFor="fastMode">
                 <input
                   id="fastMode"

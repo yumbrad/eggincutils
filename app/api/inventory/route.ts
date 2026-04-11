@@ -9,6 +9,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const parsedQuery = profileQuerySchema.safeParse({
     eid: request.nextUrl.searchParams.get("eid") ?? "",
     includeSlotted: request.nextUrl.searchParams.get("includeSlotted") ?? undefined,
+    inventorySource: request.nextUrl.searchParams.get("inventorySource") ?? undefined,
   });
   if (!parsedQuery.success) {
     return new Response(
@@ -22,6 +23,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   try {
     const profile = await getPlayerProfile(parsedQuery.data.eid, parsedQuery.data.includeSlotted, {
+      inventorySource: parsedQuery.data.inventorySource,
       includeShinyArtifacts: false,
     });
     return new Response(

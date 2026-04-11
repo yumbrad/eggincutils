@@ -8,6 +8,7 @@ export const LOCAL_PREF_KEYS = {
   plannerQuantity: "eggincutils-planner-quantity",
   plannerPriorityTimePct: "eggincutils-planner-priority-time-pct",
   plannerFastMode: "eggincutils-planner-fast-mode",
+  plannerInventorySource: "eggincutils-planner-inventory-source",
   plannerIncludeInventoryRare: "eggincutils-planner-include-inventory-rare",
   plannerIncludeInventoryEpic: "eggincutils-planner-include-inventory-epic",
   plannerIncludeInventoryLegendary: "eggincutils-planner-include-inventory-legendary",
