@@ -26,6 +26,7 @@ const solveInputSnapshotSchema = z.object({
   request: z.object({
     targetItemId: z.string().min(1),
     quantity: z.number().int().min(1),
+    targetCraftedOnly: z.boolean().optional().default(false),
     priorityTime: z.number().finite().min(0).max(1),
     fastMode: z.boolean(),
     allowedShipDurations: z
@@ -583,6 +584,7 @@ async function runCompareDiagnostics(options: {
     profile: snapshot.profile,
     targetItemId: snapshot.request.targetItemId,
     quantity: snapshot.request.quantity,
+    targetCraftedOnly: snapshot.request.targetCraftedOnly,
     priorityTime: snapshot.request.priorityTime,
     selectedCombos: combos,
     missionDropRarities: {
@@ -788,6 +790,7 @@ async function run(options: CliOptions): Promise<RunDiagnostics> {
         legendary: loaded.snapshot.sourceFilters.includeDropLegendary,
       },
       allowedShipDurations: loaded.snapshot.request.allowedShipDurations,
+      targetCraftedOnly: loaded.snapshot.request.targetCraftedOnly,
       onProgress: (event) => {
         progressEvents.push(event);
         if (options.progress) {

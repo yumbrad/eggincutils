@@ -722,6 +722,77 @@ describe("planForTarget coverage handling", () => {
     expect(result.notes.some((note) => note.includes("exact craft discount scheduling"))).toBe(true);
   });
 
+  it("can require target quantity to be satisfied only by crafts", async () => {
+    mockedLoadLootData.mockResolvedValue({
+      missions: [
+        {
+          afxShip: 0,
+          afxDurationType: 0,
+          missionId: "test-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 1,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 12,
+                      afxLevel: 2,
+                      itemId: "soul-stone-2",
+                      counts: [1, 0, 0, 0],
+                    },
+                    {
+                      afxId: 12,
+                      afxLevel: 1,
+                      itemId: "soul-stone-1",
+                      counts: [20, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    let lpModel = "";
+    mockedSolveWithHighs.mockImplementation(async (model) => {
+      lpModel = model;
+      return {
+        Status: "Optimal",
+        Columns: {
+          c_0: { Primal: 2 },
+          m_0: { Primal: 3 },
+        },
+      };
+    });
+
+    const profile = baseProfile();
+    profile.missionOptions = [
+      {
+        ship: "CHICKEN_ONE",
+        missionId: "test-short",
+        durationType: "SHORT",
+        level: 0,
+        durationSeconds: 1200,
+        capacity: 1,
+      },
+    ];
+
+    const result = await planForTarget(profile, "soul-stone-2", 2, 0.5, { targetCraftedOnly: true });
+
+    const targetDemandLine = lpModel.split("\n").find((line) => line.trimStart().startsWith("b_1:")) || "";
+    expect(targetDemandLine).toContain("c_0");
+    expect(targetDemandLine).not.toContain("m_0");
+    expect(targetDemandLine).toContain(">= 2");
+    expect(result.targetBreakdown.fromCraft).toBe(2);
+    expect(result.targetBreakdown.fromMissionsExpected).toBe(0);
+    expect(result.notes.some((note) => note.includes("Only crafted target mode enabled"))).toBe(true);
+  });
+
   it("runs an integer re-solve in fast mode for non-GE priorities", async () => {
     mockedLoadLootData.mockResolvedValue({
       missions: [

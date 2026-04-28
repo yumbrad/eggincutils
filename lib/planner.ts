@@ -121,6 +121,7 @@ export type SolverFunction = (
 
 export type PlannerOptions = {
   fastMode?: boolean;
+  targetCraftedOnly?: boolean;
   missionDropRarities?: Partial<ShinyRaritySelection>;
   allowedShipDurations?: Array<{ ship: string; durationType: string }>;
   maxSolveMs?: number;
@@ -1080,6 +1081,7 @@ async function solveUnifiedCraftMissionPlan(options: {
   strictGeObjective?: boolean;
   totalSlotSecondsUpperBound?: number;
   lpRelaxation?: boolean;
+  targetCraftedOnly?: boolean;
   craftSkeleton?: CraftModelSkeleton;
   onSolveMetrics?: (metrics: UnifiedSolveMetrics) => void;
   solverFn?: SolverFunction;
@@ -1101,6 +1103,7 @@ async function solveUnifiedCraftMissionPlan(options: {
     strictGeObjective = false,
     totalSlotSecondsUpperBound,
     lpRelaxation = false,
+    targetCraftedOnly = false,
     craftSkeleton,
     onSolveMetrics,
     solverFn: solverFnOption,
@@ -1195,7 +1198,7 @@ async function solveUnifiedCraftMissionPlan(options: {
     }
     for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
       const yieldPerMission = actions[actionIndex].yields[itemKey] || 0;
-      if (yieldPerMission > SCORE_EPS) {
+      if (yieldPerMission > SCORE_EPS && !(targetCraftedOnly && itemKey === targetKey)) {
         terms.push({ coefficient: yieldPerMission, variable: missionVars[actionIndex] });
       }
     }
@@ -1843,13 +1846,14 @@ function buildTargetBreakdown(options: {
   actions: MissionAction[];
   missionCounts: Record<string, number>;
   remainingDemand: Record<string, number>;
+  targetCraftedOnly?: boolean;
 }): TargetBreakdown {
-  const { quantity, targetKey, crafts, actions, missionCounts, remainingDemand } = options;
+  const { quantity, targetKey, crafts, actions, missionCounts, remainingDemand, targetCraftedOnly = false } = options;
   const requested = Math.max(0, quantity);
   const shortfall = Math.max(0, remainingDemand[targetKey] || 0);
   const fulfilled = Math.max(0, requested - shortfall);
   const rawCraft = Math.max(0, crafts[targetKey] || 0);
-  const rawMissionExpected = expectedTargetFromMissions(targetKey, actions, missionCounts);
+  const rawMissionExpected = targetCraftedOnly ? 0 : expectedTargetFromMissions(targetKey, actions, missionCounts);
 
   const fromCraft = Math.min(fulfilled, rawCraft);
   const remainingAfterCraft = Math.max(0, fulfilled - fromCraft);
@@ -2716,13 +2720,14 @@ async function planForTargetHeuristic(
   targetItemId: string,
   quantity: number,
   priorityTimeRaw: number,
-  plannerOptions: Pick<PlannerOptions, "missionDropRarities" | "solverFn" | "lootData"> = {}
+  plannerOptions: Pick<PlannerOptions, "missionDropRarities" | "targetCraftedOnly" | "solverFn" | "lootData"> = {}
 ): Promise<PlannerResult> {
   const targetKey = itemIdToCanonicalKey(targetItemId);
   const priorityTime = Math.max(0, Math.min(1, priorityTimeRaw));
   const effectivePriorityTime = Math.max(priorityTime, MIN_MISSION_TIME_OBJECTIVE_WEIGHT);
   const quantityInt = Math.max(1, Math.round(quantity));
   const missionDropRarities = normalizeShinyRaritySelection(plannerOptions.missionDropRarities);
+  const targetCraftedOnly = Boolean(plannerOptions.targetCraftedOnly);
 
   const closure = getTargetClosureCached(targetKey);
   const closureKey = closureFingerprint(closure);
@@ -2785,7 +2790,7 @@ async function planForTargetHeuristic(
         ? normalizedScore(0, farmTpu, effectivePriorityTime, geRef, timeRef)
         : Number.POSITIVE_INFINITY;
 
-      const chooseFarm = farmScore + SCORE_EPS < craftScore;
+      const chooseFarm = !(targetCraftedOnly && itemKey === targetKey && depth === 0) && farmScore + SCORE_EPS < craftScore;
       if (chooseFarm) {
         demand[itemKey] = (demand[itemKey] || 0) + 1;
         remaining -= 1;
@@ -2839,6 +2844,7 @@ async function planForTargetHeuristic(
     actions,
     missionCounts,
     remainingDemand: remainingDemandAfterMissions,
+    targetCraftedOnly,
   });
 
   const unmetItems = Object.entries(remainingDemandAfterMissions)
@@ -2885,6 +2891,9 @@ async function planForTargetHeuristic(
     "Planner currently uses expected-drop values with solver-backed mission allocation and 3 mission slots. Re-run after returns."
   );
   notes.push("Target quantity is interpreted as additional copies beyond current inventory.");
+  if (targetCraftedOnly) {
+    notes.push("Only crafted target mode enabled: mission drops of the target item do not count toward the requested quantity.");
+  }
   notes.push(missionDropRarityNote(missionDropRarities));
   notes.push(
     "Ship progression snapshot reflects projected levels after applying all launches in this plan (prep + farming), and is not persisted."
@@ -2924,6 +2933,7 @@ export async function planForTarget(
   const quantityInt = Math.max(1, Math.round(quantity));
   const fastMode = Boolean(plannerOptions.fastMode);
   const missionDropRarities = normalizeShinyRaritySelection(plannerOptions.missionDropRarities);
+  const targetCraftedOnly = Boolean(plannerOptions.targetCraftedOnly);
   const missionDropRarityKey = missionDropRarityCacheKey(missionDropRarities);
   const solverFn = plannerOptions.solverFn;
   const injectedLootData = plannerOptions.lootData;
@@ -3011,6 +3021,7 @@ export async function planForTarget(
     `target:${targetKey}`,
     `qty:${quantityInt}`,
     `rar:${missionDropRarityKey}`,
+    `craftedOnly:${targetCraftedOnly ? 1 : 0}`,
     `mode:${priorityTime <= SCORE_EPS ? "ge" : "mix"}`,
     `fast:${fastMode ? 1 : 0}`,
   ].join("::");
@@ -3274,6 +3285,7 @@ export async function planForTarget(
         phasedChainConstraints: input.phasedChainConstraints,
         lpRelaxation,
         strictGeObjective: geOnlyCandidateMilp,
+        targetCraftedOnly,
         craftSkeleton,
         solverFn,
         onSolveMetrics: (metrics) => {
@@ -3305,6 +3317,7 @@ export async function planForTarget(
             phasedChainConstraints: input.phasedChainConstraints,
             geCostUpperBound: baselineUnified.geCost,
             lpRelaxation: false,
+            targetCraftedOnly,
             craftSkeleton,
             solverFn,
             onSolveMetrics: (metrics) => {
@@ -3703,6 +3716,7 @@ export async function planForTarget(
               strictGeObjective: true,
               totalSlotSecondsUpperBound: missionSlotSecondsBudget,
               lpRelaxation: false,
+              targetCraftedOnly,
               craftSkeleton,
               solverFn,
               onSolveMetrics: (metrics) => {
@@ -3798,6 +3812,7 @@ export async function planForTarget(
       actions: best.actions,
       missionCounts: best.unified.missionCounts,
       remainingDemand: best.unified.remainingDemand,
+      targetCraftedOnly,
     });
     const unmetItems = Object.entries(best.unified.remainingDemand)
       .filter(([, qty]) => qty > 1e-6)
@@ -3910,6 +3925,9 @@ export async function planForTarget(
       "Planner uses expected-drop values with unified solver-backed craft+mission allocation, integrated phased ship leveling, bounded ship-progression horizon search, and 3 mission slots. Re-run after returns."
     );
     notes.push("Target quantity is interpreted as additional copies beyond current inventory.");
+    if (targetCraftedOnly) {
+      notes.push("Only crafted target mode enabled: mission drops of the target item do not count toward the requested quantity.");
+    }
     notes.push(
       "Prep launches are credited with expected drops for required items when compatible mission-target coverage exists."
     );
@@ -3993,6 +4011,7 @@ export async function planForTarget(
       : profile;
     const fallback = await planForTargetHeuristic(fallbackProfile, targetItemId, quantityInt, priorityTime, {
       missionDropRarities,
+      targetCraftedOnly,
       solverFn,
       lootData: injectedLootData,
     });
@@ -4066,10 +4085,11 @@ export async function computeMonolithicPaths(options: {
   priorityTime: number;
   selectedCombos: Array<{ ship: string; durationType: DurationType; targetAfxId: number }>;
   missionDropRarities?: Partial<ShinyRaritySelection>;
+  targetCraftedOnly?: boolean;
   solverFn?: SolverFunction;
   lootData?: LootJson;
 }): Promise<MonolithicPathResult[]> {
-  const { profile, targetItemId, quantity, priorityTime, selectedCombos, missionDropRarities, solverFn: solverFnOption, lootData: injectedLootData } = options;
+  const { profile, targetItemId, quantity, priorityTime, selectedCombos, missionDropRarities, targetCraftedOnly = false, solverFn: solverFnOption, lootData: injectedLootData } = options;
   const targetKey = itemIdToCanonicalKey(targetItemId);
   const quantityInt = Math.max(1, Math.round(quantity));
   const missionDropRaritySelection = normalizeShinyRaritySelection(missionDropRarities);
@@ -4169,6 +4189,7 @@ export async function computeMonolithicPaths(options: {
         timeRef,
         maxMissionLaunchesByOption,
         phasedChainConstraints,
+        targetCraftedOnly,
         craftSkeleton,
         solverFn: solverFnOption,
       });
@@ -4201,7 +4222,9 @@ export async function computeMonolithicPaths(options: {
         for (const [actionKey, launches] of Object.entries(unified.missionCounts)) {
           const action = filteredActions.find((a) => a.key === actionKey);
           if (action) {
-            fromMissionsExpected += (action.yields[itemKey] || 0) * launches;
+            if (!(targetCraftedOnly && itemKey === targetKey)) {
+              fromMissionsExpected += (action.yields[itemKey] || 0) * launches;
+            }
           }
         }
         const shortfall = Math.max(0, unified.remainingDemand[itemKey] || 0);

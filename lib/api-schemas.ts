@@ -31,6 +31,10 @@ function parseFastMode(raw: unknown): boolean {
   return parseEnabledByDefault(raw, false);
 }
 
+function parseDisabledByDefault(raw: unknown): boolean {
+  return parseEnabledByDefault(raw, false);
+}
+
 function parseInventorySource(raw: unknown): (typeof INVENTORY_SOURCES)[number] {
   if (typeof raw === "string" && raw.trim().toLowerCase() === "virtue") {
     return "virtue";
@@ -81,6 +85,7 @@ export const planRequestSchema = z
     includeDropRare: z.union([z.boolean(), z.number(), z.string()]).optional(),
     includeDropEpic: z.union([z.boolean(), z.number(), z.string()]).optional(),
     includeDropLegendary: z.union([z.boolean(), z.number(), z.string()]).optional(),
+    targetCraftedOnly: z.union([z.boolean(), z.number(), z.string()]).optional(),
     fastMode: z.union([z.boolean(), z.number(), z.string()]).optional(),
     allowedShipDurations: z
       .array(z.object({ ship: z.string().min(1), durationType: z.enum(["SHORT", "LONG", "EPIC"]) }))
@@ -99,6 +104,7 @@ export const planRequestSchema = z
     includeDropRare: parseEnabledByDefault(value.includeDropRare, true),
     includeDropEpic: parseEnabledByDefault(value.includeDropEpic, true),
     includeDropLegendary: parseEnabledByDefault(value.includeDropLegendary, true),
+    targetCraftedOnly: parseDisabledByDefault(value.targetCraftedOnly),
     fastMode: parseFastMode(value.fastMode),
     allowedShipDurations: value.allowedShipDurations,
   }));
@@ -174,6 +180,7 @@ export const replanRequestSchema = z.object({
   includeDropRare: z.union([z.boolean(), z.number(), z.string()]).optional(),
   includeDropEpic: z.union([z.boolean(), z.number(), z.string()]).optional(),
   includeDropLegendary: z.union([z.boolean(), z.number(), z.string()]).optional(),
+  targetCraftedOnly: z.union([z.boolean(), z.number(), z.string()]).optional(),
   allowedShipDurations: z
     .array(z.object({ ship: z.string().min(1), durationType: z.enum(["SHORT", "LONG", "EPIC"]) }))
     .optional(),
@@ -185,6 +192,7 @@ export const replanRequestSchema = z.object({
   includeDropRare: parseEnabledByDefault(value.includeDropRare, true),
   includeDropEpic: parseEnabledByDefault(value.includeDropEpic, true),
   includeDropLegendary: parseEnabledByDefault(value.includeDropLegendary, true),
+  targetCraftedOnly: parseDisabledByDefault(value.targetCraftedOnly),
 }));
 
 export type ReplanRequest = z.infer<typeof replanRequestSchema>;
@@ -301,11 +309,13 @@ export const compareRequestSchema = z.object({
   includeDropRare: z.union([z.boolean(), z.number(), z.string()]).optional(),
   includeDropEpic: z.union([z.boolean(), z.number(), z.string()]).optional(),
   includeDropLegendary: z.union([z.boolean(), z.number(), z.string()]).optional(),
+  targetCraftedOnly: z.union([z.boolean(), z.number(), z.string()]).optional(),
 }).transform((value) => ({
   ...value,
   includeDropRare: parseEnabledByDefault(value.includeDropRare, true),
   includeDropEpic: parseEnabledByDefault(value.includeDropEpic, true),
   includeDropLegendary: parseEnabledByDefault(value.includeDropLegendary, true),
+  targetCraftedOnly: parseDisabledByDefault(value.targetCraftedOnly),
 }));
 
 export type CompareRequest = z.infer<typeof compareRequestSchema>;

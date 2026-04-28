@@ -157,6 +157,7 @@ type MonolithicPathResult = {
 type SolveSnapshotRequest = {
   targetItemId: string;
   quantity: number;
+  targetCraftedOnly: boolean;
   priorityTime: number;
   fastMode: boolean;
   allowedShipDurations?: Array<{ ship: string; durationType: "SHORT" | "LONG" | "EPIC" }>;
@@ -939,6 +940,7 @@ export default function MissionCraftPlannerPage() {
   const [targetActiveIndex, setTargetActiveIndex] = useState(0);
   const [quantity, setQuantity] = useState(1);
   const [quantityInput, setQuantityInput] = useState("1");
+  const [targetCraftedOnly, setTargetCraftedOnly] = useState(false);
   const [priorityTimePct, setPriorityTimePct] = useState(50);
   const [inventorySource, setInventorySource] = useState<InventorySource>("main");
   const [includeSlotted, setIncludeSlotted] = useState(false);
@@ -1092,6 +1094,7 @@ export default function MissionCraftPlannerPage() {
     const recipeMap = recipes as Record<string, { ingredients: Record<string, number> } | null>;
     const requiredByItemKey: Record<string, number> = {};
     const targetKey = itemIdToKey(response.plan.targetItemId);
+    const planTargetCraftedOnly = Boolean(lastSolveRequest?.targetCraftedOnly);
     requiredByItemKey[targetKey] = (requiredByItemKey[targetKey] || 0) + response.plan.quantity;
     for (const craft of response.plan.crafts) {
       const craftKey = itemIdToKey(craft.itemId);
@@ -1160,7 +1163,8 @@ export default function MissionCraftPlannerPage() {
           return null;
         }
         const have = profileSnapshot ? Math.max(0, profileSnapshot.inventory[itemKey] || 0) : null;
-        const expectedMission = Math.max(0, missionExpectedByItemId.get(itemId) || 0);
+        const expectedMission =
+          planTargetCraftedOnly && itemKey === targetKey ? 0 : Math.max(0, missionExpectedByItemId.get(itemId) || 0);
         let plannedCraftTooltip: string | null = null;
         if (plannedCraftCount > 0) {
           const recipe = recipeMap[itemKey];
@@ -1250,7 +1254,7 @@ export default function MissionCraftPlannerPage() {
     });
 
     return rows;
-  }, [profileSnapshot, response]);
+  }, [lastSolveRequest?.targetCraftedOnly, profileSnapshot, response]);
   const missionPrepTargetOverrideByIndex = useMemo(() => {
     const overrides = new Map<number, string>();
     if (!response) {
@@ -1375,6 +1379,10 @@ export default function MissionCraftPlannerPage() {
       if (savedQuantity != null) {
         setQuantity(savedQuantity);
         setQuantityInput(String(savedQuantity));
+      }
+      const savedTargetCraftedOnly = readStoredBoolean([LOCAL_PREF_KEYS.plannerTargetCraftedOnly]);
+      if (savedTargetCraftedOnly != null) {
+        setTargetCraftedOnly(savedTargetCraftedOnly);
       }
       const savedPriority = readStoredInteger([LOCAL_PREF_KEYS.plannerPriorityTimePct], 0, 100);
       if (savedPriority != null) {
@@ -1546,6 +1554,17 @@ export default function MissionCraftPlannerPage() {
       return;
     }
     try {
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerTargetCraftedOnly], targetCraftedOnly);
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [targetCraftedOnly, prefsLoaded]);
+
+  useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
+    try {
       writeStoredString([LOCAL_PREF_KEYS.plannerPriorityTimePct], String(priorityTimePct));
     } catch {
       // Ignore localStorage persistence errors.
@@ -1659,6 +1678,7 @@ export default function MissionCraftPlannerPage() {
     const snapshotRequest: LastSolveInputs = {
       targetItemId,
       quantity: normalizedQuantity,
+      targetCraftedOnly,
       priorityTime: priorityTimePct / 100,
       fastMode,
       allowedShipDurations: allowedShipDurationsForSolve,
@@ -1687,6 +1707,7 @@ export default function MissionCraftPlannerPage() {
       writeStoredBoolean(SHARED_INCLUDE_SLOTTED_KEYS, includeSlotted);
       writeStoredString([LOCAL_PREF_KEYS.plannerTargetItemId], targetItemId);
       writeStoredString([LOCAL_PREF_KEYS.plannerQuantity], String(normalizedQuantity));
+      writeStoredBoolean([LOCAL_PREF_KEYS.plannerTargetCraftedOnly], targetCraftedOnly);
       writeStoredString([LOCAL_PREF_KEYS.plannerPriorityTimePct], String(priorityTimePct));
       writeStoredBoolean([LOCAL_PREF_KEYS.plannerFastMode], fastMode);
       writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeInventoryRare], includeInventoryRare);
@@ -1737,6 +1758,7 @@ export default function MissionCraftPlannerPage() {
               epic: includeDropEpic,
               legendary: includeDropLegendary,
             },
+            targetCraftedOnly,
             allowedShipDurations: allowedShipDurationsForSolve,
             solverFn: highsRef.current.solve,
             lootData: lootDataRef.current!,
@@ -1785,6 +1807,7 @@ export default function MissionCraftPlannerPage() {
           includeDropRare,
           includeDropEpic,
           includeDropLegendary,
+          targetCraftedOnly,
           fastMode,
           allowedShipDurations: allowedShipDurationsForSolve,
         };
@@ -1939,6 +1962,7 @@ export default function MissionCraftPlannerPage() {
           targetItemId,
           quantity: normalizedQuantity,
           priorityTime: priorityTimePct / 100,
+          targetCraftedOnly,
           fastMode,
           includeDropRare,
           includeDropEpic,
@@ -1966,6 +1990,7 @@ export default function MissionCraftPlannerPage() {
         targetItemId,
         quantity: normalizedQuantity,
         priorityTime: priorityTimePct / 100,
+        targetCraftedOnly,
         fastMode,
         allowedShipDurations: allowedShipDurationsForReplan,
         sourceFilters: { ...sourceFilters },
@@ -2093,6 +2118,7 @@ export default function MissionCraftPlannerPage() {
       request: {
         targetItemId: lastSolveRequest.targetItemId,
         quantity: lastSolveRequest.quantity,
+        targetCraftedOnly: lastSolveRequest.targetCraftedOnly,
         priorityTime: lastSolveRequest.priorityTime,
         fastMode: lastSolveRequest.fastMode,
         allowedShipDurations: lastSolveRequest.allowedShipDurations,
@@ -2139,6 +2165,7 @@ export default function MissionCraftPlannerPage() {
     setCompareExpandedRow(null);
     try {
       const selectedCombos = response.plan.availableCombos.filter((c) => compareSelected.has(comboKey(c)));
+      const compareTargetCraftedOnly = lastSolveRequest?.targetCraftedOnly ?? targetCraftedOnly;
       const canCompareClientSide = highsRef.current.ready && lootDataRef.current != null;
 
       if (canCompareClientSide) {
@@ -2146,6 +2173,7 @@ export default function MissionCraftPlannerPage() {
           profile: profileSnapshot as Parameters<typeof computeMonolithicPaths>[0]["profile"],
           targetItemId: response.plan.targetItemId,
           quantity: response.plan.quantity,
+          targetCraftedOnly: compareTargetCraftedOnly,
           priorityTime: response.plan.priorityTime,
           selectedCombos: selectedCombos as Parameters<typeof computeMonolithicPaths>[0]["selectedCombos"],
           missionDropRarities: {
@@ -2162,6 +2190,7 @@ export default function MissionCraftPlannerPage() {
           profile: profileSnapshot,
           targetItemId: response.plan.targetItemId,
           quantity: response.plan.quantity,
+          targetCraftedOnly: compareTargetCraftedOnly,
           priorityTime: response.plan.priorityTime,
           selectedCombos,
           includeDropRare: sourceFilters.includeDropRare,
@@ -2380,6 +2409,20 @@ export default function MissionCraftPlannerPage() {
                 setQuantityInput(String(nextQuantity));
               }}
             />
+            <label className={styles.quantityOption} htmlFor="targetCraftedOnly">
+              <input
+                id="targetCraftedOnly"
+                type="checkbox"
+                checked={targetCraftedOnly}
+                onChange={(event) => setTargetCraftedOnly(event.target.checked)}
+              />
+              <span
+                className={styles.tooltipValue}
+                title="Only count copies you craft toward the requested target quantity. Mission drops can still supply ingredients, but target drops themselves are ignored because high-rarity drop odds can be very low."
+              >
+                Only crafted
+              </span>
+            </label>
           </div>
         </div>
 

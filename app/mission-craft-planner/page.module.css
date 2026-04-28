@@ -208,6 +208,22 @@
   letter-spacing: 0.02em;
 }
 
+.quantityOption {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.quantityOption input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}
+
 .actionColumn {
   min-width: 220px;
   display: flex;

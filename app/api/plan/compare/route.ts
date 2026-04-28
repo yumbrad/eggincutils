@@ -34,6 +34,7 @@ export async function POST(request: Request): Promise<Response> {
         epic: parsed.data.includeDropEpic,
         legendary: parsed.data.includeDropLegendary,
       },
+      targetCraftedOnly: parsed.data.targetCraftedOnly,
     });
 
     return new Response(JSON.stringify({ paths: results }), { status: 200 });
