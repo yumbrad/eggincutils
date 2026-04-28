@@ -26,6 +26,7 @@ import { XP_GE_CRAFT_COPY } from "../../lib/xp-ge-craft-copy";
 import styles from "./page.module.css";
 
 type SortKey = "xpPerGe" | "xp" | "tierXpPerGe" | "familyTier" | "name";
+type InventorySource = "main" | "virtue";
 type InventoryResponse = {
   inventory?: Record<string, number>;
   craftCounts?: Record<string, number>;
@@ -124,10 +125,11 @@ async function getOptimalCrafts(
   highs: Highs,
   eid: string,
   includeSlotted: boolean,
-  saleEnabled: boolean
+  saleEnabled: boolean,
+  inventorySource: InventorySource
 ): Promise<OptimizePayload> {
   const response = await fetch(
-    `/api/inventory?eid=${encodeURIComponent(eid)}&includeSlotted=${includeSlotted ? "true" : "false"}`
+    `/api/inventory?eid=${encodeURIComponent(eid)}&includeSlotted=${includeSlotted ? "true" : "false"}&inventorySource=${encodeURIComponent(inventorySource)}`
   );
   let data: InventoryResponse | null = null;
   try {
@@ -552,6 +554,7 @@ export default function XpGeCraftPage(): JSX.Element {
   const [eid, setEID] = useState<string>("");
   const [includeSlotted, setIncludeSlotted] = useState<boolean>(true);
   const [craftingSale, setCraftingSale] = useState<boolean>(false);
+  const [inventorySource, setInventorySource] = useState<InventorySource>("main");
   const [solution, setSolution] = useState<Solution | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("xpPerGe");
   const [hideUncraftable, setHideUncraftable] = useState<boolean>(true);
@@ -574,6 +577,10 @@ export default function XpGeCraftPage(): JSX.Element {
     const savedCraftingSale = readStoredBoolean(SHARED_CRAFTING_SALE_KEYS);
     if (savedCraftingSale != null) {
       setCraftingSale(savedCraftingSale);
+    }
+    const savedInventorySource = readFirstStoredString([LOCAL_PREF_KEYS.craftInventorySource]);
+    if (savedInventorySource === "main" || savedInventorySource === "virtue") {
+      setInventorySource(savedInventorySource);
     }
     setPrefsLoaded(true);
   }, []);
@@ -600,6 +607,17 @@ export default function XpGeCraftPage(): JSX.Element {
   }, [craftingSale, prefsLoaded]);
 
   useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
+    try {
+      writeStoredString([LOCAL_PREF_KEYS.craftInventorySource], inventorySource);
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [inventorySource, prefsLoaded]);
+
+  useEffect(() => {
     if (!highs || !planSourceInventory) {
       return;
     }
@@ -622,7 +640,7 @@ export default function XpGeCraftPage(): JSX.Element {
     setPlanSourceCraftCounts({});
     setIsLoading(true);
     try {
-      const result = await getOptimalCrafts(highs, eid, includeSlotted, craftingSale);
+      const result = await getOptimalCrafts(highs, eid, includeSlotted, craftingSale, inventorySource);
       setSolution(result.solution);
       setPlanSourceInventory(result.inventory);
       setPlanSourceCraftCounts(result.craftCounts);
@@ -741,6 +759,18 @@ export default function XpGeCraftPage(): JSX.Element {
             />
             30% off crafting sale
           </label>
+          <div>
+            <label htmlFor="craft-inventory-source">Inventory source</label>
+            {" "}
+            <select
+              id="craft-inventory-source"
+              value={inventorySource}
+              onChange={(event) => setInventorySource(event.target.value as InventorySource)}
+            >
+              <option value="main">Main farm</option>
+              <option value="virtue">Path of Virtue</option>
+            </select>
+          </div>
         </div>
 
         {error && (
