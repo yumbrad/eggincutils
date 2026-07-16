@@ -29,6 +29,7 @@ export const LOCAL_PREF_KEYS = {
   plannerIncludeDropFragments: "eggincutils-planner-include-drop-fragments",
   plannerDemoNoticeDismissed: "eggincutils-planner-demo-notice-dismissed",
   plannerShipDurations: "eggincutils-planner-ship-durations",
+  plannerSession: "eggincutils-planner-session-v1",
 } as const;
 
 export function readFirstStoredString(keys: readonly string[]): string | null {
