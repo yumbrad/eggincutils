@@ -197,6 +197,56 @@ type LastSolveInputs = SolveSnapshotRequest & {
   sourceFilters: PlannerSourceFilters;
 };
 
+type PersistedPlannerSession = {
+  schemaVersion: 1;
+  savedAt: string;
+  response: PlanResponse;
+  profileSnapshot: ProfileSnapshot;
+  lastSolveRequest: LastSolveInputs;
+};
+
+function readPersistedPlannerSession(): PersistedPlannerSession | null {
+  const raw = readFirstStoredString([LOCAL_PREF_KEYS.plannerSession]);
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<PersistedPlannerSession>;
+    if (
+      parsed.schemaVersion !== 1 ||
+      typeof parsed.savedAt !== "string" ||
+      !parsed.response ||
+      typeof parsed.response !== "object" ||
+      !parsed.response.profile ||
+      !parsed.response.plan ||
+      !parsed.profileSnapshot ||
+      typeof parsed.profileSnapshot !== "object" ||
+      !parsed.lastSolveRequest ||
+      typeof parsed.lastSolveRequest !== "object"
+    ) {
+      return null;
+    }
+    return parsed as PersistedPlannerSession;
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedPlannerSession(
+  response: PlanResponse,
+  profileSnapshot: ProfileSnapshot,
+  lastSolveRequest: LastSolveInputs
+): void {
+  const session: PersistedPlannerSession = {
+    schemaVersion: 1,
+    savedAt: new Date().toISOString(),
+    response,
+    profileSnapshot,
+    lastSolveRequest,
+  };
+  writeStoredString([LOCAL_PREF_KEYS.plannerSession], JSON.stringify(session));
+}
+
 type SolveSnapshotCombo = {
   ship: string;
   durationType: DurationType;
@@ -2151,6 +2201,15 @@ export default function MissionCraftPlannerPage() {
           }
         }
       }
+      const savedSession = readPersistedPlannerSession();
+      if (savedSession) {
+        setResponse(savedSession.response);
+        setProfileSnapshot(savedSession.profileSnapshot);
+        setLastSolveRequest(savedSession.lastSolveRequest);
+        const savedDate = new Date(savedSession.savedAt);
+        const savedLabel = Number.isNaN(savedDate.getTime()) ? "an earlier visit" : savedDate.toLocaleString();
+        setRefreshSummary(`Restored the plan saved ${savedLabel}. Replan to update it with current profile data.`);
+      }
     } catch {
       // Ignore localStorage hydration errors.
     } finally {
@@ -2620,6 +2679,7 @@ export default function MissionCraftPlannerPage() {
         setResponse(planResponse);
         setProfileSnapshot(profile);
         setLastSolveRequest(snapshotRequest);
+        writePersistedPlannerSession(planResponse, profile, snapshotRequest);
       } else {
         // Server-side fallback: stream from /api/plan/stream.
         const requestPayload = {
@@ -2741,14 +2801,16 @@ export default function MissionCraftPlannerPage() {
         if (!streamResult) {
           throw new Error("planning stream completed without a result");
         }
-        setResponse(streamResult);
+        let nextProfileSnapshot: ProfileSnapshot;
         if (isDemoMode) {
-          setProfileSnapshot(buildDemoProfileSnapshot(streamResult));
+          nextProfileSnapshot = buildDemoProfileSnapshot(streamResult);
         } else {
-          const snapshot = await fetchProfileSnapshot(trimmedEid, sourceFilters);
-          setProfileSnapshot(snapshot);
+          nextProfileSnapshot = await fetchProfileSnapshot(trimmedEid, sourceFilters);
         }
+        setResponse(streamResult);
+        setProfileSnapshot(nextProfileSnapshot);
         setLastSolveRequest(snapshotRequest);
+        writePersistedPlannerSession(streamResult, nextProfileSnapshot, snapshotRequest);
       }
     } catch (caught) {
       const message = caught instanceof Error && caught.message ? caught.message : "planning request failed";
@@ -2826,9 +2888,7 @@ export default function MissionCraftPlannerPage() {
         throw new Error(detailText || data.error || "replan request failed");
       }
 
-      setResponse(data);
-      setProfileSnapshot(liveProfile);
-      setLastSolveRequest({
+      const nextSolveRequest: LastSolveInputs = {
         targetItemId: primaryTarget.targetItemId,
         quantity: normalizedQuantity,
         targets: normalizedTargets,
@@ -2838,7 +2898,11 @@ export default function MissionCraftPlannerPage() {
         allowedShipDurations: allowedShipDurationsForReplan,
         selectedConsumptionItemIds,
         sourceFilters: { ...sourceFilters },
-      });
+      };
+      setResponse(data);
+      setProfileSnapshot(liveProfile);
+      setLastSolveRequest(nextSolveRequest);
+      writePersistedPlannerSession(data, liveProfile, nextSolveRequest);
 
       const totalLaunches = deltas.missionLaunches.reduce((sum, launch) => sum + launch.launches, 0);
       const totalReturnItems = deltas.observedReturns.reduce((sum, item) => sum + item.quantity, 0);
