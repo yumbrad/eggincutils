@@ -194,6 +194,7 @@ type SolveSnapshotRequest = {
 };
 
 type LastSolveInputs = SolveSnapshotRequest & {
+  eid: string;
   sourceFilters: PlannerSourceFilters;
 };
 
@@ -225,6 +226,9 @@ function readPersistedPlannerSession(): PersistedPlannerSession | null {
       typeof parsed.lastSolveRequest !== "object"
     ) {
       return null;
+    }
+    if (typeof parsed.lastSolveRequest.eid !== "string") {
+      parsed.lastSolveRequest.eid = parsed.profileSnapshot.eid === "DEMO" ? "" : parsed.profileSnapshot.eid;
     }
     return parsed as PersistedPlannerSession;
   } catch {
@@ -1484,7 +1488,6 @@ export default function MissionCraftPlannerPage() {
   const [includeDropFragments, setIncludeDropFragments] = useState(true);
   const [fastMode, setFastMode] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
   const [plannerProgress, setPlannerProgress] = useState<PlannerProgressState | null>(null);
@@ -2543,24 +2546,42 @@ export default function MissionCraftPlannerPage() {
     prefsLoaded,
   ]);
 
+  const currentNormalizedTargets = solveTargets.length > 0 ? solveTargets : [{ targetItemId, quantity }];
+  const currentPrimaryTarget = currentNormalizedTargets[0];
+  const currentAllowedShipDurations = shipSelectorSummary.allSelected
+    ? undefined
+    : shipSelectorSummary.allowed.map((entry) => ({ ...entry }));
+  const currentSolveRequest: LastSolveInputs = {
+    eid: trimmedEid,
+    targetItemId: currentPrimaryTarget.targetItemId,
+    quantity: currentPrimaryTarget.quantity,
+    targets: currentNormalizedTargets,
+    targetCraftedOnly,
+    priorityTime: activePriorityTimePct / 100,
+    fastMode,
+    allowedShipDurations: currentAllowedShipDurations,
+    selectedConsumptionItemIds,
+    sourceFilters: { ...sourceFilters },
+  };
+  const planInputsChanged =
+    !response || !lastSolveRequest || JSON.stringify(currentSolveRequest) !== JSON.stringify(lastSolveRequest);
+  const plannerReady = highs.ready && lootData !== null;
+
   async function runBuildPlan() {
-    const normalizedTargets = solveTargets.length > 0 ? solveTargets : [{ targetItemId, quantity }];
+    if (!plannerReady) {
+      setError("The local planner is still loading. Try again in a moment.");
+      return;
+    }
+    const snapshotRequest = currentSolveRequest;
+    const normalizedTargets = snapshotRequest.targets || [
+      { targetItemId: snapshotRequest.targetItemId, quantity: snapshotRequest.quantity },
+    ];
     const primaryTarget = normalizedTargets[0];
     const normalizedQuantity = primaryTarget.quantity;
     const allowedShipDurationsForSolve = shipSelectorSummary.allSelected
       ? undefined
       : shipSelectorSummary.allowed.map((entry) => ({ ...entry }));
-    const snapshotRequest: LastSolveInputs = {
-      targetItemId: primaryTarget.targetItemId,
-      quantity: normalizedQuantity,
-      targets: normalizedTargets,
-      targetCraftedOnly,
-      priorityTime: activePriorityTimePct / 100,
-      fastMode,
-      allowedShipDurations: allowedShipDurationsForSolve,
-      selectedConsumptionItemIds,
-      sourceFilters: { ...sourceFilters },
-    };
+    const baselineProfile = profileSnapshot;
     setTargetItemId(primaryTarget.targetItemId);
     setQuantity(normalizedQuantity);
     setQuantityInput(String(normalizedQuantity));
@@ -2600,9 +2621,11 @@ export default function MissionCraftPlannerPage() {
       writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDropLegendary], includeDropLegendary);
       writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDropFragments], includeDropFragments);
 
-      const canSolveClientSide = highsRef.current.ready && lootDataRef.current != null;
+      if (!highsRef.current.ready || !lootDataRef.current) {
+        throw new Error("The local planner is still loading. Try again in a moment.");
+      }
 
-      if (canSolveClientSide) {
+      {
         // Client-side solve: fetch profile from server, run planner locally.
         setPlannerProgress({
           phase: "init",
@@ -2680,137 +2703,20 @@ export default function MissionCraftPlannerPage() {
         setProfileSnapshot(profile);
         setLastSolveRequest(snapshotRequest);
         writePersistedPlannerSession(planResponse, profile, snapshotRequest);
-      } else {
-        // Server-side fallback: stream from /api/plan/stream.
-        const requestPayload = {
-          eid: trimmedEid,
-          targetItemId: primaryTarget.targetItemId,
-          targets: normalizedTargets,
-          quantity: normalizedQuantity,
-          priorityTime: activePriorityTimePct / 100,
-          inventorySource,
-          includeSlotted,
-          includeInventoryRare,
-          includeInventoryEpic,
-          includeInventoryLegendary,
-          includeInventoryFragments,
-          includeDropRare,
-          includeDropEpic,
-          includeDropLegendary,
-          includeDropFragments,
-          targetCraftedOnly,
-          fastMode,
-          allowedShipDurations: allowedShipDurationsForSolve,
-          selectedConsumptionItemIds,
-        };
-
-        const planResp = await fetch("/api/plan/stream", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(requestPayload),
-        });
-
-        if (!planResp.ok) {
-          const data = (await planResp.json()) as { error?: string; details?: unknown };
-          throw new Error(detailsText(data.details) || data.error || "planning request failed");
-        }
-
-        let streamResult: PlanResponse | null = null;
-        if (planResp.body) {
-          const reader = planResp.body.getReader();
-          const decoder = new TextDecoder();
-          let buffered = "";
-
-          const handleLine = (line: string) => {
-            if (!line) {
-              return;
-            }
-            let parsed: unknown;
-            try {
-              parsed = JSON.parse(line);
-            } catch {
-              return;
-            }
-
-            if (!parsed || typeof parsed !== "object" || !("type" in parsed)) {
-              return;
-            }
-            const message = parsed as PlanStreamMessage;
-            if (message.type === "progress") {
-              const progress = message.progress;
-              setPlannerProgress({
-                phase: progress.phase,
-                message: progress.message,
-                elapsedMs: Number.isFinite(progress.elapsedMs) ? Math.max(0, Math.round(progress.elapsedMs)) : 0,
-                completed: typeof progress.completed === "number" ? Math.max(0, Math.round(progress.completed)) : null,
-                total: typeof progress.total === "number" ? Math.max(0, Math.round(progress.total)) : null,
-                etaMs:
-                  typeof progress.etaMs === "number"
-                    ? Math.max(0, Math.round(progress.etaMs))
-                    : progress.etaMs === null
-                      ? null
-                      : null,
-              });
-              return;
-            }
-            if (message.type === "result") {
-              streamResult = message.data;
-              return;
-            }
-            if (message.type === "error") {
-              throw new Error(detailsText(message.details) || message.error || "planning stream failed");
-            }
-          };
-
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) {
-              buffered += decoder.decode();
-              break;
-            }
-            buffered += decoder.decode(value, { stream: true });
-            let newlineIndex = buffered.indexOf("\n");
-            while (newlineIndex >= 0) {
-              const line = buffered.slice(0, newlineIndex).trim();
-              buffered = buffered.slice(newlineIndex + 1);
-              handleLine(line);
-              newlineIndex = buffered.indexOf("\n");
-            }
+        if (baselineProfile && baselineProfile.eid === profile.eid) {
+          const deltas = buildReplanDeltas(baselineProfile, profile);
+          const totalLaunches = deltas.missionLaunches.reduce((sum, launch) => sum + launch.launches, 0);
+          const totalReturnItems = deltas.observedReturns.reduce((sum, item) => sum + item.quantity, 0);
+          if (deltas.missionLaunches.length === 0 && deltas.observedReturns.length === 0) {
+            setRefreshSummary("No new completed launches or item drops were detected in live profile data.");
+          } else {
+            setRefreshSummary(
+              `Detected ${deltas.missionLaunches.length} launch updates (${totalLaunches.toLocaleString()} launches) and ${deltas.observedReturns.length} drop deltas (${totalReturnItems.toFixed(
+                2
+              )} total item quantity).`
+            );
           }
-          const trailing = buffered.trim();
-          if (trailing.length > 0) {
-            handleLine(trailing);
-          }
-        } else {
-          const fallbackResp = await fetch("/api/plan", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(requestPayload),
-          });
-          const fallbackData = (await fallbackResp.json()) as PlanResponse & { error?: string; details?: unknown };
-          if (!fallbackResp.ok) {
-            throw new Error(detailsText(fallbackData.details) || fallbackData.error || "planning request failed");
-          }
-          streamResult = fallbackData;
         }
-
-        if (!streamResult) {
-          throw new Error("planning stream completed without a result");
-        }
-        let nextProfileSnapshot: ProfileSnapshot;
-        if (isDemoMode) {
-          nextProfileSnapshot = buildDemoProfileSnapshot(streamResult);
-        } else {
-          nextProfileSnapshot = await fetchProfileSnapshot(trimmedEid, sourceFilters);
-        }
-        setResponse(streamResult);
-        setProfileSnapshot(nextProfileSnapshot);
-        setLastSolveRequest(snapshotRequest);
-        writePersistedPlannerSession(streamResult, nextProfileSnapshot, snapshotRequest);
       }
     } catch (caught) {
       const message = caught instanceof Error && caught.message ? caught.message : "planning request failed";
@@ -2819,106 +2725,6 @@ export default function MissionCraftPlannerPage() {
       setLoading(false);
       setPlannerProgress(null);
       setPlanningStartedAtMs(null);
-    }
-  }
-
-  async function onRefreshFromLive() {
-    if (!response) {
-      return;
-    }
-    if (isDemoMode) {
-      setError("Live refresh is unavailable in demo mode. Enter your EID to replan from your account data.");
-      return;
-    }
-
-    setError(null);
-    setRefreshSummary(null);
-    setRefreshing(true);
-    const normalizedTargets = lastSolveRequest?.targets?.length
-      ? lastSolveRequest.targets
-      : solveTargets.length > 0
-        ? solveTargets
-        : [{ targetItemId, quantity: Math.max(1, Math.min(9999, Math.round(Number(quantityInput) || quantity || 1))) }];
-    const primaryTarget = normalizedTargets[0];
-    const normalizedQuantity = primaryTarget.quantity;
-    const allowedShipDurationsForReplan = shipSelectorSummary.allSelected
-      ? undefined
-      : shipSelectorSummary.allowed.map((entry) => ({ ...entry }));
-    setQuantity(normalizedQuantity);
-    setQuantityInput(String(normalizedQuantity));
-
-    try {
-      const liveProfile = await fetchProfileSnapshot(trimmedEid, sourceFilters);
-      const baselineProfile = profileSnapshot || liveProfile;
-      const deltas = buildReplanDeltas(baselineProfile, liveProfile);
-
-      const replanResp = await fetch("/api/plan/replan", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          profile: liveProfile,
-          targetItemId: primaryTarget.targetItemId,
-          targets: normalizedTargets,
-          quantity: normalizedQuantity,
-          priorityTime: activePriorityTimePct / 100,
-          inventorySource,
-          targetCraftedOnly,
-          fastMode,
-          includeDropRare,
-          includeDropEpic,
-          includeDropLegendary,
-          includeDropFragments,
-          allowedShipDurations: allowedShipDurationsForReplan,
-          selectedConsumptionItemIds,
-          observedReturns: [],
-          missionLaunches: [],
-        }),
-      });
-
-      const data = (await replanResp.json()) as PlanResponse & { error?: string; details?: unknown };
-      if (!replanResp.ok) {
-        const detailText =
-          typeof data.details === "string"
-            ? data.details
-            : Array.isArray(data.details)
-              ? data.details.join("; ")
-              : "";
-        throw new Error(detailText || data.error || "replan request failed");
-      }
-
-      const nextSolveRequest: LastSolveInputs = {
-        targetItemId: primaryTarget.targetItemId,
-        quantity: normalizedQuantity,
-        targets: normalizedTargets,
-        priorityTime: activePriorityTimePct / 100,
-        targetCraftedOnly,
-        fastMode,
-        allowedShipDurations: allowedShipDurationsForReplan,
-        selectedConsumptionItemIds,
-        sourceFilters: { ...sourceFilters },
-      };
-      setResponse(data);
-      setProfileSnapshot(liveProfile);
-      setLastSolveRequest(nextSolveRequest);
-      writePersistedPlannerSession(data, liveProfile, nextSolveRequest);
-
-      const totalLaunches = deltas.missionLaunches.reduce((sum, launch) => sum + launch.launches, 0);
-      const totalReturnItems = deltas.observedReturns.reduce((sum, item) => sum + item.quantity, 0);
-      if (deltas.missionLaunches.length === 0 && deltas.observedReturns.length === 0) {
-        setRefreshSummary("No new completed launches or item drops were detected in live profile data.");
-      } else {
-        setRefreshSummary(
-          `Applied ${deltas.missionLaunches.length} launch updates (${totalLaunches.toLocaleString()} launches) and ${deltas.observedReturns.length} drop deltas (${totalReturnItems.toFixed(
-            2
-          )} total item quantity).`
-        );
-      }
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "unknown refresh error");
-    } finally {
-      setRefreshing(false);
     }
   }
 
@@ -3724,19 +3530,17 @@ export default function MissionCraftPlannerPage() {
                 <span aria-hidden="true" />
                 <span>Faster, less optimal solve</span>
               </label>
-              <button type="submit" className={styles.buildButton} disabled={loading}>
+              <button type="submit" className={styles.buildButton} disabled={loading || !plannerReady}>
                 <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
                   <path d="M8.9 1.25 3.6 8.45h3.55l-.05 6.3 5.3-7.2H8.85l.05-6.3Z" />
                 </svg>
-                {loading ? "Planning..." : "Build plan"}
-              </button>
-              <button
-                type="button"
-                className={styles.secondaryButton}
-                disabled={loading || refreshing || !response || isDemoMode}
-                onClick={onRefreshFromLive}
-              >
-                {refreshing ? "Replanning..." : "Replan after ship returns"}
+                {loading
+                  ? "Planning..."
+                  : !plannerReady
+                    ? "Loading planner..."
+                    : planInputsChanged
+                      ? "Build plan"
+                      : "Update plan"}
               </button>
             </div>
           </div>
