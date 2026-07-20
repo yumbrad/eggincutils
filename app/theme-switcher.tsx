@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-type ThemeMode = "dark" | "light";
+type ThemeMode = "dark" | "dim" | "light";
 
 const STORAGE_KEY = "eggincutils-theme";
 
@@ -16,7 +16,7 @@ export default function ThemeSwitcher() {
 
   useEffect(() => {
     const saved = window.localStorage.getItem(STORAGE_KEY);
-    const resolved: ThemeMode = saved === "light" ? "light" : "dark";
+    const resolved: ThemeMode = saved === "light" ? "light" : saved === "dim" ? "dim" : "dark";
     setTheme(resolved);
     applyTheme(resolved);
     setReady(true);
@@ -33,6 +33,7 @@ export default function ThemeSwitcher() {
       <label htmlFor="theme-mode">Theme</label>
       <select id="theme-mode" value={theme} onChange={(event) => onThemeChange(event.target.value as ThemeMode)}>
         <option value="dark">Dark</option>
+        <option value="dim">Dim</option>
         <option value="light">Light</option>
       </select>
     </div>

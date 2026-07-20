@@ -15,7 +15,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script
           dangerouslySetInnerHTML={{
             __html:
-              "try{var t=localStorage.getItem('eggincutils-theme');document.documentElement.dataset.theme=(t==='light'?'light':'dark');}catch(_e){document.documentElement.dataset.theme='dark';}",
+              "try{var t=localStorage.getItem('eggincutils-theme');document.documentElement.dataset.theme=(t==='light'?'light':t==='dim'?'dim':'dark');}catch(_e){document.documentElement.dataset.theme='dark';}",
           }}
         />
       </head>
