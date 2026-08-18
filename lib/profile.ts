@@ -82,6 +82,9 @@ type SparseMissionInfo = BackupMissionInfo & {
   level?: number;
   capacity?: number;
   secondsRemaining?: number;
+  /** Unix seconds when the mission launched. */
+  startTimeDerived?: number;
+  durationSeconds?: number;
   targetArtifact?: string;
   /** Absent means STANDARD — the proto's zero value. */
   type?: string;
@@ -197,6 +200,8 @@ export async function getPlayerProfile(
         errorCode?: string | number;
         errorMessage?: string;
         backup?: {
+          /** Unix seconds of the client's last sync. */
+          approxTime?: number;
           artifacts?: {
             craftingXp?: number;
           };
@@ -239,7 +244,8 @@ export async function getPlayerProfile(
       const inFlightMissions = parseInFlightMissions(
         sparseMissionInfos(decodedResponse, root),
         root.lookupEnum("ei.ArtifactSpec.Name").values,
-        inventorySource
+        inventorySource,
+        { backupApproxTimeSeconds: data.backup?.approxTime || 0 }
       );
 
       return {
@@ -428,11 +434,40 @@ function missionMatchesSource(type: string | undefined, inventorySource: Invento
   return isVirtueMission === (inventorySource === "virtue");
 }
 
+/**
+ * How long until this mission actually lands, right now.
+ *
+ * `secondsRemaining` is a snapshot the client wrote at its last sync, so by the
+ * time we read the backup it is stale by however long ago that was — often
+ * hours. The launch timestamp is absolute, so `launch + duration` gives a real
+ * return time regardless of when the player last opened the game. Only when
+ * that is missing do we fall back to ageing the snapshot by the backup's own
+ * timestamp.
+ *
+ * A mission whose return time has already passed reads as 0: it has landed and
+ * is waiting to be collected, even if the stale backup still says EXPLORING.
+ */
+function secondsUntilReturn(
+  item: SparseMissionInfo,
+  nowSeconds: number,
+  backupApproxTimeSeconds: number
+): number {
+  if (item.startTimeDerived && item.durationSeconds) {
+    return Math.max(0, item.startTimeDerived + item.durationSeconds - nowSeconds);
+  }
+  const snapshot = item.secondsRemaining || 0;
+  const staleness = backupApproxTimeSeconds > 0 ? Math.max(0, nowSeconds - backupApproxTimeSeconds) : 0;
+  return Math.max(0, snapshot - staleness);
+}
+
 export function parseInFlightMissions(
   items: SparseMissionInfo[],
   artifactAfxIdByName: Record<string, number>,
-  inventorySource: InventorySource = "main"
+  inventorySource: InventorySource = "main",
+  timing: { nowSeconds?: number; backupApproxTimeSeconds?: number } = {}
 ): InFlightMission[] {
+  const nowSeconds = timing.nowSeconds ?? Date.now() / 1000;
+  const backupApproxTimeSeconds = timing.backupApproxTimeSeconds ?? 0;
   const missions: InFlightMission[] = [];
   for (const item of items) {
     if (!item.ship || !item.durationType || !item.status) {
@@ -452,7 +487,7 @@ export function parseInFlightMissions(
       level: Math.max(0, Math.round(item.level || 0)),
       capacity: Math.max(0, Math.round(item.capacity || 0)),
       targetAfxId: typeof targetAfxIdRaw === "number" ? targetAfxIdRaw : null,
-      secondsRemaining: Math.max(0, Math.round(item.secondsRemaining || 0)),
+      secondsRemaining: Math.round(secondsUntilReturn(item, nowSeconds, backupApproxTimeSeconds)),
     });
   }
   return missions;

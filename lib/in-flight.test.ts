@@ -143,6 +143,47 @@ describe("parseInFlightMissions", () => {
     expect(parseInFlightMissions(items, afxIds).map((entry) => entry.capacity)).toEqual([1, 2]);
   });
 
+  describe("remaining time", () => {
+    const NOW = 1_700_000_000;
+    const base = { ship: "HENERPRISE", durationType: "EPIC", status: "EXPLORING" as const };
+
+    function remaining(item: Record<string, unknown>, backupApproxTimeSeconds = 0): number {
+      return parseInFlightMissions([{ ...base, ...item }], afxIds, "main", {
+        nowSeconds: NOW,
+        backupApproxTimeSeconds,
+      })[0].secondsRemaining;
+    }
+
+    it("measures from the launch timestamp, not the stale client snapshot", () => {
+      // Launched 3h ago on a 4h mission, but the client last synced when it had
+      // 4h to go. The honest answer is 1h, not the snapshot's 4h.
+      expect(
+        remaining({
+          startTimeDerived: NOW - 3 * 3600,
+          durationSeconds: 4 * 3600,
+          secondsRemaining: 4 * 3600,
+        })
+      ).toBe(3600);
+    });
+
+    it("reports a mission whose return time has passed as landed", () => {
+      expect(
+        remaining({ startTimeDerived: NOW - 10 * 3600, durationSeconds: 4 * 3600, secondsRemaining: 4 * 3600 })
+      ).toBe(0);
+    });
+
+    it("ages the snapshot by the backup's own timestamp when no launch time exists", () => {
+      // Snapshot said 4h left, but the backup itself is 3h old.
+      expect(remaining({ secondsRemaining: 4 * 3600 }, NOW - 3 * 3600)).toBe(3600);
+      // Never ages past zero.
+      expect(remaining({ secondsRemaining: 4 * 3600 }, NOW - 30 * 3600)).toBe(0);
+    });
+
+    it("uses the snapshot as-is when there is nothing to date it against", () => {
+      expect(remaining({ secondsRemaining: 4 * 3600 })).toBe(4 * 3600);
+    });
+  });
+
   it("reads a set target and leaves an absent one null", () => {
     const parsed = parseInFlightMissions(
       [
