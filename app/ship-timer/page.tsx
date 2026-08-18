@@ -35,6 +35,26 @@ type MissionRow = {
   bad: boolean;
 };
 
+type ChainLeg = {
+  id: string;
+  shipName: string;
+  setting: MissionSetting["setting"];
+  duration: string;
+  fromValue: string;
+  fromMs: number;
+  toValue: string;
+  toMs: number;
+};
+
+type TooltipState = {
+  title: string;
+  detail: string;
+  left: number;
+  top: number;
+  width: number;
+  below: boolean;
+};
+
 const SHIP_IMAGE_SIZE = 128;
 const SHIP_PREVIEW_IMAGE_SIZES = [256, 128];
 const SHIP_IMAGE_HOSTS = ["https://eggincassets.pages.dev", "https://eggincassets.tcl.sh"];
@@ -466,6 +486,87 @@ function ReturnClock({
   return <div className={styles.clock} style={style} aria-hidden="true" />;
 }
 
+const TOOLTIP_MAX_WIDTH = 300;
+const TOOLTIP_GAP = 10;
+
+function tooltipStateFor(row: MissionRow, anchor: HTMLElement): TooltipState {
+  const rect = anchor.getBoundingClientRect();
+  const width = Math.min(TOOLTIP_MAX_WIDTH, window.innerWidth - 24);
+  const half = width / 2;
+  const center = rect.left + rect.width / 2;
+  const left = Math.min(Math.max(center, 12 + half), Math.max(12 + half, window.innerWidth - 12 - half));
+  const below = rect.top < 110;
+  return {
+    title: "Stack the next launch here",
+    detail: `Sets Launch time to ${fmtReturn(row.ret)}, when this ${row.setting.toLowerCase()} ${row.shipName} run lands. The table then shows what you would get by relaunching at that moment.`,
+    left,
+    top: below ? rect.bottom + TOOLTIP_GAP : rect.top - TOOLTIP_GAP,
+    width,
+    below,
+  };
+}
+
+function StackTooltip({ tooltip }: { tooltip: TooltipState }): JSX.Element {
+  return (
+    <div
+      className={styles.tooltip}
+      role="tooltip"
+      style={{
+        left: tooltip.left,
+        top: tooltip.top,
+        width: tooltip.width,
+        transform: tooltip.below ? "translate(-50%, 0)" : "translate(-50%, -100%)",
+      }}
+    >
+      <strong className={styles.tooltipTitle}>{tooltip.title}</strong>
+      <span className={styles.tooltipDetail}>{tooltip.detail}</span>
+    </div>
+  );
+}
+
+function ReturnCell({
+  row,
+  sleepStart,
+  sleepEnd,
+  darkMode,
+  onStack,
+  onShowTooltip,
+  onHideTooltip,
+}: {
+  row: MissionRow;
+  sleepStart: number;
+  sleepEnd: number;
+  darkMode: boolean;
+  onStack: (row: MissionRow) => void;
+  onShowTooltip: (row: MissionRow, anchor: HTMLElement) => void;
+  onHideTooltip: () => void;
+}): JSX.Element {
+  const label = fmtReturn(row.ret);
+  return (
+    <td
+      className={styles.returnCell}
+      style={{ backgroundColor: returnCellBackgroundColor(row.retMinOfDay, row.bad, sleepStart, sleepEnd, darkMode) }}
+    >
+      <button
+        type="button"
+        className={styles.returnButton}
+        onClick={() => {
+          onStack(row);
+          onHideTooltip();
+        }}
+        onMouseEnter={(event) => onShowTooltip(row, event.currentTarget)}
+        onFocus={(event) => onShowTooltip(row, event.currentTarget)}
+        onMouseLeave={onHideTooltip}
+        onBlur={onHideTooltip}
+        aria-label={`Stack the next launch at ${label}, when this ${row.setting.toLowerCase()} ${row.shipName} mission returns`}
+      >
+        <ReturnClock minOfDay={row.retMinOfDay} sleepStart={sleepStart} sleepEnd={sleepEnd} darkMode={darkMode} />
+        <span className={styles.returnLabel}>{label}</span>
+      </button>
+    </td>
+  );
+}
+
 function isLightThemeRoot(): boolean {
   if (typeof document === "undefined") {
     return false;
@@ -474,7 +575,9 @@ function isLightThemeRoot(): boolean {
 }
 
 export default function ShipTimerPage(): JSX.Element {
-  const [launchValue, setLaunchValue] = useState<string>(() => toLocalDatetimeValue(new Date()));
+  // Empty until mount: the default launch time depends on the visitor's clock and
+  // timezone, so rendering it during the prerender would not survive hydration.
+  const [launchValue, setLaunchValue] = useState<string>("");
   const [ftlValue, setFtlValue] = useState<number>(60);
   const [sleepStartValue, setSleepStartValue] = useState<string>("23:00");
   const [sleepEndValue, setSleepEndValue] = useState<string>("07:00");
@@ -482,6 +585,8 @@ export default function ShipTimerPage(): JSX.Element {
   const [sortMode, setSortMode] = useState<SortMode>("ship");
   const [copyStatus, setCopyStatus] = useState<string>("");
   const [darkMode, setDarkMode] = useState<boolean>(() => !isLightThemeRoot());
+  const [chain, setChain] = useState<ChainLeg[]>([]);
+  const [tooltip, setTooltip] = useState<TooltipState | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -492,9 +597,7 @@ export default function ShipTimerPage(): JSX.Element {
     const view = params.get("viewMode");
     const sort = params.get("sortMode");
 
-    if (launch) {
-      setLaunchValue(launch);
-    }
+    setLaunchValue(launch || toLocalDatetimeValue(new Date()));
     if (ftl != null) {
       setFtlValue(clampFtl(Number(ftl)));
     }
@@ -529,6 +632,9 @@ export default function ShipTimerPage(): JSX.Element {
   }, []);
 
   useEffect(() => {
+    if (!launchValue) {
+      return;
+    }
     const params = new URLSearchParams();
     params.set("launch", launchValue);
     params.set("ftl", String(ftlValue));
@@ -539,6 +645,19 @@ export default function ShipTimerPage(): JSX.Element {
     const url = `${window.location.pathname}?${params.toString()}`;
     window.history.replaceState(null, "", url);
   }, [launchValue, ftlValue, sleepStartValue, sleepEndValue, viewMode, sortMode]);
+
+  useEffect(() => {
+    if (!tooltip) {
+      return;
+    }
+    const hide = () => setTooltip(null);
+    window.addEventListener("scroll", hide, true);
+    window.addEventListener("resize", hide);
+    return () => {
+      window.removeEventListener("scroll", hide, true);
+      window.removeEventListener("resize", hide);
+    };
+  }, [tooltip]);
 
   const launchDate = useMemo(() => {
     const parsed = new Date(launchValue);
@@ -614,6 +733,66 @@ export default function ShipTimerPage(): JSX.Element {
     return groups;
   }, [rows, sortMode]);
 
+  const chainSpanMinutes = useMemo(() => {
+    if (chain.length === 0) {
+      return 0;
+    }
+    const span = chain[chain.length - 1].toMs - chain[0].fromMs;
+    return Number.isFinite(span) ? span / 60000 : 0;
+  }, [chain]);
+
+  // Any launch time the user sets directly is a fresh starting point, so the stack resets with it.
+  function setLaunchDirectly(value: string): void {
+    setLaunchValue(value);
+    setChain([]);
+  }
+
+  function stackLaunch(row: MissionRow): void {
+    if (!launchDate) {
+      return;
+    }
+    const toValue = toLocalDatetimeValue(row.ret);
+    setChain([
+      ...chain,
+      {
+        id: `${chain.length}:${row.key}`,
+        shipName: row.shipName,
+        setting: row.setting,
+        duration: row.duration,
+        fromValue: launchValue,
+        fromMs: launchDate.getTime(),
+        toValue,
+        toMs: row.ret.getTime(),
+      },
+    ]);
+    setLaunchValue(toValue);
+  }
+
+  function showStackTooltip(row: MissionRow, anchor: HTMLElement): void {
+    setTooltip(tooltipStateFor(row, anchor));
+  }
+
+  function hideStackTooltip(): void {
+    setTooltip(null);
+  }
+
+  function undoLastStack(): void {
+    const last = chain[chain.length - 1];
+    if (!last) {
+      return;
+    }
+    setChain(chain.slice(0, -1));
+    setLaunchValue(last.fromValue);
+  }
+
+  function clearStack(): void {
+    if (chain.length === 0) {
+      return;
+    }
+    setLaunchValue(chain[0].fromValue);
+    setChain([]);
+  }
+
   async function copyLink(): Promise<void> {
     setCopyStatus("");
     try {
@@ -664,13 +843,15 @@ export default function ShipTimerPage(): JSX.Element {
                 className={styles.launchInput}
                 type="datetime-local"
                 value={launchValue}
-                onChange={(event) => setLaunchValue(event.target.value)}
+                onChange={(event) => setLaunchDirectly(event.target.value)}
               />
-              <button type="button" onClick={() => setLaunchValue(toLocalDatetimeValue(new Date()))}>
+              <button type="button" onClick={() => setLaunchDirectly(toLocalDatetimeValue(new Date()))}>
                 Use now
               </button>
             </div>
-            <div className={styles.mutedSmall}>Uses your device timezone.</div>
+            <div className={styles.mutedSmall}>
+              Uses your device timezone. Click any return time below to stack the next launch from there.
+            </div>
           </div>
 
           <div className={styles.control}>
@@ -690,6 +871,42 @@ export default function ShipTimerPage(): JSX.Element {
             </div>
           </div>
         </div>
+
+        {chain.length > 0 && (
+          <div className={styles.chainBox}>
+            <div className={styles.chainHeader}>
+              <strong>Stacked launches</strong>
+              <span className={styles.mutedSmall}>
+                {chain.length} back to back, spanning {formatMinutesAsDuration(chainSpanMinutes)} from the first launch.
+              </span>
+              <div className={styles.chainActions}>
+                <button type="button" onClick={undoLastStack}>
+                  Undo last
+                </button>
+                <button type="button" onClick={clearStack}>
+                  Clear
+                </button>
+              </div>
+            </div>
+            <ol className={styles.chainList}>
+              {chain.map((leg, index) => (
+                <li key={leg.id}>
+                  <span className={styles.chainIndex}>{index + 1}</span>
+                  <span className={styles.chainShip}>{leg.shipName}</span>
+                  <span className={styles.mutedSmall}>{leg.setting}</span>
+                  <span className="mono">{leg.duration}</span>
+                  <span className={styles.chainArrow} aria-hidden="true">
+                    →
+                  </span>
+                  <span className="mono">{fmtReturn(new Date(leg.toMs))}</span>
+                </li>
+              ))}
+            </ol>
+            <div className={styles.mutedSmall}>
+              The table below is now showing returns for a launch made at the end of this stack.
+            </div>
+          </div>
+        )}
 
         <div className={styles.row} style={{ marginTop: 10 }}>
           <div className={styles.control}>
@@ -762,7 +979,7 @@ export default function ShipTimerPage(): JSX.Element {
                 <th>Ship</th>
                 <th>Setting</th>
                 <th>Duration</th>
-                <th>Return time</th>
+                <th>Return time (click to stack)</th>
               </tr>
             </thead>
             <tbody>
@@ -777,12 +994,15 @@ export default function ShipTimerPage(): JSX.Element {
                     </td>
                     <td>{row.setting}</td>
                     <td className="mono">{row.duration}</td>
-                    <td style={{ backgroundColor: returnCellBackgroundColor(row.retMinOfDay, row.bad, sleepStart, sleepEnd, darkMode) }}>
-                      <div className={styles.returnWrap}>
-                        <ReturnClock minOfDay={row.retMinOfDay} sleepStart={sleepStart} sleepEnd={sleepEnd} darkMode={darkMode} />
-                        <span>{fmtReturn(row.ret)}</span>
-                      </div>
-                    </td>
+                    <ReturnCell
+                      row={row}
+                      sleepStart={sleepStart}
+                      sleepEnd={sleepEnd}
+                      darkMode={darkMode}
+                      onStack={stackLaunch}
+                      onShowTooltip={showStackTooltip}
+                      onHideTooltip={hideStackTooltip}
+                    />
                   </tr>
                 ))}
 
@@ -806,12 +1026,15 @@ export default function ShipTimerPage(): JSX.Element {
                       )}
                       <td>{row.setting}</td>
                       <td className="mono">{row.duration}</td>
-                      <td style={{ backgroundColor: returnCellBackgroundColor(row.retMinOfDay, row.bad, sleepStart, sleepEnd, darkMode) }}>
-                        <div className={styles.returnWrap}>
-                          <ReturnClock minOfDay={row.retMinOfDay} sleepStart={sleepStart} sleepEnd={sleepEnd} darkMode={darkMode} />
-                          <span>{fmtReturn(row.ret)}</span>
-                        </div>
-                      </td>
+                      <ReturnCell
+                        row={row}
+                        sleepStart={sleepStart}
+                        sleepEnd={sleepEnd}
+                        darkMode={darkMode}
+                        onStack={stackLaunch}
+                        onShowTooltip={showStackTooltip}
+                        onHideTooltip={hideStackTooltip}
+                      />
                     </tr>
                   ))
                 )}
@@ -825,6 +1048,8 @@ export default function ShipTimerPage(): JSX.Element {
           </Link>
         </div>
       </div>
+
+      {tooltip && <StackTooltip tooltip={tooltip} />}
     </main>
   );
 }
