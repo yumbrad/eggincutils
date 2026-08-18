@@ -172,6 +172,16 @@ export const missionOptionSchema = z.object({
   capacity: nonNegativeIntSchema,
 });
 
+const inFlightMissionSchema = z.object({
+  ship: z.string().min(1),
+  durationType: z.string().min(1),
+  status: z.string().min(1),
+  level: nonNegativeIntSchema,
+  capacity: nonNegativeIntSchema,
+  targetAfxId: nonNegativeIntSchema.nullable(),
+  secondsRemaining: nonNegativeIntSchema,
+});
+
 export const playerProfileSchema = z.object({
   eid: z.string().min(1),
   inventory: z.record(z.string(), nonNegativeFiniteSchema),
@@ -181,6 +191,7 @@ export const playerProfileSchema = z.object({
   epicResearchZerogLevel: nonNegativeIntSchema,
   shipLevels: z.array(shipLevelInfoSchema),
   missionOptions: z.array(missionOptionSchema),
+  inFlightMissions: z.array(inFlightMissionSchema).optional(),
 });
 
 const observedReturnSchema = z.object({
@@ -270,6 +281,9 @@ const planMissionRowSchema = z.object({
   launches: nonNegativeIntSchema,
   durationSeconds: nonNegativeIntSchema,
   expectedYields: z.array(planMissionYieldSchema),
+  inAir: z.boolean().optional(),
+  secondsRemaining: nonNegativeIntSchema.optional(),
+  launchSecondsRemaining: z.array(nonNegativeIntSchema).optional(),
 });
 
 const planUnmetItemSchema = z.object({
@@ -334,6 +348,19 @@ export const plannerResultSchema = z.object({
     prepLaunches: z.array(planProgressionLaunchSchema),
     projectedShipLevels: z.array(planProgressionShipSchema),
   }),
+  inFlight: z
+    .object({
+      missionCount: nonNegativeIntSchema,
+      secondsRemaining: nonNegativeIntSchema,
+    })
+    .default({ missionCount: 0, secondsRemaining: 0 }),
+  schedule: z
+    .object({
+      missionSeconds: nonNegativeIntSchema,
+      inAirSeconds: nonNegativeIntSchema,
+      totalSeconds: nonNegativeIntSchema,
+    })
+    .default({ missionSeconds: 0, inAirSeconds: 0, totalSeconds: 0 }),
   notes: z.array(z.string()),
   availableCombos: z.array(availableComboSchema),
 });

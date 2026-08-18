@@ -124,6 +124,9 @@ type PlanResponse = {
       launches: number;
       durationSeconds: number;
       expectedYields: Array<{ itemId: string; quantity: number }>;
+      inAir?: boolean;
+      secondsRemaining?: number;
+      launchSecondsRemaining?: number[];
     }>;
     unmetItems: Array<{ itemId: string; quantity: number }>;
     targetBreakdown: {
@@ -151,6 +154,15 @@ type PlanResponse = {
         reason: string;
       }>;
       projectedShipLevels: Array<ShipLevelInfo>;
+    };
+    inFlight: {
+      missionCount: number;
+      secondsRemaining: number;
+    };
+    schedule: {
+      missionSeconds: number;
+      inAirSeconds: number;
+      totalSeconds: number;
     };
     notes: string[];
     availableCombos: Array<{
@@ -306,7 +318,7 @@ type TimelineSegment = {
   durationSeconds: number;
   totalSlotSeconds: number;
   color: string;
-  phase: "mission" | "prep";
+  phase: "mission" | "prep" | "inAir";
   ship: string;
   durationType: string;
   level: number | null;
@@ -318,7 +330,7 @@ type TimelineLaneBlock = {
   label: string;
   subtitle: string;
   color: string;
-  phase: "mission" | "prep";
+  phase: "mission" | "prep" | "inAir";
   launches: number;
   totalSeconds: number;
   startSeconds: number;
@@ -767,7 +779,10 @@ function sortTimelineSegmentsForLegend(segments: TimelineSegment[]): TimelineSeg
 
 function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | null {
   const missionColorByKey = buildMissionColorMap(plan.missions);
+  // In-air missions are not launches to schedule — they are slots already
+  // occupied, so they seed the lanes instead of being packed into them.
   const rawMissionSegments: TimelineSegment[] = plan.missions
+    .filter((mission) => !mission.inAir)
     .map((mission: PlanMissionRow, index): TimelineSegment | null => {
       const launches = Math.max(0, Math.round(mission.launches));
       const durationSeconds = Math.max(0, Math.round(mission.durationSeconds));
@@ -906,12 +921,41 @@ function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | nul
     });
   }
 
-  if (segments.length === 0) {
+  const inAirLaunches = plan.missions
+    .filter((mission) => mission.inAir)
+    .flatMap((mission) =>
+      (mission.launchSecondsRemaining || [mission.secondsRemaining || 0]).map((seconds) => ({
+        mission,
+        seconds: Math.max(0, Math.round(seconds)),
+      }))
+    )
+    .sort((a, b) => b.seconds - a.seconds)
+    .slice(0, 3);
+
+  if (segments.length === 0 && inAirLaunches.length === 0) {
     return null;
   }
 
   const lanes: TimelineLaneBlock[][] = [[], [], []];
   const laneLoads = [0, 0, 0];
+
+  inAirLaunches.forEach(({ mission, seconds }, lane) => {
+    if (seconds <= 0) {
+      return;
+    }
+    lanes[lane].push({
+      id: `in-air:${lane}:${mission.missionId}`,
+      label: `${titleCaseShip(mission.ship)} ${durationTypeWithLevelLabel(mission.durationType, mission.level)}`,
+      subtitle: `In air · ${afxIdToTargetFamilyName(mission.targetAfxId)}`,
+      color: missionColorByKey.get(missionColorKey(mission)) || prepTimelineColor(missionColorKey(mission)),
+      phase: "inAir",
+      launches: 1,
+      totalSeconds: seconds,
+      startSeconds: 0,
+      endSeconds: seconds,
+    });
+    laneLoads[lane] = seconds;
+  });
 
   const scheduleSegment = (segment: TimelineSegment, earliestStartSeconds: number): number => {
     const effectiveLaneLoads = laneLoads.map((load) => Math.max(load, earliestStartSeconds));
@@ -1056,6 +1100,25 @@ function buildVirtueFuelCharts(plan: PlanResponse["plan"]): FuelCharts | null {
   const maxTotal = Math.max(0, ...rows.map((row) => row.total));
   const total = rows.reduce((sum, row) => sum + row.total, 0);
   return rows.length > 0 && maxTotal > 0 ? { rows, maxTotal, total } : null;
+}
+
+/** "returns in 14h", or "returns in 9h – 14h" when a grouped row lands staggered. */
+function formatInAirReturnLabel(launchSecondsRemaining?: number[], secondsRemaining?: number): string {
+  const waits = (launchSecondsRemaining || []).filter((seconds) => Number.isFinite(seconds));
+  const longest = waits.length > 0 ? Math.max(...waits) : secondsRemaining || 0;
+  const shortest = waits.length > 0 ? Math.min(...waits) : longest;
+  const longestLabel = formatDurationFromHours(longest / 3600);
+  if (shortest === longest) {
+    return `returns in ${longestLabel}`;
+  }
+  return `returns in ${formatDurationFromHours(shortest / 3600)} – ${longestLabel}`;
+}
+
+/** Calendar stamp for a projected finish, e.g. "Thu Aug 20, 4:12 PM". */
+function formatPlanCompletion(at: Date): string {
+  const day = at.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  const time = at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return `${day}, ${time}`;
 }
 
 function formatDurationFromHours(hours: number): string {
@@ -1493,6 +1556,9 @@ export default function MissionCraftPlannerPage() {
   const [plannerProgress, setPlannerProgress] = useState<PlannerProgressState | null>(null);
   const [planningStartedAtMs, setPlanningStartedAtMs] = useState<number | null>(null);
   const [response, setResponse] = useState<PlanResponse | null>(null);
+  // When the plan's clock starts. A restored plan keeps its original stamp so
+  // the projected completion does not silently slide forward with the page.
+  const [planReceivedAtMs, setPlanReceivedAtMs] = useState<number | null>(null);
   const [profileSnapshot, setProfileSnapshot] = useState<ProfileSnapshot | null>(null);
   const [demoNoticeDismissed, setDemoNoticeDismissed] = useState(false);
   const [prefsLoaded, setPrefsLoaded] = useState(false);
@@ -1744,6 +1810,20 @@ export default function MissionCraftPlannerPage() {
     [inventorySource, response]
   );
   const expectedMissionHours = response?.plan.expectedHours ?? (missionTimeline ? missionTimeline.totalSeconds / 3600 : 0);
+  const inFlightSummary = response?.plan.inFlight;
+  const planSchedule = response?.plan.schedule;
+  // Wall-clock finish if the player starts launching now. Taken from the
+  // timeline makespan so the date always agrees with the chart below it: in-air
+  // ships hold their slots first, then prep and the plan's own launches.
+  const projectedCompletion = useMemo(() => {
+    if (!missionTimeline || planReceivedAtMs == null || missionTimeline.totalSeconds <= 0) {
+      return null;
+    }
+    return {
+      totalSeconds: missionTimeline.totalSeconds,
+      at: new Date(planReceivedAtMs + missionTimeline.totalSeconds * 1000),
+    };
+  }, [missionTimeline, planReceivedAtMs]);
   const craftPlanDetailRows = useMemo(() => {
     if (!response) {
       return [] as CraftPlanDetailRow[];
@@ -2209,6 +2289,8 @@ export default function MissionCraftPlannerPage() {
         setResponse(savedSession.response);
         setProfileSnapshot(savedSession.profileSnapshot);
         setLastSolveRequest(savedSession.lastSolveRequest);
+        const savedAtMs = new Date(savedSession.savedAt).getTime();
+        setPlanReceivedAtMs(Number.isNaN(savedAtMs) ? Date.now() : savedAtMs);
         const savedDate = new Date(savedSession.savedAt);
         const savedLabel = Number.isNaN(savedDate.getTime()) ? "an earlier visit" : savedDate.toLocaleString();
         setRefreshSummary(`Restored the plan saved ${savedLabel}. Replan to update it with current profile data.`);
@@ -2638,7 +2720,7 @@ export default function MissionCraftPlannerPage() {
 
         let profile: ProfileSnapshot;
         if (isDemoMode) {
-          profile = createDemoProfile() as unknown as ProfileSnapshot;
+          profile = createDemoProfile(inventorySource) as unknown as ProfileSnapshot;
         } else {
           profile = await fetchProfileSnapshot(trimmedEid, sourceFilters);
         }
@@ -2700,6 +2782,7 @@ export default function MissionCraftPlannerPage() {
           plan: result,
         };
         setResponse(planResponse);
+        setPlanReceivedAtMs(Date.now());
         setProfileSnapshot(profile);
         setLastSolveRequest(snapshotRequest);
         writePersistedPlannerSession(planResponse, profile, snapshotRequest);
@@ -3605,8 +3688,29 @@ export default function MissionCraftPlannerPage() {
             <div className="card">
               <div className="muted">Expected mission time</div>
               <div className="kpi">{formatDurationFromHours(expectedMissionHours)}</div>
-              <div className="muted">3 mission slots assumed</div>
+              {inFlightSummary && inFlightSummary.missionCount > 0 ? (
+                <div
+                  className={`muted ${styles.tooltipValue}`}
+                  title={`${inFlightSummary.missionCount} mission${inFlightSummary.missionCount === 1 ? "" : "s"} already in the air hold their slots for another ${formatDurationFromHours((planSchedule?.inAirSeconds || 0) / 3600)}. Their expected drops are already counted in this plan, so they are not launches you still need to send.`}
+                >
+                  Includes {formatDurationFromHours((planSchedule?.inAirSeconds || 0) / 3600)} of in-air ship time
+                </div>
+              ) : (
+                <div className="muted">Nothing currently in the air</div>
+              )}
             </div>
+            {projectedCompletion && (
+              <div className="card">
+                <div className="muted">Projected completion</div>
+                <div className="kpi">{formatPlanCompletion(projectedCompletion.at)}</div>
+                <div
+                  className={`muted ${styles.tooltipValue}`}
+                  title={`Assumes you start launching now and keep all three mission slots busy. Total ${formatDurationFromHours(projectedCompletion.totalSeconds / 3600)} from ${new Date(planReceivedAtMs ?? Date.now()).toLocaleString()}.`}
+                >
+                  {formatDurationFromHours(projectedCompletion.totalSeconds / 3600)} from now
+                </div>
+              </div>
+            )}
             <div className="card">
               <div className="muted">Progression prep time</div>
               <div className="kpi">{formatDurationFromHours(response.plan.progression.prepHours)}</div>
@@ -3802,7 +3906,11 @@ export default function MissionCraftPlannerPage() {
                           const titleLines = [
                             block.label,
                             block.subtitle,
-                            block.launches > 0 ? `${block.launches.toLocaleString()} launches` : "Progression-only slot workload",
+                            block.phase === "inAir"
+                              ? "Already launched — this slot is busy until it lands"
+                              : block.launches > 0
+                                ? `${block.launches.toLocaleString()} launches`
+                                : "Progression-only slot workload",
                             `Slot workload: ${formatDurationFromHours(block.totalSeconds / 3600)}`,
                             `${formatDurationFromHours(block.startSeconds / 3600)} → ${formatDurationFromHours(block.endSeconds / 3600)}`,
                           ];
@@ -3821,7 +3929,11 @@ export default function MissionCraftPlannerPage() {
                               title={titleLines.join("\n")}
                             >
                               <span className={styles.timelineBlockLabel}>
-                                {block.launches > 0 ? `x${block.launches.toLocaleString()}` : "prep"}
+                                {block.phase === "inAir"
+                                  ? "in air"
+                                  : block.launches > 0
+                                    ? `x${block.launches.toLocaleString()}`
+                                    : "prep"}
                               </span>
                             </div>
                           );
@@ -3861,16 +3973,29 @@ export default function MissionCraftPlannerPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {response.plan.missions.map((mission, missionIndex) => {
-                      const targetOverride = missionPrepTargetOverrideByIndex.get(missionIndex) || null;
+                    {/* Already-launched missions lead the table: their drops are
+                        counted below, so the launch counts are what is still
+                        left to send. */}
+                    {Array.from(response.plan.missions.entries())
+                      .sort(([, a], [, b]) => Number(Boolean(b.inAir)) - Number(Boolean(a.inAir)))
+                      .map(([missionIndex, mission]) => {
+                      const targetOverride = mission.inAir
+                        ? null
+                        : missionPrepTargetOverrideByIndex.get(missionIndex) || null;
                       const targetLabel = targetOverride || afxIdToTargetFamilyName(mission.targetAfxId);
                       const targetItemKey = targetOverride ? null : afxIdToItemKey(mission.targetAfxId);
                       const targetIconUrl = targetItemKey ? itemKeyToIconUrl(targetItemKey) : null;
                       return (
                         <tr
                           key={`${missionIndex}:${mission.ship}:${mission.durationType}:${mission.missionId}:${mission.targetAfxId}`}
+                          className={mission.inAir ? styles.inAirRow : undefined}
                         >
                           <td>
+                            {mission.inAir && (
+                              <span className={styles.inAirBadge} title="Already launched — nothing to send">
+                                In air
+                              </span>
+                            )}
                             {titleCaseShip(mission.ship)}<br />
                             <span className="muted">{durationTypeWithLevelLabel(mission.durationType, mission.level)}</span>
                           </td>
@@ -3890,8 +4015,20 @@ export default function MissionCraftPlannerPage() {
                               </div>
                             </div>
                           </td>
-                          <td>{mission.launches.toLocaleString()}</td>
-                          <td>{formatDurationFromHours(mission.durationSeconds / 3600)}</td>
+                          <td>
+                            {mission.inAir ? (
+                              <span className="muted" title="Already sent — do not launch these again">
+                                {mission.launches.toLocaleString()} sent
+                              </span>
+                            ) : (
+                              mission.launches.toLocaleString()
+                            )}
+                          </td>
+                          <td>
+                            {mission.inAir
+                              ? formatInAirReturnLabel(mission.launchSecondsRemaining, mission.secondsRemaining)
+                              : formatDurationFromHours(mission.durationSeconds / 3600)}
+                          </td>
                           <td>
                             {mission.expectedYields.slice(0, 3).map((yieldRow) => {
                               const iconUrl = itemIdToIconUrl(yieldRow.itemId);

@@ -23,6 +23,24 @@ export type PlayerProfile = {
   epicResearchZerogLevel: number;
   shipLevels: ShipLevelInfo[];
   missionOptions: ReturnType<typeof buildMissionOptions>;
+  /** Absent for synthetic profiles (demo, benchmark snapshots). */
+  inFlightMissions?: InFlightMission[];
+};
+
+/**
+ * A launched mission whose loot has not landed in the artifact inventory yet:
+ * still flying, or back but not collected. These already count toward ship
+ * levels, but their drops exist nowhere in `inventory`.
+ */
+export type InFlightMission = {
+  ship: string;
+  durationType: string;
+  status: string;
+  level: number;
+  capacity: number;
+  /** null when the mission was sent without a target. */
+  targetAfxId: number | null;
+  secondsRemaining: number;
 };
 
 type BackupInventoryItem = {
@@ -53,6 +71,20 @@ type BackupMissionInfo = {
   ship?: string;
   durationType?: string;
   status?: string;
+};
+
+/**
+ * Decoded with `defaults: false` so an absent `targetArtifact` stays absent
+ * rather than collapsing to the enum's zero value (which would read as a
+ * Lunar Totem target on every untargeted mission).
+ */
+type SparseMissionInfo = BackupMissionInfo & {
+  level?: number;
+  capacity?: number;
+  secondsRemaining?: number;
+  targetArtifact?: string;
+  /** Absent means STANDARD — the proto's zero value. */
+  type?: string;
 };
 
 type GetPlayerProfileOptions = {
@@ -204,6 +236,11 @@ export async function getPlayerProfile(
 
       const shipLevels = computeShipLevels(missions);
       const missionOptions = buildMissionOptions(shipLevels, epicResearchFTLLevel, epicResearchZerogLevel);
+      const inFlightMissions = parseInFlightMissions(
+        sparseMissionInfos(decodedResponse, root),
+        root.lookupEnum("ei.ArtifactSpec.Name").values,
+        inventorySource
+      );
 
       return {
         eid,
@@ -214,6 +251,7 @@ export async function getPlayerProfile(
         epicResearchZerogLevel,
         shipLevels,
         missionOptions,
+        inFlightMissions,
       };
     } catch (error) {
       lastError = error;
@@ -350,6 +388,11 @@ export function parseCraftCounts(items: BackupCraftableArtifact[]): CraftCounts 
   return craftCounts;
 }
 
+/**
+ * Feeds ship levels, so this deliberately keeps both farms' missions: a virtue
+ * launch levels the same ship a main-farm launch does. Do not filter these by
+ * `MissionInfo.type` — only the in-air projection below is farm-specific.
+ */
 export function parseMissions(items: BackupMissionInfo[]): MissionRecord[] {
   const missions: MissionRecord[] = [];
   for (const item of items) {
@@ -363,6 +406,71 @@ export function parseMissions(items: BackupMissionInfo[]): MissionRecord[] {
     });
   }
   return missions;
+}
+
+// Launched, but the loot is still owed to the player: `EXPLORING` is in the
+// air, `RETURNED`/`ANALYZING` are back but not yet collected. All three already
+// count toward ship levels while contributing nothing to `inventory`.
+const IN_FLIGHT_STATUSES = new Set(["EXPLORING", "RETURNED", "ANALYZING"]);
+
+/**
+ * `VirtueDB` has no mission list of its own, so both farms share one
+ * `missionInfos` list and a mission only belongs to the farm named by its
+ * `type`. Each farm has its own independent three mission slots, so an
+ * outstanding mission from the other farm neither owes this farm drops nor
+ * blocks a slot it could launch into — it is excluded outright.
+ *
+ * Note the deliberate asymmetry with `parseMissions` above, which does not
+ * filter by type: launches from either farm level the same ships.
+ */
+function missionMatchesSource(type: string | undefined, inventorySource: InventorySource): boolean {
+  const isVirtueMission = type === "VIRTUE";
+  return isVirtueMission === (inventorySource === "virtue");
+}
+
+export function parseInFlightMissions(
+  items: SparseMissionInfo[],
+  artifactAfxIdByName: Record<string, number>,
+  inventorySource: InventorySource = "main"
+): InFlightMission[] {
+  const missions: InFlightMission[] = [];
+  for (const item of items) {
+    if (!item.ship || !item.durationType || !item.status) {
+      continue;
+    }
+    if (!IN_FLIGHT_STATUSES.has(item.status)) {
+      continue;
+    }
+    if (!missionMatchesSource(item.type, inventorySource)) {
+      continue;
+    }
+    const targetAfxIdRaw = item.targetArtifact != null ? artifactAfxIdByName[item.targetArtifact] : undefined;
+    missions.push({
+      ship: item.ship,
+      durationType: item.durationType,
+      status: item.status,
+      level: Math.max(0, Math.round(item.level || 0)),
+      capacity: Math.max(0, Math.round(item.capacity || 0)),
+      targetAfxId: typeof targetAfxIdRaw === "number" ? targetAfxIdRaw : null,
+      secondsRemaining: Math.max(0, Math.round(item.secondsRemaining || 0)),
+    });
+  }
+  return missions;
+}
+
+function sparseMissionInfos(decodedResponse: protobuf.Message, root: protobuf.Root): SparseMissionInfo[] {
+  const missionInfoType = root.lookupType("ei.MissionInfo");
+  const raw = (
+    decodedResponse as unknown as {
+      backup?: { artifactsDb?: { missionInfos?: protobuf.Message[] } };
+    }
+  ).backup?.artifactsDb?.missionInfos;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.map(
+    (mission) => missionInfoType.toObject(mission, { enums: String, defaults: false }) as SparseMissionInfo
+  );
 }
 
 export function formatSpecName(spec?: { name?: string; level?: string | number }): string | null {

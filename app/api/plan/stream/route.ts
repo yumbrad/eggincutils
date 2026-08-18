@@ -115,7 +115,7 @@ export async function POST(request: Request): Promise<Response> {
             message: "Fetching profile data...",
           });
           const profile = isBlankEid(parsedPayload.data.eid)
-            ? createDemoProfile()
+            ? createDemoProfile(parsedPayload.data.inventorySource)
             : await getPlayerProfile(parsedPayload.data.eid, parsedPayload.data.includeSlotted, {
                 inventorySource: parsedPayload.data.inventorySource,
                 includeArtifactRarities: {

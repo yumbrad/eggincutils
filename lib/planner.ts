@@ -15,7 +15,12 @@ import {
   ShipLevelInfo,
   shipLevelsToLaunchCounts,
 } from "./ship-data";
-import type { PlayerProfile } from "./profile";
+import {
+  projectInFlightMissions,
+  type InFlightMissionRow,
+  type InFlightProjection,
+} from "./in-flight";
+import type { Inventory, PlayerProfile } from "./profile";
 import { getVirtueFuelPerLaunch } from "./virtue-fuel";
 
 async function getDefaultSolverFn(): Promise<SolverFunction> {
@@ -60,6 +65,12 @@ type PlanMissionRow = {
   launches: number;
   durationSeconds: number;
   expectedYields: Array<{ itemId: string; quantity: number }>;
+  /** Already launched — nothing for the player to send, drops are just owed. */
+  inAir?: boolean;
+  /** Only set on in-air rows: wall-clock seconds until the last one lands. */
+  secondsRemaining?: number;
+  /** Only set on in-air rows: the wait for each launch, longest first. */
+  launchSecondsRemaining?: number[];
 };
 
 type PlanCraftRow = {
@@ -146,9 +157,26 @@ export type PlannerResult = {
     prepLaunches: ProgressionLaunchRow[];
     projectedShipLevels: ProgressionShipRow[];
   };
+  inFlight: {
+    missionCount: number;
+    /** Until the last outstanding mission lands. */
+    secondsRemaining: number;
+  };
+  schedule: {
+    /** Makespan of the launches still to be made, ignoring what is in the air. */
+    missionSeconds: number;
+    /** Slot time already committed to missions in the air. */
+    inAirSeconds: number;
+    /** Makespan from now, with in-air ships holding their slots first. */
+    totalSeconds: number;
+  };
   notes: string[];
   availableCombos: AvailableCombo[];
 };
+
+/** What the solver produces: the launches still to be made, before the
+ *  player's outstanding in-air missions are folded back in. */
+type PlannedLaunches = Omit<PlannerResult, "inFlight" | "schedule">;
 
 export type MissionObjectiveMode = "ge" | "virtueFuel";
 
@@ -518,8 +546,14 @@ type LaunchDurationSegment = {
   durationSeconds: number;
 };
 
-function estimateThreeSlotMakespanSeconds(segments: LaunchDurationSegment[], residualSlotSecondsRaw = 0): number {
-  const laneLoads = [0, 0, 0];
+function estimateThreeSlotMakespanSeconds(
+  segments: LaunchDurationSegment[],
+  residualSlotSecondsRaw = 0,
+  initialLaneLoads?: number[]
+): number {
+  // Lanes can start busy when missions are already in the air: those slots are
+  // not free until the outstanding ship lands.
+  const laneLoads = [0, 1, 2].map((lane) => Math.max(0, Math.round(initialLaneLoads?.[lane] || 0)));
   const normalizedSegments = segments
     .map((segment) => ({
       launches: Math.max(0, Math.round(segment.launches)),
@@ -4127,7 +4161,7 @@ async function planForTargetHeuristic(
   quantity: number,
   priorityTimeRaw: number,
   plannerOptions: Pick<PlannerOptions, "missionDropRarities" | "targetCraftedOnly" | "solverFn" | "lootData" | "objectiveMode" | "minimumTimePriority"> = {}
-): Promise<PlannerResult> {
+): Promise<PlannedLaunches> {
   const targetKey = itemIdToCanonicalKey(targetItemId);
   const priorityTime = Math.max(0, Math.min(1, priorityTimeRaw));
   const objectiveContext = normalizeObjectiveContext(plannerOptions.objectiveMode, priorityTime, plannerOptions.minimumTimePriority);
@@ -4344,6 +4378,15 @@ async function planForTargetHeuristic(
   };
 }
 
+/**
+ * Fold the player's outstanding missions into the plan.
+ *
+ * Their drops are added to the supply the solver plans against, so it stops
+ * asking for launches the player has already committed to, and their remaining
+ * flight time is charged to the mission slots they are still holding. The rows
+ * come back tagged `inAir` so the UI can report the drops as expected mission
+ * yield rather than inventory the player cannot spend yet.
+ */
 export async function planForTarget(
   profile: PlayerProfile,
   targetItemId: string,
@@ -4351,6 +4394,107 @@ export async function planForTarget(
   priorityTimeRaw: number,
   plannerOptions: PlannerOptions = {}
 ): Promise<PlannerResult> {
+  const missionDropRarities = normalizeShinyRaritySelection(plannerOptions.missionDropRarities);
+  const inFlight = await projectInFlightMissions(profile.inFlightMissions || [], {
+    lootData: plannerOptions.lootData,
+    includeRarities: missionDropRarities,
+    includeStoneFragments: missionDropRarities.fragments,
+  });
+
+  const planningProfile: PlayerProfile =
+    Object.keys(inFlight.yields).length > 0
+      ? { ...profile, inventory: mergeInventory(profile.inventory, inFlight.yields) }
+      : profile;
+
+  const result = await planForNewLaunches(
+    planningProfile,
+    targetItemId,
+    quantity,
+    priorityTimeRaw,
+    plannerOptions
+  );
+
+  return withInFlightSchedule(result, inFlight);
+}
+
+function mergeInventory(inventory: Inventory, extra: Record<string, number>): Inventory {
+  const merged: Inventory = { ...inventory };
+  for (const [itemKey, quantity] of Object.entries(extra)) {
+    merged[itemKey] = (merged[itemKey] || 0) + quantity;
+  }
+  return merged;
+}
+
+/**
+ * In-air ships each hold one of the three mission slots until they land, so the
+ * lanes start busy. Everything the plan still has to launch is packed after.
+ */
+function inAirLaneLoads(rows: InFlightMissionRow[]): number[] {
+  return rows
+    .flatMap((row) => row.launchSecondsRemaining)
+    .sort((a, b) => b - a)
+    .slice(0, 3);
+}
+
+function withInFlightSchedule(result: PlannedLaunches, inFlight: InFlightProjection): PlannerResult {
+  const missionSeconds = Math.max(0, Math.round(result.expectedHours * 3600));
+  if (inFlight.missionCount === 0) {
+    return {
+      ...result,
+      inFlight: { missionCount: 0, secondsRemaining: 0 },
+      schedule: { missionSeconds, inAirSeconds: 0, totalSeconds: missionSeconds },
+    };
+  }
+
+  const segments = result.missions.map((mission) => ({
+    launches: mission.launches,
+    durationSeconds: mission.durationSeconds,
+  }));
+  const prepSlotSeconds = result.progression.prepLaunches.reduce(
+    (sum, prep) => sum + Math.max(0, prep.launches) * Math.max(0, prep.durationSeconds),
+    0
+  );
+  const totalSeconds = Math.round(
+    estimateThreeSlotMakespanSeconds(segments, prepSlotSeconds, inAirLaneLoads(inFlight.rows))
+  );
+
+  return {
+    ...result,
+    missions: [
+      ...result.missions,
+      ...inFlight.rows.map((row) => ({
+        missionId: row.missionId,
+        ship: row.ship,
+        durationType: row.durationType,
+        level: row.level,
+        targetAfxId: row.targetAfxId,
+        launches: row.launches,
+        durationSeconds: row.durationSeconds,
+        expectedYields: row.expectedYields,
+        inAir: true,
+        secondsRemaining: row.secondsRemaining,
+        launchSecondsRemaining: row.launchSecondsRemaining,
+      })),
+    ],
+    inFlight: {
+      missionCount: inFlight.missionCount,
+      secondsRemaining: inFlight.secondsRemaining,
+    },
+    schedule: {
+      missionSeconds,
+      inAirSeconds: inFlight.secondsRemaining,
+      totalSeconds: Math.max(totalSeconds, inFlight.secondsRemaining),
+    },
+  };
+}
+
+async function planForNewLaunches(
+  profile: PlayerProfile,
+  targetItemId: string,
+  quantity: number,
+  priorityTimeRaw: number,
+  plannerOptions: PlannerOptions = {}
+): Promise<PlannedLaunches> {
   const normalizedTargets = normalizePlannerTargets(targetItemId, quantity, plannerOptions.targets);
   const targetKey = normalizedTargets.primaryTargetKey;
   const priorityTime = Math.max(0, Math.min(1, priorityTimeRaw));
@@ -4402,7 +4546,7 @@ export async function planForTarget(
     : undefined;
   const benchmarkStartedAtMs = Date.now();
   let benchmarkExcludedMs = 0;
-  const reportBenchmark = (result: PlannerResult, path: "primary" | "fallback") => {
+  const reportBenchmark = (result: PlannedLaunches, path: "primary" | "fallback") => {
     if (!plannerOptions.onBenchmarkSample) {
       return;
     }
@@ -4447,7 +4591,7 @@ export async function planForTarget(
     });
   };
 
-  let fastIncumbentResult: PlannerResult | null = null;
+  let fastIncumbentResult: PlannedLaunches | null = null;
   if (
     !fastMode &&
     ENABLE_NORMAL_FAST_INCUMBENT_COMPARISON &&
@@ -4477,7 +4621,7 @@ export async function planForTarget(
     }
   }
 
-  const shouldAdoptFastIncumbentResult = (normalResult: PlannerResult): boolean => {
+  const shouldAdoptFastIncumbentResult = (normalResult: PlannedLaunches): boolean => {
     if (!fastIncumbentResult) {
       return false;
     }
@@ -4505,7 +4649,7 @@ export async function planForTarget(
     const normalScore = normalizedObjectiveScore(normalResource, normalResult.totalSlotSeconds / 3, objectiveContext, resourceRef, timeRef);
     return fastScore + SCORE_EPS < normalScore && fastHours <= normalHours * 1.01;
   };
-  const maybeAdoptFastIncumbentResult = (normalResult: PlannerResult): PlannerResult => {
+  const maybeAdoptFastIncumbentResult = (normalResult: PlannedLaunches): PlannedLaunches => {
     if (!shouldAdoptFastIncumbentResult(normalResult) || !fastIncumbentResult) {
       return normalResult;
     }
@@ -6283,7 +6427,7 @@ export async function planForTarget(
 
     const availableCombos = buildAvailableCombosFromActions(comparisonAvailableActions, outputActions);
 
-    const result: PlannerResult = {
+    const result: PlannedLaunches = {
       targetItemId: itemKeyToId(targetKey),
       quantity: quantityInt,
       targets: normalizedTargets.targets,

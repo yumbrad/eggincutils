@@ -1,5 +1,10 @@
-import { isStoneFragmentKey, isUntargetedTargetAfxId, itemIdToKey } from "./item-utils";
-import { loadLootData, type LootJson, type MissionLevelLootStore, type MissionTargetLootStore } from "./loot-data";
+import { isUntargetedTargetAfxId } from "./item-utils";
+import { loadLootData, type LootJson, type MissionTargetLootStore } from "./loot-data";
+import {
+  expectedInventoryFromTarget,
+  hasEnoughMissionTargetSample,
+  pickLevel,
+} from "./mission-loot";
 import type { PlayerProfile, ShinyRaritySelection } from "./profile";
 import {
   buildMissionOptions,
@@ -25,8 +30,6 @@ export type AppliedPrePlanSends = {
   skippedLaunches: number;
 };
 
-const MIN_MISSION_TARGET_SAMPLE_LAUNCHES = 10;
-const MIN_MISSION_TARGET_SAMPLE_DROPS = 500;
 const UNTARGETED_ONLY_SHIPS = new Set(["CHICKEN_ONE", "CHICKEN_NINE", "CHICKEN_HEAVY", "BCR"]);
 
 const DEFAULT_RARITY_SELECTION: ShinyRaritySelection = {
@@ -35,62 +38,17 @@ const DEFAULT_RARITY_SELECTION: ShinyRaritySelection = {
   legendary: false,
 };
 
-function pickLevel(levels: MissionLevelLootStore[], desiredLevel: number): MissionLevelLootStore | null {
-  let best: MissionLevelLootStore | null = null;
-  for (const level of levels) {
-    if (level.level <= desiredLevel && (!best || level.level > best.level)) {
-      best = level;
-    }
-  }
-  if (best) {
-    return best;
-  }
-  return levels[0] || null;
-}
-
-function hasEnoughMissionTargetSample(
+function missionTargetSampleIsUsable(
   target: MissionTargetLootStore,
   option: MissionOption,
   lootLevel: number
 ): boolean {
-  if (target.totalDrops < MIN_MISSION_TARGET_SAMPLE_DROPS) {
-    return false;
-  }
   const nominalCapacity = getNominalMissionCapacity(option.ship, option.durationType, lootLevel) || option.capacity;
-  return nominalCapacity > 0 && target.totalDrops / nominalCapacity >= MIN_MISSION_TARGET_SAMPLE_LAUNCHES;
+  return hasEnoughMissionTargetSample(target, nominalCapacity);
 }
 
 function canMissionOptionUseLootTarget(option: MissionOption, targetAfxId: number): boolean {
   return !UNTARGETED_ONLY_SHIPS.has(option.ship) || isUntargetedTargetAfxId(targetAfxId);
-}
-
-function expectedInventoryFromTarget(
-  target: MissionTargetLootStore,
-  capacity: number,
-  includeRarities: ShinyRaritySelection,
-  includeStoneFragments: boolean
-): Record<string, number> {
-  const yields: Record<string, number> = {};
-  if (target.totalDrops <= 0 || capacity <= 0) {
-    return yields;
-  }
-
-  for (const item of target.items) {
-    const itemKey = itemIdToKey(item.itemId);
-    if (!includeStoneFragments && isStoneFragmentKey(itemKey)) {
-      continue;
-    }
-    const common = item.counts[0] || 0;
-    const rare = includeRarities.rare ? item.counts[1] || 0 : 0;
-    const epic = includeRarities.epic ? item.counts[2] || 0 : 0;
-    const legendary = includeRarities.legendary ? item.counts[3] || 0 : 0;
-    const totalItemDrops = common + rare + epic + legendary;
-    if (totalItemDrops > 0) {
-      yields[itemKey] = (totalItemDrops / target.totalDrops) * capacity;
-    }
-  }
-
-  return yields;
 }
 
 function sanitizePrePlanSends(sends: PrePlanSend[]): PrePlanSend[] {
@@ -166,7 +124,7 @@ export async function applyPrePlanSendsToProfile(
       const missionLoot = lootByMissionId.get(option.missionId);
       const levelLoot = missionLoot ? pickLevel(missionLoot.levels, option.level) : null;
       const target = levelLoot?.targets.find((candidate) => candidate.targetAfxId === send.targetAfxId) || null;
-      if (target && levelLoot && hasEnoughMissionTargetSample(target, option, levelLoot.level)) {
+      if (target && levelLoot && missionTargetSampleIsUsable(target, option, levelLoot.level)) {
         const yields = expectedInventoryFromTarget(
           target,
           option.capacity,
