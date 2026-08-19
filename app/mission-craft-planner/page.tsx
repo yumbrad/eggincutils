@@ -743,6 +743,14 @@ function groupTimelineSegmentsForLaneBalance(segments: TimelineSegment[]): Timel
   return Array.from(groupByKey.values())
     .map((group) => group.slice().sort(timelineSegmentOrder))
     .sort((a, b) => {
+      // Prep gates the improved options the rest of the plan relies on, so any
+      // group carrying prep launches schedules before pure mission groups even
+      // when its per-launch duration would otherwise pack it last.
+      const aPrepRank = a.some((segment) => segment.phase === "prep") ? 0 : 1;
+      const bPrepRank = b.some((segment) => segment.phase === "prep") ? 0 : 1;
+      if (aPrepRank !== bPrepRank) {
+        return aPrepRank - bPrepRank;
+      }
       const aRank = Math.max(...a.map(timelineScheduleRank));
       const bRank = Math.max(...b.map(timelineScheduleRank));
       const rankDiff = bRank - aRank;
@@ -1809,7 +1817,12 @@ export default function MissionCraftPlannerPage() {
     () => (response && inventorySource === "virtue" ? buildVirtueFuelCharts(response.plan) : null),
     [inventorySource, response]
   );
-  const expectedMissionHours = response?.plan.expectedHours ?? (missionTimeline ? missionTimeline.totalSeconds / 3600 : 0);
+  // Taken from the timeline makespan so the headline number always agrees with
+  // the chart below it and genuinely includes in-air ships holding their slots;
+  // plan.expectedHours only covers the launches still to be made.
+  const expectedMissionHours = missionTimeline
+    ? missionTimeline.totalSeconds / 3600
+    : response?.plan.expectedHours ?? 0;
   const inFlightSummary = response?.plan.inFlight;
   const planSchedule = response?.plan.schedule;
   // Wall-clock finish if the player starts launching now. Taken from the

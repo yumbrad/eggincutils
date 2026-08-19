@@ -709,19 +709,30 @@ describe("planForTarget coverage handling", () => {
     const lpModels: string[] = [];
     mockedSolveWithHighs.mockImplementation(async (model) => {
       lpModels.push(model);
-      if (model.includes("r_0:")) {
+      if (!model.includes("r_0:")) {
         return {
           Status: "Optimal",
           Columns: {
-            m_0: { Primal: 1 },
+            m_0: { Primal: 1000 },
           },
         };
       }
+      // A real solver must honor the required prep-launch rows, so credit each
+      // required option's first mission variable with its forced launches on
+      // top of a single farming launch on m_0.
+      const primals: Record<string, number> = { m_0: 1 };
+      for (const line of model.split("\n")) {
+        const match = line.trim().match(/^r_\d+:\s*(m_\d+)[^=>]*(?:>=|=)\s*([0-9.]+)$/);
+        if (!match) {
+          continue;
+        }
+        primals[match[1]] = (primals[match[1]] || 0) + Number(match[2]);
+      }
       return {
         Status: "Optimal",
-        Columns: {
-          m_0: { Primal: 1000 },
-        },
+        Columns: Object.fromEntries(
+          Object.entries(primals).map(([variable, primal]) => [variable, { Primal: primal }])
+        ),
       };
     });
 
@@ -831,6 +842,120 @@ describe("planForTarget coverage handling", () => {
     expect(result.progression.prepLaunches.length).toBeGreaterThan(0);
     expect(result.progression.prepLaunches.some((step) => step.reason.includes("Unlock CHICKEN_NINE"))).toBe(true);
     expect(result.missions.some((mission) => mission.ship === "CHICKEN_NINE")).toBe(true);
+  });
+
+  it("strips prep progression the final plan never launches or uses", async () => {
+    // No level-1 loot exists, so leveling CHICKEN_NINE can never pay off: any
+    // prep candidate that wins does so on solver noise alone.
+    mockedLoadLootData.mockResolvedValue({
+      missions: [
+        {
+          afxShip: 0,
+          afxDurationType: 0,
+          missionId: "chicken-one-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 5000,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "puzzle-cube-1",
+                      counts: [5000, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          afxShip: 1,
+          afxDurationType: 0,
+          missionId: "chicken-nine-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  totalDrops: 5000,
+                  targetAfxId: 10000,
+                  items: [
+                    {
+                      afxId: 1,
+                      afxLevel: 1,
+                      itemId: "puzzle-cube-1",
+                      counts: [5000, 0, 0, 0],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    mockedSolveWithHighs.mockImplementation(async (model) => {
+      if (model.includes("r_0:")) {
+        // Prep-carrying candidate models get a cheap solution (mimicking solver
+        // noise in their favor) that honors the required prep-launch rows but
+        // never touches any post-level option.
+        const primals: Record<string, number> = { m_0: 1, m_1: 1 };
+        for (const line of model.split("\n")) {
+          const match = line.trim().match(/^r_\d+:\s*(m_\d+)[^=>]*(?:>=|=)\s*([0-9.]+)$/);
+          if (!match) {
+            continue;
+          }
+          primals[match[1]] = (primals[match[1]] || 0) + Number(match[2]);
+        }
+        return {
+          Status: "Optimal",
+          Columns: Object.fromEntries(
+            Object.entries(primals).map(([variable, primal]) => [variable, { Primal: primal }])
+          ),
+        };
+      }
+      if (!model.includes("m_1")) {
+        // Single-option monolithic incumbent re-solve: one launch suffices.
+        return {
+          Status: "Optimal",
+          Columns: {
+            m_0: { Primal: 1 },
+          },
+        };
+      }
+      // Full no-prep candidate models look expensive, so the prep candidate wins.
+      return {
+        Status: "Optimal",
+        Columns: {
+          m_0: { Primal: 1000 },
+        },
+      };
+    });
+
+    const profile = baseProfile();
+    const shipLevels = computeShipLevelsFromLaunchCounts({
+      CHICKEN_ONE: {
+        SHORT: 5,
+      },
+      CHICKEN_NINE: {
+        SHORT: 3,
+      },
+    });
+    profile.shipLevels = shipLevels;
+    profile.missionOptions = buildMissionOptions(shipLevels, 0, 0);
+
+    const result = await planForTarget(profile, "puzzle-cube-1", 2, 1);
+    expect(result.progression.prepLaunches).toHaveLength(0);
+    expect(result.progression.prepHours).toBe(0);
+    expect(
+      result.notes.some((note) => note.includes("Removed orphaned ship-progression prep launches"))
+    ).toBe(true);
   });
 
   it("builds integer piecewise craft discount variables for craftable targets in unified solve", async () => {

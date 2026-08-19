@@ -3423,6 +3423,57 @@ function projectShipLevelsAfterPlannedLaunches(options: {
   return computeShipLevelsFromLaunchCounts(launchCounts);
 }
 
+/**
+ * Whether a plan actually cashes in a candidate's prep progression: it launches
+ * some ship that the prep unlocked, or launches a prep-leveled ship above its
+ * pre-prep level. Launches the prep itself forces (at the pre-prep level) and
+ * levels reached purely by the plan's own launches on untouched ships don't count.
+ */
+function planUsesPrepProgression(options: {
+  candidate: ProgressionCandidate;
+  baseShipLevels: ShipLevelInfo[];
+  actions: MissionAction[];
+  missionCounts: Record<string, number>;
+}): boolean {
+  const { candidate, baseShipLevels, actions, missionCounts } = options;
+  if (candidate.prepSteps.length === 0) {
+    return false;
+  }
+  const baseInfoByShip = new Map(baseShipLevels.map((entry) => [entry.ship, entry]));
+  const prePrepLevelByBenefitShip = new Map<string, number>();
+  for (const projected of candidate.shipLevels) {
+    if (!projected.unlocked) {
+      continue;
+    }
+    const base = baseInfoByShip.get(projected.ship);
+    if (!base || !base.unlocked) {
+      prePrepLevelByBenefitShip.set(projected.ship, -1);
+      continue;
+    }
+    if (projected.level > base.level) {
+      prePrepLevelByBenefitShip.set(projected.ship, base.level);
+    }
+  }
+  if (prePrepLevelByBenefitShip.size === 0) {
+    return false;
+  }
+  const actionByKey = new Map(actions.map((action) => [action.key, action]));
+  for (const [actionKey, launchesRaw] of Object.entries(missionCounts)) {
+    if (Math.max(0, Math.round(launchesRaw)) <= 0) {
+      continue;
+    }
+    const action = actionByKey.get(actionKey);
+    if (!action) {
+      continue;
+    }
+    const prePrepLevel = prePrepLevelByBenefitShip.get(action.ship);
+    if (prePrepLevel !== undefined && action.level > prePrepLevel) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function findDominantFinalOptionKey(
   finalOptionKeys: Set<string>,
   launchesByOption: Map<string, number>
@@ -4886,6 +4937,9 @@ async function planForNewLaunches(
       maxMissionLaunchesByOption: Record<string, number>;
       phasedChainConstraints: PhasedChainConstraint[];
       prepNoYieldSlotSeconds: number;
+      /** Prep launches excluded from the solve's missionCounts; counted back into
+       *  totalLaunches so uncredited prep can't win a launch-count tiebreak. */
+      prepNoYieldLaunches: number;
     };
     type MilpSolveProgressContext = {
       prefix: string;
@@ -4949,12 +5003,14 @@ async function planForNewLaunches(
       const actionOptionKeys = new Set(candidateActions.map((action) => action.optionKey));
       const requiredMissionLaunches: Record<string, RequiredMissionLaunchConstraint> = {};
       let prepNoYieldSlotSeconds = 0;
+      let prepNoYieldLaunches = 0;
       for (const [optionKey, requirement] of prepRequirements.entries()) {
         if (requirement.launches <= 0) {
           continue;
         }
         if (!actionOptionKeys.has(optionKey)) {
           prepNoYieldSlotSeconds += requirement.launches * requirement.option.durationSeconds;
+          prepNoYieldLaunches += requirement.launches;
           continue;
         }
         addRequiredLaunchConstraint(
@@ -4971,6 +5027,7 @@ async function planForNewLaunches(
         maxMissionLaunchesByOption: phased.maxLaunchesByOption,
         phasedChainConstraints: phased.phaseChains,
         prepNoYieldSlotSeconds,
+        prepNoYieldLaunches,
       };
     };
 
@@ -5067,10 +5124,11 @@ async function planForNewLaunches(
         timeRef
       );
       const unmetTotal = Object.values(unified.remainingDemand).reduce((sum, qty) => sum + Math.max(0, qty), 0);
-      const totalLaunches = Object.values(unified.missionCounts).reduce(
-        (sum, launches) => sum + Math.max(0, Math.round(launches)),
-        0
-      );
+      const totalLaunches =
+        Object.values(unified.missionCounts).reduce(
+          (sum, launches) => sum + Math.max(0, Math.round(launches)),
+          0
+        ) + input.prepNoYieldLaunches;
       return {
         unified,
         solveMetrics,
@@ -5525,7 +5583,7 @@ async function planForNewLaunches(
             fuelCost,
             totalSlotSeconds,
             unmetTotal: sumRecordValues(unified.remainingDemand),
-            totalLaunches: sumRecordValues(unified.missionCounts),
+            totalLaunches: sumRecordValues(unified.missionCounts) + input.prepNoYieldLaunches,
           });
         } catch (error) {
           const details = error instanceof Error ? error.message : String(error);
@@ -5597,7 +5655,7 @@ async function planForNewLaunches(
           });
           const totalSlotSeconds = screened.input.prepNoYieldSlotSeconds + refined.unified.totalSlotSeconds;
           const unmetTotal = sumRecordValues(refined.unified.remainingDemand);
-          const totalLaunches = sumRecordValues(refined.unified.missionCounts);
+          const totalLaunches = sumRecordValues(refined.unified.missionCounts) + screened.input.prepNoYieldLaunches;
           const fuelCost = missionFuelCost(refined.actions, refined.unified.missionCounts);
           const scaledCandidate = {
             actions: refined.actions,
@@ -5927,6 +5985,56 @@ async function planForNewLaunches(
       throw new Error(`unified HiGHS solve failed across all horizon candidates (${details})`);
     }
 
+    // A prep candidate can win on near-tie noise while its plan never touches the
+    // ship states the prep paid for. In that case the no-prep state is at least as
+    // good by construction, so prefer it unless the solver says it's strictly worse.
+    if (
+      best.candidate.prepSteps.length > 0 &&
+      !planUsesPrepProgression({
+        candidate: best.candidate,
+        baseShipLevels: profile.shipLevels,
+        actions: best.actions,
+        missionCounts: best.unified.missionCounts,
+      })
+    ) {
+      const noPrepCandidate = progressionCandidates.find((candidate) => candidate.prepSteps.length === 0);
+      if (noPrepCandidate) {
+        reportProgress({
+          phase: "refinement",
+          message: "Winning plan never uses its prep progression; re-solving the no-prep state...",
+          etaMs: null,
+        });
+        await yieldForProgressFlush();
+        try {
+          const noPrepInput = await prepareCandidateInput(noPrepCandidate);
+          if (noPrepInput) {
+            const noPrepResult = await solveCandidateInput(noPrepInput, false);
+            if (comparePlanQuality(noPrepResult, best) <= 0) {
+              best = {
+                candidate: noPrepInput.candidate,
+                actions: noPrepInput.candidateActions,
+                unified: noPrepResult.unified,
+                solveMetrics: noPrepResult.solveMetrics,
+                totalSlotSeconds: noPrepResult.totalSlotSeconds,
+                weightedScore: noPrepResult.weightedScore,
+                geCost: noPrepResult.geCost,
+                fuelCost: noPrepResult.fuelCost,
+                unmetTotal: noPrepResult.unmetTotal,
+                totalLaunches: noPrepResult.totalLaunches,
+                prepNoYieldSlotSeconds: noPrepInput.prepNoYieldSlotSeconds,
+              };
+              refinementNotes.push(
+                "Dropped ship-progression prep launches the winning plan never used; the no-prep state solved at least as well."
+              );
+            }
+          }
+        } catch (error) {
+          const details = error instanceof Error ? error.message : String(error);
+          solverErrors.push(`no-prep fallback solve failed: ${details}`);
+        }
+      }
+    }
+
     if (best.unmetTotal <= 1e-6) {
       await tryScaledQuantityIncumbent();
     }
@@ -5997,10 +6105,11 @@ async function planForNewLaunches(
               polishedUnified.geCost + SCORE_EPS < best.geCost &&
               polishedExpectedHours <= baselineExpectedHours + expectedHoursTolerance
             ) {
-              const polishedTotalLaunches = Object.values(polishedUnified.missionCounts).reduce(
-                (sum, launches) => sum + Math.max(0, Math.round(launches)),
-                0
-              );
+              const polishedTotalLaunches =
+                Object.values(polishedUnified.missionCounts).reduce(
+                  (sum, launches) => sum + Math.max(0, Math.round(launches)),
+                  0
+                ) + polishInput.prepNoYieldLaunches;
               const previousGeCost = best.geCost;
               const polishedFuelCost = missionFuelCost(polishInput.candidateActions, polishedUnified.missionCounts);
               best = {
@@ -6240,6 +6349,36 @@ async function planForNewLaunches(
       }
     }
 
+    // Output-stage replacements (scaled refinement, monolithic incumbent) can drop
+    // the launches a prep step forced without dropping the prep itself. If the
+    // final plan neither launches the prep nor uses any ship state it would
+    // provide, the prep is orphaned — strip it instead of telling the player to
+    // grind launches that benefit nothing in this plan.
+    let outputPrepSteps = best.candidate.prepSteps;
+    let outputPrepSlotSeconds = best.candidate.prepSlotSeconds;
+    let outputPrepNoYieldSlotSeconds = best.prepNoYieldSlotSeconds;
+    if (outputPrepSteps.length > 0) {
+      const outputLaunchesByOption = aggregateMissionLaunchesByOption(outputActions, outputUnified.missionCounts);
+      const prepStillLaunched = Array.from(aggregatePrepOptionRequirements(outputPrepSteps).keys()).some(
+        (optionKey) => (outputLaunchesByOption.get(optionKey) || 0) > 0
+      );
+      const prepUsed = planUsesPrepProgression({
+        candidate: best.candidate,
+        baseShipLevels: profile.shipLevels,
+        actions: outputActions,
+        missionCounts: outputUnified.missionCounts,
+      });
+      if (!prepUsed && !prepStillLaunched) {
+        outputPrepSteps = [];
+        outputPrepSlotSeconds = 0;
+        outputTotalSlotSeconds = Math.max(0, outputTotalSlotSeconds - outputPrepNoYieldSlotSeconds);
+        outputPrepNoYieldSlotSeconds = 0;
+        refinementNotes.push(
+          "Removed orphaned ship-progression prep launches: the final plan neither launches them nor uses any ship level they would provide."
+        );
+      }
+    }
+
     const missionRows = buildMissionRows(outputActions, outputUnified.missionCounts);
     const craftRows = buildCraftRows(outputUnified.crafts);
     const consumptionRows = buildConsumptionRows(outputUnified.consumptions, consumptionOptions);
@@ -6280,8 +6419,8 @@ async function planForNewLaunches(
       throw new MissionCoverageError(uncoveredItemKeys);
     }
 
-    const compactedPrepLaunches = compactProgressionSteps(best.candidate.prepSteps);
-    const prepHours = best.candidate.prepSlotSeconds / 3 / 3600;
+    const compactedPrepLaunches = compactProgressionSteps(outputPrepSteps);
+    const prepHours = outputPrepSlotSeconds / 3 / 3600;
     const notes: string[] = [...outputUnified.notes, ...refinementNotes];
     if (fastMode) {
       notes.push(
@@ -6350,14 +6489,14 @@ async function planForNewLaunches(
       const prepLaunchCount = compactedPrepLaunches.reduce((sum, row) => sum + row.launches, 0);
       notes.push(
         `Included ${prepLaunchCount.toLocaleString()} prep launches (${missionDurationLabel(
-          best.candidate.prepSlotSeconds / 3
+          outputPrepSlotSeconds / 3
         )} at 3-slot throughput) to unlock/level ships before target farming.`
       );
     }
-    if (best.prepNoYieldSlotSeconds > 0) {
+    if (outputPrepNoYieldSlotSeconds > 0) {
       notes.push(
         `Some prep launches (${missionDurationLabel(
-          best.prepNoYieldSlotSeconds / 3
+          outputPrepNoYieldSlotSeconds / 3
         )} at 3-slot throughput) had no expected drops for required items and were treated as pure progression time.`
       );
     }
@@ -6404,7 +6543,7 @@ async function planForNewLaunches(
 
     const projectedShipLevels = projectShipLevelsAfterPlannedLaunches({
       baseShipLevels: profile.shipLevels,
-      prepSteps: best.candidate.prepSteps,
+      prepSteps: outputPrepSteps,
       actions: outputActions,
       missionCounts: outputUnified.missionCounts,
     });
@@ -6421,7 +6560,7 @@ async function planForNewLaunches(
     const expectedHours = estimateThreeSlotExpectedHours({
       actions: outputActions,
       missionCounts: outputUnified.missionCounts,
-      residualSlotSeconds: best.prepNoYieldSlotSeconds,
+      residualSlotSeconds: outputPrepNoYieldSlotSeconds,
     });
     const outputFuelCost = missionFuelCost(outputActions, outputUnified.missionCounts);
 
