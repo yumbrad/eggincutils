@@ -3003,6 +3003,7 @@ export default function MissionCraftPlannerPage() {
       request: {
         targetItemId: lastSolveRequest.targetItemId,
         quantity: lastSolveRequest.quantity,
+        targets: lastSolveRequest.targets,
         targetCraftedOnly: lastSolveRequest.targetCraftedOnly,
         priorityTime: lastSolveRequest.priorityTime,
         fastMode: lastSolveRequest.fastMode,

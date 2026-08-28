@@ -26,6 +26,9 @@ const solveInputSnapshotSchema = z.object({
   request: z.object({
     targetItemId: z.string().min(1),
     quantity: z.number().int().min(1),
+    targets: z
+      .array(z.object({ targetItemId: z.string().min(1), quantity: z.number().int().min(1) }))
+      .optional(),
     targetCraftedOnly: z.boolean().optional().default(false),
     priorityTime: z.number().finite().min(0).max(1),
     fastMode: z.boolean(),
@@ -40,9 +43,11 @@ const solveInputSnapshotSchema = z.object({
     includeInventoryRare: z.boolean(),
     includeInventoryEpic: z.boolean(),
     includeInventoryLegendary: z.boolean(),
+    includeInventoryFragments: z.boolean().optional().default(true),
     includeDropRare: z.boolean(),
     includeDropEpic: z.boolean(),
     includeDropLegendary: z.boolean(),
+    includeDropFragments: z.boolean().optional().default(true),
   }),
   profile: playerProfileSchema,
   advancedCompare: z.object({
@@ -64,6 +69,28 @@ const solveInputSnapshotSchema = z.object({
 });
 
 type SolveInputSnapshotFile = z.infer<typeof solveInputSnapshotSchema>;
+
+/** The planner call the UI makes takes every target; the snapshot's top-level
+ *  targetItemId/quantity are just the primary row kept for older readers. */
+function snapshotTargets(snapshot: Pick<SolveInputSnapshotFile, "request">): Array<{ targetItemId: string; quantity: number }> {
+  return snapshot.request.targets && snapshot.request.targets.length > 0
+    ? snapshot.request.targets
+    : [{ targetItemId: snapshot.request.targetItemId, quantity: snapshot.request.quantity }];
+}
+
+function snapshotMissionDropRarities(snapshot: Pick<SolveInputSnapshotFile, "sourceFilters">): {
+  rare: boolean;
+  epic: boolean;
+  legendary: boolean;
+  fragments: boolean;
+} {
+  return {
+    rare: snapshot.sourceFilters.includeDropRare,
+    epic: snapshot.sourceFilters.includeDropEpic,
+    legendary: snapshot.sourceFilters.includeDropLegendary,
+    fragments: snapshot.sourceFilters.includeDropFragments,
+  };
+}
 
 type CliOptions = {
   snapshotPath: string;
@@ -585,14 +612,12 @@ async function runCompareDiagnostics(options: {
     profile: snapshot.profile,
     targetItemId: snapshot.request.targetItemId,
     quantity: snapshot.request.quantity,
+    targets: snapshot.request.targets,
     targetCraftedOnly: snapshot.request.targetCraftedOnly,
     priorityTime: snapshot.request.priorityTime,
     selectedCombos: combos,
-    missionDropRarities: {
-      rare: snapshot.sourceFilters.includeDropRare,
-      epic: snapshot.sourceFilters.includeDropEpic,
-      legendary: snapshot.sourceFilters.includeDropLegendary,
-    },
+    missionDropRarities: snapshotMissionDropRarities(snapshot),
+    selectedConsumptionItemIds: snapshot.request.selectedConsumptionItemIds,
   });
 
   const feasible = results.filter((row) => row.feasible);
@@ -684,21 +709,24 @@ function printPlanSummary(diag: RunDiagnostics): void {
   const { snapshot, execution, planSummary, compare } = diag;
   console.log(`Snapshot: ${snapshot.path}`);
   console.log(`Captured: ${snapshot.capturedAt}`);
+  const requestTargets = snapshotTargets(snapshot)
+    .map((target) => `${itemKeyToDisplayName(itemIdToKey(target.targetItemId))} x${target.quantity.toLocaleString()}`)
+    .join(", ");
   console.log(
-    `Request: ${itemKeyToDisplayName(itemIdToKey(snapshot.request.targetItemId))} x${snapshot.request.quantity.toLocaleString()} | ${formatPriority(
-      snapshot.request.priorityTime
-    )} | fastMode=${String(snapshot.request.fastMode)}`
+    `Request: ${requestTargets} | ${formatPriority(snapshot.request.priorityTime)} | fastMode=${String(
+      snapshot.request.fastMode
+    )} | craftedOnly=${String(snapshot.request.targetCraftedOnly)}`
   );
   console.log(
     `Filters: inventorySource=${snapshot.sourceFilters.inventorySource} slotted=${String(
       snapshot.sourceFilters.includeSlotted
-    )} inv R/E/L=${String(
+    )} inv R/E/L/F=${String(
       snapshot.sourceFilters.includeInventoryRare
     )}/${String(snapshot.sourceFilters.includeInventoryEpic)}/${String(
       snapshot.sourceFilters.includeInventoryLegendary
-    )} drop R/E/L=${String(snapshot.sourceFilters.includeDropRare)}/${String(
+    )}/${String(snapshot.sourceFilters.includeInventoryFragments)} drop R/E/L/F=${String(snapshot.sourceFilters.includeDropRare)}/${String(
       snapshot.sourceFilters.includeDropEpic
-    )}/${String(snapshot.sourceFilters.includeDropLegendary)}`
+    )}/${String(snapshot.sourceFilters.includeDropLegendary)}/${String(snapshot.sourceFilters.includeDropFragments)}`
   );
   console.log(
     `Profile: inventory=${snapshot.profileDigest.inventoryItemCount.toLocaleString()} entries (${Math.round(
@@ -785,11 +813,9 @@ async function run(options: CliOptions): Promise<RunDiagnostics> {
     loaded.snapshot.request.priorityTime,
     {
       fastMode: loaded.snapshot.request.fastMode,
-      missionDropRarities: {
-        rare: loaded.snapshot.sourceFilters.includeDropRare,
-        epic: loaded.snapshot.sourceFilters.includeDropEpic,
-        legendary: loaded.snapshot.sourceFilters.includeDropLegendary,
-      },
+      objectiveMode: loaded.snapshot.sourceFilters.inventorySource === "virtue" ? "virtueFuel" : "ge",
+      missionDropRarities: snapshotMissionDropRarities(loaded.snapshot),
+      targets: loaded.snapshot.request.targets,
       allowedShipDurations: loaded.snapshot.request.allowedShipDurations,
       selectedConsumptionItemIds: loaded.snapshot.request.selectedConsumptionItemIds,
       targetCraftedOnly: loaded.snapshot.request.targetCraftedOnly,
