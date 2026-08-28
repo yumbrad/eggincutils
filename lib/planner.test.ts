@@ -1898,3 +1898,89 @@ describe("planForTarget coverage handling", () => {
     expect(henlinerCoeff).toBeGreaterThan(bcrCoeff * 1000);
   });
 });
+
+describe("surplus craft and consumption trimming", () => {
+  beforeEach(() => {
+    mockedLoadLootData.mockReset();
+    mockedSolveWithHighs.mockReset();
+  });
+
+  it("drops crafts the solver left in its incumbent that nothing draws on", async () => {
+    mockedLoadLootData.mockResolvedValue({ missions: [] });
+    // Closure of tau_ceti_geode_3 sorts to geode_1, geode_2, geode_3; only the
+    // last two have recipes, so c_0 is geode_2 and c_1 is geode_3. Inventory
+    // already covers the 14 geode_2 the target craft eats, so the geode_2 craft
+    // feeds nothing.
+    mockedSolveWithHighs.mockResolvedValue({
+      Status: "Optimal",
+      Columns: {
+        c_0: { Primal: 1 },
+        c_1: { Primal: 1 },
+      },
+    });
+
+    const profile = baseProfile();
+    profile.inventory = { tau_ceti_geode_1: 12, tau_ceti_geode_2: 14 };
+
+    const result = await planForTarget(profile, "tau-ceti-geode-3", 1, 1);
+
+    expect(result.crafts.map((craft) => [craft.itemId, craft.count])).toEqual([["tau-ceti-geode-3", 1]]);
+    expect(result.unmetItems).toEqual([]);
+    expect(result.notes.some((note) => note.includes("Dropped 1 craft"))).toBe(true);
+  });
+
+  it("drops consumptions whose yields are all surplus", async () => {
+    mockedLoadLootData.mockResolvedValue({ missions: [] });
+    mockedSolveWithHighs.mockResolvedValue({
+      Status: "Optimal",
+      Columns: {
+        x_0: { Primal: 3 },
+      },
+    });
+
+    const profile = baseProfile();
+    profile.inventory.light_of_eggendil_1 = 3;
+
+    // One consumption yields ~1.74 clarity stones; one is needed, so two of the
+    // three consumptions are pure surplus.
+    const result = await planForTarget(profile, "clarity-stone-1", 1, 1, {
+      selectedConsumptionItemIds: ["light-of-eggendil-1"],
+    });
+
+    expect(result.consumptions).toHaveLength(1);
+    expect(result.consumptions[0].itemId).toBe("light-of-eggendil-1");
+    expect(result.consumptions[0].count).toBe(1);
+    expect(result.unmetItems).toEqual([]);
+    expect(result.notes.some((note) => note.includes("Dropped 2 consumptions"))).toBe(true);
+  });
+
+  it("keeps a small craft GE tie-break even at 100% time priority", async () => {
+    mockedLoadLootData.mockResolvedValue({ missions: [] });
+    const lpModels: string[] = [];
+    mockedSolveWithHighs.mockImplementation(async (model): Promise<HighsSolveResult> => {
+      lpModels.push(model);
+      return {
+        Status: "Optimal",
+        Columns: {
+          c_0: { Primal: 1 },
+        },
+      };
+    });
+
+    const profile = baseProfile();
+    profile.inventory = { tau_ceti_geode_1: 12 };
+
+    await planForTarget(profile, "tau-ceti-geode-2", 1, 1);
+
+    // Every solve that models the craft (not only the GE polish, which weights
+    // GE by design) must price its cost step, or the solver may pad the plan
+    // with crafts that cost it nothing.
+    const craftObjectiveLines = lpModels
+      .filter((model) => model.includes("cs_0"))
+      .map((model) => model.split("\n").find((line) => line.trimStart().startsWith("obj:")) || "");
+    expect(craftObjectiveLines.length).toBeGreaterThan(0);
+    for (const objectiveLine of craftObjectiveLines) {
+      expect(objectiveLine).toContain("cs_0");
+    }
+  });
+});

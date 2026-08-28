@@ -251,6 +251,13 @@ const PROGRESSION_MAX_LAUNCHES_PER_ACTION = 600;
 const FAST_MODE_MAX_CANDIDATES = 4;
 const NORMAL_MODE_MAX_CANDIDATES = 12;
 const MIN_MISSION_TIME_OBJECTIVE_WEIGHT = 1e-5;
+/** GE weight kept on crafts even at 100% time priority. With a weight of
+ *  exactly 0 the solver has no reason to leave a pointless craft out of an
+ *  incumbent (HiGHS stops at a 1% gap or a time limit, not at optimality).
+ *  Craft coefficients are cost / geRef where geRef is the whole plan's GE, so
+ *  the weight has to be large enough that a cheap craft survives the 1e-9
+ *  coefficient filter; at 1e-3 the GE side is still far inside the MIP gap. */
+const MIN_CRAFT_GE_OBJECTIVE_WEIGHT = 1e-3;
 const MISSION_LAUNCH_TIEBREAKER_SECONDS = 300;
 const TARGETED_MISSION_TIEBREAKER_SECONDS = 1;
 const PLAN_SCORE_TIE_TOLERANCE_FRACTION = 0.01;
@@ -700,6 +707,104 @@ function consumptionProducedByItem(
     }
   }
   return total;
+}
+
+/**
+ * HiGHS hands back the best incumbent it found within its gap or time limit,
+ * and at 100% time priority a craft costs it (almost) nothing, so that
+ * incumbent can carry crafts that feed no target, no other craft and no
+ * consumption — a lone T2 beak on a geode+deflector plan, say. Drop any craft
+ * whose output the balance rows would still cover without it, and any
+ * consumption whose every yield is surplus, until nothing more can go. Only
+ * supply nothing draws on is removed, so every row the solver satisfied still
+ * holds; freed ingredients can make their own crafts surplus, hence the loop.
+ * Mission launches are left exactly as solved.
+ */
+function trimSurplusCraftsAndConsumptions(options: {
+  profile: PlayerProfile;
+  itemKeys: string[];
+  demandByItem: Map<string, number>;
+  crafts: Record<string, number>;
+  consumptions: Record<string, number>;
+  consumptionOptions: ConsumptionOption[];
+  actions: MissionAction[];
+  missionCounts: Record<string, number>;
+  targetCraftedOnlyKeys: Set<string>;
+}): { droppedCrafts: number; droppedConsumptions: number } {
+  const { profile, itemKeys, demandByItem, crafts, consumptions, consumptionOptions, actions, missionCounts, targetCraftedOnlyKeys } =
+    options;
+  const slackByItem = new Map<string, number>();
+  for (const itemKey of itemKeys) {
+    const demandQty = Math.max(0, demandByItem.get(itemKey) || 0);
+    let slack = (demandQty > 0 ? 0 : Math.max(0, profile.inventory[itemKey] || 0)) - demandQty;
+    slack += Math.max(0, crafts[itemKey] || 0);
+    slack -= Math.max(0, consumptions[itemKey] || 0);
+    for (const option of consumptionOptions) {
+      slack += (option.yields[itemKey] || 0) * Math.max(0, consumptions[option.sourceItemKey] || 0);
+    }
+    if (!targetCraftedOnlyKeys.has(itemKey)) {
+      for (const action of actions) {
+        slack += (action.yields[itemKey] || 0) * Math.max(0, missionCounts[action.key] || 0);
+      }
+    }
+    for (const [craftedItemKey, craftCount] of Object.entries(crafts)) {
+      slack -= (getRecipe(craftedItemKey)?.ingredients[itemKey] || 0) * Math.max(0, craftCount);
+    }
+    slackByItem.set(itemKey, slack);
+  }
+
+  let droppedCrafts = 0;
+  let droppedConsumptions = 0;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const itemKey of itemKeys) {
+      const count = Math.max(0, crafts[itemKey] || 0);
+      const removable = Math.min(count, Math.floor((slackByItem.get(itemKey) || 0) + 1e-9));
+      if (removable <= 0) {
+        continue;
+      }
+      if (removable >= count) {
+        delete crafts[itemKey];
+      } else {
+        crafts[itemKey] = count - removable;
+      }
+      slackByItem.set(itemKey, (slackByItem.get(itemKey) || 0) - removable);
+      for (const [ingredientKey, ingredientQty] of Object.entries(getRecipe(itemKey)?.ingredients || {})) {
+        if (slackByItem.has(ingredientKey)) {
+          slackByItem.set(ingredientKey, (slackByItem.get(ingredientKey) || 0) + ingredientQty * removable);
+        }
+      }
+      droppedCrafts += removable;
+      changed = true;
+    }
+    for (const option of consumptionOptions) {
+      const count = Math.max(0, consumptions[option.sourceItemKey] || 0);
+      let removable = count;
+      for (const [yieldKey, yieldQty] of Object.entries(option.yields)) {
+        if (yieldQty > SCORE_EPS) {
+          removable = Math.min(removable, Math.floor(((slackByItem.get(yieldKey) || 0) + 1e-9) / yieldQty));
+        }
+      }
+      if (removable <= 0) {
+        continue;
+      }
+      if (removable >= count) {
+        delete consumptions[option.sourceItemKey];
+      } else {
+        consumptions[option.sourceItemKey] = count - removable;
+      }
+      for (const [yieldKey, yieldQty] of Object.entries(option.yields)) {
+        slackByItem.set(yieldKey, (slackByItem.get(yieldKey) || 0) - yieldQty * removable);
+      }
+      if (slackByItem.has(option.sourceItemKey)) {
+        slackByItem.set(option.sourceItemKey, (slackByItem.get(option.sourceItemKey) || 0) + removable);
+      }
+      droppedConsumptions += removable;
+      changed = true;
+    }
+  }
+  return { droppedCrafts, droppedConsumptions };
 }
 
 function collectCraftUpperBounds(
@@ -1674,6 +1779,9 @@ async function solveUnifiedCraftMissionPlan(options: {
   const objectiveTerms: Array<{ coefficient: number; variable: string }> = [];
   const geConstraintTerms: Array<{ coefficient: number; variable: string }> = [];
   let maxObjectiveCoeff = 1;
+  const craftGeObjectiveWeight = objectiveContext.mode === "ge"
+    ? Math.max(objectiveContext.resourceWeight, MIN_CRAFT_GE_OBJECTIVE_WEIGHT)
+    : VIRTUE_GE_TIEBREAKER_WEIGHT;
 
   for (const model of craftModels) {
     for (let index = 0; index < model.preDiscountStepVars.length; index += 1) {
@@ -1682,9 +1790,7 @@ async function solveUnifiedCraftMissionPlan(options: {
         coefficient: geCoeff,
         variable: model.preDiscountStepVars[index],
       });
-      const coefficient = objectiveContext.mode === "ge"
-        ? (objectiveContext.resourceWeight * geCoeff) / normalizedGeRef
-        : (VIRTUE_GE_TIEBREAKER_WEIGHT * geCoeff) / normalizedGeRef;
+      const coefficient = (craftGeObjectiveWeight * geCoeff) / normalizedGeRef;
       objectiveTerms.push({
         coefficient,
         variable: model.preDiscountStepVars[index],
@@ -1700,9 +1806,7 @@ async function solveUnifiedCraftMissionPlan(options: {
         coefficient: tailCost,
         variable: model.tailVar,
       });
-      const coefficient = objectiveContext.mode === "ge"
-        ? (objectiveContext.resourceWeight * tailCost) / normalizedGeRef
-        : (VIRTUE_GE_TIEBREAKER_WEIGHT * tailCost) / normalizedGeRef;
+      const coefficient = (craftGeObjectiveWeight * tailCost) / normalizedGeRef;
       objectiveTerms.push({
         coefficient,
         variable: model.tailVar,
@@ -2089,6 +2193,31 @@ async function solveUnifiedCraftMissionPlan(options: {
     }
   }
 
+  const trimmed = trimSurplusCraftsAndConsumptions({
+    profile,
+    itemKeys,
+    demandByItem,
+    crafts,
+    consumptions,
+    consumptionOptions,
+    actions,
+    missionCounts,
+    targetCraftedOnlyKeys: effectiveTargetCraftedOnlyKeys,
+  });
+  const notes = ["Craft + mission allocation solved with unified HiGHS model (exact craft discount scheduling)."];
+  if (trimmed.droppedCrafts > 0 || trimmed.droppedConsumptions > 0) {
+    const dropped: string[] = [];
+    if (trimmed.droppedCrafts > 0) {
+      dropped.push(`${trimmed.droppedCrafts.toLocaleString()} craft${trimmed.droppedCrafts === 1 ? "" : "s"}`);
+    }
+    if (trimmed.droppedConsumptions > 0) {
+      dropped.push(
+        `${trimmed.droppedConsumptions.toLocaleString()} consumption${trimmed.droppedConsumptions === 1 ? "" : "s"}`
+      );
+    }
+    notes.push(`Dropped ${dropped.join(" and ")} the solver left in its solution that nothing in the plan draws on.`);
+  }
+
   const remainingDemand: Record<string, number> = {};
   for (const itemKey of itemKeys) {
     const rawValue = solution.Columns?.[unmetVarByItem.get(itemKey)!]?.Primal || 0;
@@ -2111,7 +2240,7 @@ async function solveUnifiedCraftMissionPlan(options: {
     remainingDemand,
     geCost,
     totalSlotSeconds,
-    notes: ["Craft + mission allocation solved with unified HiGHS model (exact craft discount scheduling)."],
+    notes,
   };
 }
 
