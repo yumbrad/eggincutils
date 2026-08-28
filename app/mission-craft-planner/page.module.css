@@ -203,6 +203,65 @@
   gap: 8px;
 }
 
+.craftGoalTag {
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.targetRowGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.targetRowMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 8px;
+  min-width: 0;
+}
+
+.targetGoalChip {
+  flex: none;
+  padding: 3px 9px;
+  border: 1px solid color-mix(in oklab, var(--stroke), transparent 10%);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--planner-control-font);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.targetGoalChip:hover {
+  border-color: color-mix(in oklab, var(--stroke), var(--ink) 20%);
+  color: var(--ink);
+}
+
+.targetGoalChip[data-on="1"] {
+  border-color: color-mix(in oklab, var(--accent), transparent 40%);
+  background: color-mix(in oklab, var(--accent), transparent 88%);
+  color: var(--ink);
+}
+
+.targetRowMetaText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
 .targetRow {
   position: relative;
   display: grid;

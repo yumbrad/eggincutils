@@ -101,7 +101,7 @@ type PlanResponse = {
   plan: {
     targetItemId: string;
     quantity: number;
-    targets: Array<{ targetItemId: string; quantity: number }>;
+    targets: Array<{ targetItemId: string; quantity: number; craftGoal?: boolean }>;
     priorityTime: number;
     objectiveMode: "ge" | "virtueFuel";
     geCost: number;
@@ -197,7 +197,7 @@ type MonolithicPathResult = {
 type SolveSnapshotRequest = {
   targetItemId: string;
   quantity: number;
-  targets?: Array<{ targetItemId: string; quantity: number }>;
+  targets?: Array<{ targetItemId: string; quantity: number; craftGoal?: boolean }>;
   targetCraftedOnly: boolean;
   priorityTime: number;
   fastMode: boolean;
@@ -339,6 +339,8 @@ type TimelineLaneBlock = {
 
 type CraftPlanDetailRow = {
   itemId: string;
+  /** Set when a craft-count goal put this row in the table. */
+  craftGoalLabel: string | null;
   plannedCraftCount: number;
   have: number | null;
   requiredForChain: number;
@@ -366,6 +368,8 @@ type PlannerTargetRow = {
   id: string;
   itemId: string;
   quantityInput: string;
+  /** Read the quantity as an all-time craft-count goal rather than copies to add. */
+  craftGoal: boolean;
 };
 
 type MissionTimeline = {
@@ -434,7 +438,7 @@ function shipImageUrl(filename: string, host: string = SHIP_IMAGE_HOST): string 
 }
 
 type PlannerSourcePreferences = {
-  targetRows?: Array<{ targetItemId?: string; itemId?: string; quantity?: number; quantityInput?: string }>;
+  targetRows?: Array<{ targetItemId?: string; itemId?: string; quantity?: number; quantityInput?: string; craftGoal?: boolean }>;
   targetCraftedOnly?: boolean;
   includeSlotted?: boolean;
   includeInventoryRare?: boolean;
@@ -454,6 +458,9 @@ type PlannerSourcePreferenceStore = Partial<Record<InventorySource, PlannerSourc
 const ARTIFACT_DISPLAY = artifactDisplay as Record<string, { id: string; name: string; tierName: string; tierNumber: number }>;
 const ARTIFACT_CONSUMPTION = artifactConsumption as Record<string, Record<string, number>>;
 const ARTIFACT_SHORT_NAMES = artifactShortNames as Array<{ familyKey: string; shortName: string }>;
+/** Where an artifact's crafting discount stops improving, and so the craft
+ *  count most players are chasing. Mirrors MAX_CRAFT_COUNT_FOR_DISCOUNT. */
+const MAX_CRAFT_DISCOUNT_COUNT = 300;
 const SHARED_EID_KEYS = [LOCAL_PREF_KEYS.sharedEid, LOCAL_PREF_KEYS.legacyEid] as const;
 const SHARED_INCLUDE_SLOTTED_KEYS = [LOCAL_PREF_KEYS.sharedIncludeSlotted, LOCAL_PREF_KEYS.legacyIncludeSlotted] as const;
 
@@ -1286,6 +1293,26 @@ function normalizedTargetQuantity(rawValue: string): number {
   return Math.max(1, Math.min(9999, Math.round(Number(rawValue) || 1)));
 }
 
+/** Only tiers with a recipe have a craft count, so tier 1 can never be a craft goal. */
+function itemCanBeCrafted(itemId: string): boolean {
+  return Boolean((recipes as Record<string, unknown>)[itemIdToKey(itemId)]);
+}
+
+function targetRowToPlannerTarget(row: PlannerTargetRow): {
+  targetItemId: string;
+  quantity: number;
+  craftGoal?: boolean;
+} {
+  const target: { targetItemId: string; quantity: number; craftGoal?: boolean } = {
+    targetItemId: row.itemId,
+    quantity: normalizedTargetQuantity(row.quantityInput),
+  };
+  if (row.craftGoal && itemCanBeCrafted(row.itemId)) {
+    target.craftGoal = true;
+  }
+  return target;
+}
+
 function parseStoredTargetRows(raw: string | null, targetOptions: TargetOption[]): PlannerTargetRow[] | null {
   if (!raw) {
     return null;
@@ -1301,7 +1328,13 @@ function parseStoredTargetRows(raw: string | null, targetOptions: TargetOption[]
       if (!value || typeof value !== "object" || rows.length >= 10) {
         continue;
       }
-      const record = value as { targetItemId?: unknown; itemId?: unknown; quantity?: unknown; quantityInput?: unknown };
+      const record = value as {
+        targetItemId?: unknown;
+        itemId?: unknown;
+        quantity?: unknown;
+        quantityInput?: unknown;
+        craftGoal?: unknown;
+      };
       const itemId = typeof record.targetItemId === "string"
         ? record.targetItemId
         : typeof record.itemId === "string"
@@ -1311,7 +1344,12 @@ function parseStoredTargetRows(raw: string | null, targetOptions: TargetOption[]
         continue;
       }
       const quantity = Math.max(1, Math.min(9999, Math.round(Number(record.quantity ?? record.quantityInput) || 1)));
-      rows.push({ id: `target-${rows.length + 1}`, itemId, quantityInput: String(quantity) });
+      rows.push({
+        id: `target-${rows.length + 1}`,
+        itemId,
+        quantityInput: String(quantity),
+        craftGoal: record.craftGoal === true && itemCanBeCrafted(itemId),
+      });
     }
     return rows.length > 0 ? rows : null;
   } catch {
@@ -1320,12 +1358,7 @@ function parseStoredTargetRows(raw: string | null, targetOptions: TargetOption[]
 }
 
 function serializeTargetRows(rows: PlannerTargetRow[]): string {
-  return JSON.stringify(
-    rows.map((row) => ({
-      targetItemId: row.itemId,
-      quantity: normalizedTargetQuantity(row.quantityInput),
-    }))
-  );
+  return JSON.stringify(rows.map(targetRowToPlannerTarget));
 }
 
 function normalizeShipDurations(value: unknown): ShipDurationSelection | null {
@@ -1536,7 +1569,7 @@ export default function MissionCraftPlannerPage() {
   const [eid, setEid] = useState("");
   const [targetItemId, setTargetItemId] = useState("soul-stone-2");
   const [targetRows, setTargetRows] = useState<PlannerTargetRow[]>([
-    { id: "target-1", itemId: "soul-stone-2", quantityInput: "1" },
+    { id: "target-1", itemId: "soul-stone-2", quantityInput: "1", craftGoal: false },
   ]);
   const [activeTargetRowId, setActiveTargetRowId] = useState("target-1");
   const [targetPickerOpen, setTargetPickerOpen] = useState(false);
@@ -1608,10 +1641,7 @@ export default function MissionCraftPlannerPage() {
   const setActivePriorityTimePct = inventorySource === "virtue" ? setVirtuePriorityTimePct : setPriorityTimePct;
 
   const buildCurrentSourcePreferences = (): PlannerSourcePreferences => ({
-    targetRows: targetRows.map((row) => ({
-      targetItemId: row.itemId,
-      quantity: normalizedTargetQuantity(row.quantityInput),
-    })),
+    targetRows: targetRows.map(targetRowToPlannerTarget),
     targetCraftedOnly,
     includeSlotted,
     includeInventoryRare,
@@ -1630,7 +1660,7 @@ export default function MissionCraftPlannerPage() {
     const rows = preferences?.targetRows
       ? parseStoredTargetRows(JSON.stringify(preferences.targetRows), targetOptions)
       : null;
-    const nextRows = rows || [{ id: "target-1", itemId: "soul-stone-2", quantityInput: "1" }];
+    const nextRows = rows || [{ id: "target-1", itemId: "soul-stone-2", quantityInput: "1", craftGoal: false }];
     const primaryTarget = nextRows[0];
     setTargetRows(nextRows);
     setActiveTargetRowId(primaryTarget.id);
@@ -1789,14 +1819,7 @@ export default function MissionCraftPlannerPage() {
     () => targetOptions.find((option) => option.itemId === (activeTargetRow?.itemId || targetItemId)) || null,
     [activeTargetRow?.itemId, targetItemId, targetOptions]
   );
-  const solveTargets = useMemo(
-    () =>
-      targetRows.map((row) => ({
-        targetItemId: row.itemId,
-        quantity: normalizedTargetQuantity(row.quantityInput),
-      })),
-    [targetRows]
-  );
+  const solveTargets = useMemo(() => targetRows.map(targetRowToPlannerTarget), [targetRows]);
   const filteredTargetOptions = useMemo(() => {
     if (!targetPickerOpen) {
       return targetOptions;
@@ -1848,9 +1871,20 @@ export default function MissionCraftPlannerPage() {
     const planTargets = response.plan.targets?.length
       ? response.plan.targets
       : [{ targetItemId: response.plan.targetItemId, quantity: response.plan.quantity }];
-    const targetKeys = new Set(planTargets.map((target) => itemIdToKey(target.targetItemId)));
-    const planTargetCraftedOnly = Boolean(lastSolveRequest?.targetCraftedOnly);
+    // A craft-count goal is a floor on crafts, not demand for copies, so it
+    // must not add a "Needed" row -- its crafts show up under Planned Craft and
+    // their ingredients come from the craft loop below.
+    const demandTargets = planTargets.filter((target) => !target.craftGoal);
+    const craftGoalTotalByItemKey = new Map<string, number>();
     for (const target of planTargets) {
+      if (target.craftGoal) {
+        const key = itemIdToKey(target.targetItemId);
+        craftGoalTotalByItemKey.set(key, Math.max(craftGoalTotalByItemKey.get(key) || 0, target.quantity));
+      }
+    }
+    const targetKeys = new Set(demandTargets.map((target) => itemIdToKey(target.targetItemId)));
+    const planTargetCraftedOnly = Boolean(lastSolveRequest?.targetCraftedOnly);
+    for (const target of demandTargets) {
       const key = itemIdToKey(target.targetItemId);
       requiredByItemKey[key] = (requiredByItemKey[key] || 0) + target.quantity;
     }
@@ -1915,7 +1949,7 @@ export default function MissionCraftPlannerPage() {
       usage.set(consumerKey, (usage.get(consumerKey) || 0) + safeQty);
       neededUsesByItemKey.set(itemKey, usage);
     };
-    for (const target of planTargets) {
+    for (const target of demandTargets) {
       addNeededUse(itemIdToKey(target.targetItemId), "__plan_target__", target.quantity);
     }
     for (const craft of response.plan.crafts) {
@@ -1936,6 +1970,7 @@ export default function MissionCraftPlannerPage() {
 
     const rowItemKeys = new Set<string>([
       ...Object.keys(requiredByItemKey),
+      ...craftGoalTotalByItemKey.keys(),
       ...response.plan.crafts.map((craft) => itemIdToKey(craft.itemId)),
       ...(response.plan.consumptions || []).flatMap((consumption) => [
         itemIdToKey(consumption.itemId),
@@ -1951,8 +1986,25 @@ export default function MissionCraftPlannerPage() {
         const plannedCraftCount = plannedCraftCountByItemId.get(itemId) || 0;
         const fromConsumption = Math.max(0, consumptionYieldByItemId.get(itemId) || 0);
         const consumedCount = Math.max(0, consumedCountByItemId.get(itemId) || 0);
-        if (requiredForChain <= 0 && plannedCraftCount <= 0 && fromConsumption <= 0 && consumedCount <= 0) {
+        const craftGoalTotal = craftGoalTotalByItemKey.get(itemKey) || 0;
+        if (
+          craftGoalTotal <= 0 &&
+          requiredForChain <= 0 &&
+          plannedCraftCount <= 0 &&
+          fromConsumption <= 0 &&
+          consumedCount <= 0
+        ) {
           return null;
+        }
+        let craftGoalLabel: string | null = null;
+        if (craftGoalTotal > 0) {
+          const craftedBefore = profileSnapshot
+            ? Math.max(0, Math.round(profileSnapshot.craftCounts[itemKey] || 0))
+            : null;
+          craftGoalLabel =
+            craftedBefore == null
+              ? `craft goal ${craftGoalTotal.toLocaleString()}`
+              : `craft goal ${craftGoalTotal.toLocaleString()} · ${craftedBefore.toLocaleString()} → ${(craftedBefore + plannedCraftCount).toLocaleString()}`;
         }
         const have = profileSnapshot ? Math.max(0, profileSnapshot.inventory[itemKey] || 0) : null;
         const expectedMission =
@@ -2042,6 +2094,7 @@ export default function MissionCraftPlannerPage() {
 
         return {
           itemId,
+          craftGoalLabel,
           plannedCraftCount,
           have,
           requiredForChain,
@@ -2213,7 +2266,7 @@ export default function MissionCraftPlannerPage() {
           if (savedTarget && targetOptions.some((option) => option.itemId === savedTarget)) {
             setTargetItemId(savedTarget);
             setTargetRows((rows) => {
-              const next = rows.length > 0 ? [...rows] : [{ id: "target-1", itemId: savedTarget, quantityInput: "1" }];
+              const next = rows.length > 0 ? [...rows] : [{ id: "target-1", itemId: savedTarget, quantityInput: "1", craftGoal: false }];
               next[0] = { ...next[0], itemId: savedTarget };
               return next;
             });
@@ -2223,7 +2276,9 @@ export default function MissionCraftPlannerPage() {
             setQuantity(savedQuantity);
             setQuantityInput(String(savedQuantity));
             setTargetRows((rows) => {
-              const next = rows.length > 0 ? [...rows] : [{ id: "target-1", itemId: targetItemId, quantityInput: String(savedQuantity) }];
+              const next = rows.length > 0
+                ? [...rows]
+                : [{ id: "target-1", itemId: targetItemId, quantityInput: String(savedQuantity), craftGoal: false }];
               next[0] = { ...next[0], quantityInput: String(savedQuantity) };
               return next;
             });
@@ -2844,11 +2899,15 @@ export default function MissionCraftPlannerPage() {
   function selectTargetOption(option: TargetOption): void {
     setTargetRows((rows) => {
       const activeId = activeTargetRow?.id || rows[0]?.id || "target-1";
-      const next = rows.map((row) => (row.id === activeId ? { ...row, itemId: option.itemId } : row));
+      const next = rows.map((row) =>
+        row.id === activeId
+          ? { ...row, itemId: option.itemId, craftGoal: row.craftGoal && itemCanBeCrafted(option.itemId) }
+          : row
+      );
       if (next[0]) {
         setTargetItemId(next[0].itemId);
       }
-      return next.length > 0 ? next : [{ id: activeId, itemId: option.itemId, quantityInput: "1" }];
+      return next.length > 0 ? next : [{ id: activeId, itemId: option.itemId, quantityInput: "1", craftGoal: false }];
     });
     setTargetPickerOpen(false);
     setTargetFilter(option.label);
@@ -2864,6 +2923,35 @@ export default function MissionCraftPlannerPage() {
           setQuantity(nextQuantity);
           setQuantityInput(String(nextQuantity));
         }
+      }
+      return next;
+    });
+  }
+
+  function toggleTargetCraftGoal(rowId: string): void {
+    setTargetRows((rows) => {
+      const next = rows.map((row) => {
+        if (row.id !== rowId || !itemCanBeCrafted(row.itemId)) {
+          return row;
+        }
+        const nextCraftGoal = !row.craftGoal;
+        const quantity = normalizedTargetQuantity(row.quantityInput);
+        // Copies and craft counts live on very different scales, so a goal that
+        // is still the stepper default gets seeded at the max-discount 300 --
+        // and switching back drops that seed rather than asking for 300 copies.
+        const quantityInput = nextCraftGoal
+          ? quantity <= 1
+            ? String(MAX_CRAFT_DISCOUNT_COUNT)
+            : row.quantityInput
+          : quantity === MAX_CRAFT_DISCOUNT_COUNT
+            ? "1"
+            : row.quantityInput;
+        return { ...row, craftGoal: nextCraftGoal, quantityInput };
+      });
+      if (next[0]?.id === rowId) {
+        const primaryQuantity = normalizedTargetQuantity(next[0].quantityInput);
+        setQuantity(primaryQuantity);
+        setQuantityInput(String(primaryQuantity));
       }
       return next;
     });
@@ -2892,7 +2980,7 @@ export default function MissionCraftPlannerPage() {
   function addTargetRow(): void {
     const id = `target-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
     const itemId = targetRows[targetRows.length - 1]?.itemId || targetItemId;
-    setTargetRows((rows) => [...rows, { id, itemId, quantityInput: "1" }].slice(0, 10));
+    setTargetRows((rows) => [...rows, { id, itemId, quantityInput: "1", craftGoal: false }].slice(0, 10));
     setActiveTargetRowId(id);
     setTargetPickerOpen(true);
     setTargetFilter("");
@@ -3481,8 +3569,15 @@ export default function MissionCraftPlannerPage() {
                 {targetRows.map((row, rowIndex) => {
                   const option = targetOptions.find((candidate) => candidate.itemId === row.itemId) || null;
                   const rowActive = row.id === activeTargetRowId;
+                  const craftable = itemCanBeCrafted(row.itemId);
+                  const craftedSoFar = profileSnapshot
+                    ? Math.max(0, Math.round(profileSnapshot.craftCounts[itemIdToKey(row.itemId)] || 0))
+                    : null;
+                  const craftsToGo =
+                    craftedSoFar == null ? null : Math.max(0, normalizedTargetQuantity(row.quantityInput) - craftedSoFar);
                   return (
-                    <div key={row.id} className={styles.targetRow} data-target-row-id={row.id}>
+                    <div key={row.id} className={styles.targetRowGroup}>
+                    <div className={styles.targetRow} data-target-row-id={row.id}>
                       <span className={styles.targetIcon} aria-hidden="true">
                         {option?.iconUrl ? (
                           <img src={option.iconUrl} alt="" width={32} height={32} loading="lazy" />
@@ -3588,6 +3683,39 @@ export default function MissionCraftPlannerPage() {
                           </ul>
                         </div>
                       )}
+                    </div>
+                    {craftable && (
+                      <div className={styles.targetRowMeta}>
+                        <button
+                          type="button"
+                          className={styles.targetGoalChip}
+                          data-on={row.craftGoal ? "1" : "0"}
+                          onClick={() => toggleTargetCraftGoal(row.id)}
+                          aria-pressed={row.craftGoal}
+                          title={
+                            row.craftGoal
+                              ? `Aiming for an all-time craft count instead of new copies -- ${MAX_CRAFT_DISCOUNT_COUNT} maxes this artifact's crafting discount. The count comes from your save, so it is the same on every device. Mission drops do not raise it, and copies a higher tier consumes still do, so the plan crafts exactly the difference.`
+                              : "Read this number as copies to add to what you already have."
+                          }
+                        >
+                          {row.craftGoal ? "craft count" : "copies"}
+                        </button>
+                        {row.craftGoal ? (
+                          <span className={styles.targetRowMetaText}>
+                            {craftedSoFar == null
+                              ? "craft count loads with your profile"
+                              : craftsToGo === 0
+                                ? `${craftedSoFar.toLocaleString()} crafted - goal already met`
+                                : `${craftedSoFar.toLocaleString()} crafted, ${craftsToGo?.toLocaleString()} to go`}
+                          </span>
+                        ) : (
+                          craftedSoFar != null &&
+                          craftedSoFar > 0 && (
+                            <span className={styles.targetRowMetaText}>{craftedSoFar.toLocaleString()} crafted so far</span>
+                          )
+                        )}
+                      </div>
+                    )}
                     </div>
                   );
                 })}
@@ -3781,6 +3909,9 @@ export default function MissionCraftPlannerPage() {
                               )}
                               <div>
                                 <div>{itemIdToLabel(craft.itemId)}</div>
+                                {craft.craftGoalLabel && (
+                                  <div className={styles.craftGoalTag}>{craft.craftGoalLabel}</div>
+                                )}
                               </div>
                             </div>
                           </td>

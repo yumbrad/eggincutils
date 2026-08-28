@@ -27,7 +27,13 @@ const solveInputSnapshotSchema = z.object({
     targetItemId: z.string().min(1),
     quantity: z.number().int().min(1),
     targets: z
-      .array(z.object({ targetItemId: z.string().min(1), quantity: z.number().int().min(1) }))
+      .array(
+        z.object({
+          targetItemId: z.string().min(1),
+          quantity: z.number().int().min(1),
+          craftGoal: z.boolean().optional(),
+        })
+      )
       .optional(),
     targetCraftedOnly: z.boolean().optional().default(false),
     priorityTime: z.number().finite().min(0).max(1),
@@ -72,7 +78,9 @@ type SolveInputSnapshotFile = z.infer<typeof solveInputSnapshotSchema>;
 
 /** The planner call the UI makes takes every target; the snapshot's top-level
  *  targetItemId/quantity are just the primary row kept for older readers. */
-function snapshotTargets(snapshot: Pick<SolveInputSnapshotFile, "request">): Array<{ targetItemId: string; quantity: number }> {
+function snapshotTargets(
+  snapshot: Pick<SolveInputSnapshotFile, "request">
+): Array<{ targetItemId: string; quantity: number; craftGoal?: boolean }> {
   return snapshot.request.targets && snapshot.request.targets.length > 0
     ? snapshot.request.targets
     : [{ targetItemId: snapshot.request.targetItemId, quantity: snapshot.request.quantity }];
@@ -710,7 +718,12 @@ function printPlanSummary(diag: RunDiagnostics): void {
   console.log(`Snapshot: ${snapshot.path}`);
   console.log(`Captured: ${snapshot.capturedAt}`);
   const requestTargets = snapshotTargets(snapshot)
-    .map((target) => `${itemKeyToDisplayName(itemIdToKey(target.targetItemId))} x${target.quantity.toLocaleString()}`)
+    .map((target) => {
+      const name = itemKeyToDisplayName(itemIdToKey(target.targetItemId));
+      return target.craftGoal
+        ? `${name} to ${target.quantity.toLocaleString()} crafts`
+        : `${name} x${target.quantity.toLocaleString()}`;
+    })
     .join(", ");
   console.log(
     `Request: ${requestTargets} | ${formatPriority(snapshot.request.priorityTime)} | fastMode=${String(
@@ -738,10 +751,15 @@ function printPlanSummary(diag: RunDiagnostics): void {
       planSummary.geCost
     ).toLocaleString()} | launches=${planSummary.totalLaunches.toLocaleString()} | crafts=${planSummary.totalCraftCount.toLocaleString()}`
   );
+  const craftGoalSuffix = planSummary.targetBreakdown.craftGoal
+    ? ` (craft-count goal ${(planSummary.targetBreakdown.craftGoalTotal || 0).toLocaleString()}, ${(
+        planSummary.targetBreakdown.craftedBefore || 0
+      ).toLocaleString()} already crafted)`
+    : "";
   console.log(
     `Target breakdown: requested=${planSummary.targetBreakdown.requested.toLocaleString()} inventory=${planSummary.targetBreakdown.fromInventory.toLocaleString()} craft=${planSummary.targetBreakdown.fromCraft.toLocaleString()} missions=${planSummary.targetBreakdown.fromMissionsExpected.toFixed(
       2
-    )} shortfall=${planSummary.targetBreakdown.shortfall.toFixed(6)}`
+    )} shortfall=${planSummary.targetBreakdown.shortfall.toFixed(6)}${craftGoalSuffix}`
   );
   console.log(
     `Unmet: rows=${planSummary.unmetRows.toLocaleString()} qty=${planSummary.unmetQuantity.toFixed(6)} | Notes=${planSummary.notes.length.toLocaleString()}`

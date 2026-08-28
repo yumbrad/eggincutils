@@ -1984,3 +1984,119 @@ describe("surplus craft and consumption trimming", () => {
     }
   });
 });
+
+describe("craft-count goals", () => {
+  beforeEach(() => {
+    mockedLoadLootData.mockReset();
+    mockedSolveWithHighs.mockReset();
+  });
+
+  it("floors the craft variable at the crafts still owed", async () => {
+    mockedLoadLootData.mockResolvedValue({ missions: [] });
+    const lpModels: string[] = [];
+    mockedSolveWithHighs.mockImplementation(async (model): Promise<HighsSolveResult> => {
+      lpModels.push(model);
+      return {
+        Status: "Optimal",
+        Columns: {
+          c_0: { Primal: 3 },
+        },
+      };
+    });
+
+    const profile = baseProfile();
+    profile.inventory = { tau_ceti_geode_1: 36 };
+    profile.craftCounts = { tau_ceti_geode_2: 297 };
+
+    const result = await planForTarget(profile, "tau-ceti-geode-2", 300, 1, {
+      targets: [{ targetItemId: "tau-ceti-geode-2", quantity: 300, craftGoal: true }],
+    });
+
+    // 297 of the 300 are already crafted, so the plan owes exactly 3.
+    for (const model of lpModels) {
+      expect(model).toContain("3 <= c_0 <=");
+    }
+    expect(result.crafts.map((craft) => [craft.itemId, craft.count])).toEqual([["tau-ceti-geode-2", 3]]);
+    expect(result.unmetItems).toEqual([]);
+    expect(result.notes.some((note) => note.includes("at least 3 more"))).toBe(true);
+  });
+
+  it("counts crafts a higher tier eats toward the goal", async () => {
+    mockedLoadLootData.mockResolvedValue({ missions: [] });
+    mockedSolveWithHighs.mockResolvedValue({
+      Status: "Optimal",
+      Columns: {
+        c_0: { Primal: 3 },
+        c_1: { Primal: 1 },
+      },
+    });
+
+    const profile = baseProfile();
+    // The 14 geode_2 the geode_3 craft eats come from inventory, so all three
+    // crafted geode_2 are surplus by the balance rows -- and still the point of
+    // the plan, because each one raises the craft count.
+    profile.inventory = { tau_ceti_geode_1: 36, tau_ceti_geode_2: 14 };
+    profile.craftCounts = { tau_ceti_geode_2: 297 };
+
+    const result = await planForTarget(profile, "tau-ceti-geode-3", 1, 1, {
+      targets: [
+        { targetItemId: "tau-ceti-geode-3", quantity: 1 },
+        { targetItemId: "tau-ceti-geode-2", quantity: 300, craftGoal: true },
+      ],
+    });
+
+    const craftCounts = new Map(result.crafts.map((craft) => [craft.itemId, craft.count]));
+    expect(craftCounts.get("tau-ceti-geode-2")).toBe(3);
+    expect(craftCounts.get("tau-ceti-geode-3")).toBe(1);
+    expect(result.unmetItems).toEqual([]);
+  });
+
+  it("adds nothing for a goal the craft count already meets", async () => {
+    mockedLoadLootData.mockResolvedValue({ missions: [] });
+    const lpModels: string[] = [];
+    mockedSolveWithHighs.mockImplementation(async (model): Promise<HighsSolveResult> => {
+      lpModels.push(model);
+      return { Status: "Optimal", Columns: {} };
+    });
+
+    const profile = baseProfile();
+    profile.inventory = { tau_ceti_geode_1: 36 };
+    profile.craftCounts = { tau_ceti_geode_2: 311 };
+
+    const result = await planForTarget(profile, "tau-ceti-geode-2", 300, 1, {
+      targets: [{ targetItemId: "tau-ceti-geode-2", quantity: 300, craftGoal: true }],
+    });
+
+    expect(result.crafts).toEqual([]);
+    expect(result.unmetItems).toEqual([]);
+    expect(result.notes.some((note) => note.includes("already at 311 of 300 crafts"))).toBe(true);
+    // No demand row was invented for the goal item.
+    for (const model of lpModels) {
+      expect(model).not.toContain("0 <= c_0 <= 300");
+    }
+  });
+
+  it("ignores a craft-count goal on an item with no recipe", async () => {
+    mockedLoadLootData.mockResolvedValue({ missions: [] });
+    mockedSolveWithHighs.mockResolvedValue({
+      Status: "Optimal",
+      Columns: {
+        c_0: { Primal: 1 },
+      },
+    });
+
+    const profile = baseProfile();
+    profile.inventory = { tau_ceti_geode_1: 12 };
+
+    // A tier-1 artifact is never crafted, so the goal degrades to plain demand.
+    const result = await planForTarget(profile, "tau-ceti-geode-2", 1, 1, {
+      targets: [
+        { targetItemId: "tau-ceti-geode-2", quantity: 1 },
+        { targetItemId: "tau-ceti-geode-1", quantity: 300, craftGoal: true },
+      ],
+    });
+
+    expect(result.crafts.map((craft) => [craft.itemId, craft.count])).toEqual([["tau-ceti-geode-2", 1]]);
+    expect(result.notes.some((note) => note.includes("Craft-count goal"))).toBe(false);
+  });
+});

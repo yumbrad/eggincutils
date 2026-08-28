@@ -113,7 +113,7 @@ Benchmark metadata paths are stored repo-relative (not absolute local filesystem
 Mission Craft Planner can export a reproducible solve-input snapshot (inputs only) from the **Advanced: Path Comparison** header via **Download solve snapshot**.
 
 Snapshot file includes:
-- Planner request settings (`targetItemId`, `quantity`, `priorityTime`, `fastMode`)
+- Planner request settings (`targetItemId`, `quantity`, `targets` incl. craft-count goals, `priorityTime`, `fastMode`)
 - Selected mission ship/duration filter subset (`allowedShipDurations`, when not all selected)
 - Source filters (inventory/drop rarity + slotted settings)
 - Full profile solve state (inventory, craft counts, ship history/levels, mission options)

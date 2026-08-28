@@ -46,6 +46,18 @@ ingredients.
 
 **Artifact Attainment / Mission Craft Planner**
 
+- Added **craft-count goals** to the Goals card.
+  - Each target row has a mode chip: **copies** (how many more to end up with, the old behaviour) or
+**craft count** (an all-time craft-count goal, e.g. the 300 that maxes an artifact's crafting discount).
+  - The plan crafts the difference from the count already on your save, so the same goal works from any
+device without checking your craft count by hand.
+  - Copies a higher tier consumes still count toward the goal, so chasing 300 T3 crafts while also
+building T4s does not over-craft.
+  - The row shows how many you have crafted so far; the craft table and plan notes show the goal, the
+count before the plan, and the count after it.
+  - Only tiers that can be crafted offer the chip; mission drops never count, since they do not raise a
+craft count.
+
 - Added **Fragments** as a separate ingredient/source category next to R / E / L / Slotted.
   - Inventory stone fragments can be included/excluded.
   - Dropped stone fragments can be included/excluded.
