@@ -8,6 +8,10 @@
 **/*.tsbuildinfo
 **/local_data
 
+# Sibling checkout of the separate yumworkout Fly app, kept locally for the
+# /workout proxy work; not part of this app's build.
+/yumworkout
+
 # Emacs temp/lock/autosave files
 **/*~
 **/#*#
