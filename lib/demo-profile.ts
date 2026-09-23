@@ -2,8 +2,8 @@ import type { InFlightMission, InventorySource, PlayerProfile } from "./profile"
 import { buildMissionOptions, computeShipLevelsFromLaunchCounts, type DurationType } from "./ship-data";
 
 const DEMO_EID = "DEMO";
-const DEMO_FTL_LEVEL = 30;
-const DEMO_ZEROG_LEVEL = 20;
+const DEMO_FTL_LEVEL = 60;
+const DEMO_ZEROG_LEVEL = 10;
 const QUANTUM_METRONOME_AFX_ID = 24;
 const TAU_CETI_GEODE_AFX_ID = 18;
 
