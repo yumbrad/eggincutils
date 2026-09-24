@@ -3327,14 +3327,14 @@ export default function MissionCraftPlannerPage() {
                 <span className={`${styles.matrixHeader} ${styles.matrixHeaderRare}`} title="Rare shiny">R</span>
                 <span className={`${styles.matrixHeader} ${styles.matrixHeaderEpic}`} title="Epic shiny">E</span>
                 <span className={`${styles.matrixHeader} ${styles.matrixHeaderLegendary}`} title="Legendary shiny">L</span>
-                <span className={styles.matrixHeader} title="Slotted stones">Slotted</span>
+                <span className={styles.matrixHeader} title="Slotted stones/artifacts">Slotted</span>
                 <span className={styles.matrixHeader} title="Stone fragments">Fragments</span>
 
                 <span className={styles.matrixRowLabel}>Inventory</span>
                 <span className={styles.matrixCell}>{renderSourceToggle(includeInventoryRare, setIncludeInventoryRare, "Inventory rare shiny artifacts")}</span>
                 <span className={styles.matrixCell}>{renderSourceToggle(includeInventoryEpic, setIncludeInventoryEpic, "Inventory epic shiny artifacts")}</span>
                 <span className={styles.matrixCell}>{renderSourceToggle(includeInventoryLegendary, setIncludeInventoryLegendary, "Inventory legendary shiny artifacts")}</span>
-                <span className={styles.matrixCell}>{renderSourceToggle(includeSlotted, setIncludeSlotted, "Inventory slotted stones")}</span>
+                <span className={styles.matrixCell}>{renderSourceToggle(includeSlotted, setIncludeSlotted, "Inventory slotted stones and artifacts")}</span>
                 <span className={styles.matrixCell}>{renderSourceToggle(includeInventoryFragments, setIncludeInventoryFragments, "Inventory stone fragments")}</span>
 
                 <span className={styles.matrixRowLabel}>Dropped</span>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatSpecName, inventoryItemsForSource, parseCraftCounts, parseInventory, parseMissions } from "./profile";
+import { countShinyIngredients, formatSpecName, inventoryItemsForSource, parseCraftCounts, parseInventory, parseMissions } from "./profile";
 
 describe("formatSpecName", () => {
   it("normalizes stone fragments, stones, and regular artifacts", () => {
@@ -191,5 +191,27 @@ describe("inventoryItemsForSource", () => {
       )
     ).toBe(virtueItems);
     expect(inventoryItemsForSource(undefined, "virtue")).toEqual([]);
+  });
+});
+
+describe("countShinyIngredients", () => {
+  it("counts only shiny artifacts that pass the rarity and slotted rules", () => {
+    const items = [
+      { artifact: { spec: { name: "SOUL_STONE", level: "INFERIOR" }, stones: [] }, quantity: 5 },
+      { artifact: { spec: { name: "LIGHT_OF_EGGENDIL", level: "GREATER", rarity: "RARE" }, stones: [] }, quantity: 2 },
+      {
+        artifact: {
+          spec: { name: "LIGHT_OF_EGGENDIL", level: "GREATER", rarity: "RARE" },
+          stones: [{ name: "TACHYON_STONE", level: "LESSER" }],
+        },
+        quantity: 1,
+      },
+      { artifact: { spec: { name: "LIGHT_OF_EGGENDIL", level: "GREATER", rarity: "EPIC" }, stones: [] }, quantity: 3 },
+    ];
+
+    expect(countShinyIngredients(items, true, false)).toBe(0);
+    expect(countShinyIngredients(items, true, { rare: true, epic: false, legendary: false })).toBe(3);
+    expect(countShinyIngredients(items, false, { rare: true, epic: false, legendary: false })).toBe(2);
+    expect(countShinyIngredients(items, true, true)).toBe(6);
   });
 });

@@ -25,6 +25,8 @@ export type PlayerProfile = {
   missionOptions: ReturnType<typeof buildMissionOptions>;
   /** Absent for synthetic profiles (demo, benchmark snapshots). */
   inFlightMissions?: InFlightMission[];
+  /** Rare/epic/legendary artifacts counted as ingredients under the requested rarity selection. */
+  shinyIngredientCount?: number;
 };
 
 /**
@@ -223,6 +225,7 @@ export async function getPlayerProfile(
         includeArtifactRarities,
         includeStoneFragments
       );
+      const shinyIngredientCount = countShinyIngredients(inventoryItems, includeSlotted, includeArtifactRarities);
       const craftCounts = parseCraftCounts(data.backup?.artifactsDb?.artifactStatus || []);
       const missionArchive = data.backup?.artifactsDb?.missionArchive || [];
       const missionInfos = data.backup?.artifactsDb?.missionInfos || [];
@@ -258,6 +261,7 @@ export async function getPlayerProfile(
         shipLevels,
         missionOptions,
         inFlightMissions,
+        shinyIngredientCount,
       };
     } catch (error) {
       lastError = error;
@@ -380,6 +384,35 @@ export function parseInventory(
     }
   }
   return inventory;
+}
+
+/**
+ * Number of shiny (rare/epic/legendary) artifacts that parseInventory would count as
+ * ingredients under the same slotted/rarity rules. Used to warn that they must be
+ * demoted in game before crafting.
+ */
+export function countShinyIngredients(
+  items: BackupInventoryItem[],
+  includeSlotted: boolean,
+  includeShinyArtifacts: boolean | Partial<ShinyRaritySelection> = true
+): number {
+  const includeShinyRarities = normalizeShinyRaritySelection(includeShinyArtifacts);
+  let count = 0;
+  for (const item of items) {
+    const rarity = item.artifact?.spec?.rarity;
+    if (!isShinyArtifactRarity(rarity) || !shouldIncludeArtifactRarity(rarity, includeShinyRarities)) {
+      continue;
+    }
+    const stones = item.artifact?.stones || [];
+    if (!includeSlotted && stones.length > 0) {
+      continue;
+    }
+    if (!formatSpecName(item.artifact?.spec)) {
+      continue;
+    }
+    count += Math.max(0, Math.round(item.quantity || 0));
+  }
+  return count;
 }
 
 export function parseCraftCounts(items: BackupCraftableArtifact[]): CraftCounts {

@@ -38,6 +38,11 @@ export async function GET(request: NextRequest): Promise<Response> {
     includeSlotted: request.nextUrl.searchParams.get("includeSlotted") ?? undefined,
     inventorySource: request.nextUrl.searchParams.get("inventorySource") ?? undefined,
     includeInventoryFragments: request.nextUrl.searchParams.get("includeInventoryFragments") ?? undefined,
+    // The craft planner defaults shiny artifacts to "skip" (unlike /api/profile) so results match
+    // the in-game auto-craft counts unless the player explicitly opts in.
+    includeInventoryRare: request.nextUrl.searchParams.get("includeInventoryRare") ?? "false",
+    includeInventoryEpic: request.nextUrl.searchParams.get("includeInventoryEpic") ?? "false",
+    includeInventoryLegendary: request.nextUrl.searchParams.get("includeInventoryLegendary") ?? "false",
   });
   if (!parsedQuery.success) {
     return new Response(
@@ -50,13 +55,19 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   try {
+    const includeRarities = {
+      rare: parsedQuery.data.includeInventoryRare,
+      epic: parsedQuery.data.includeInventoryEpic,
+      legendary: parsedQuery.data.includeInventoryLegendary,
+    };
     let profile = await getPlayerProfile(parsedQuery.data.eid, parsedQuery.data.includeSlotted, {
       inventorySource: parsedQuery.data.inventorySource,
-      includeShinyArtifacts: false,
+      includeArtifactRarities: includeRarities,
       includeStoneFragments: parsedQuery.data.includeInventoryFragments,
     });
+    const shinyIngredientCount = profile.shinyIngredientCount || 0;
     const prePlanResult = await applyPrePlanSendsToProfile(profile, parsedPrePlanSends.data, {
-      includeRarities: { rare: false, epic: false, legendary: false },
+      includeRarities,
       includeStoneFragments: parsedQuery.data.includeInventoryFragments,
     });
     profile = prePlanResult.profile;
@@ -65,6 +76,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         inventory: profile.inventory,
         craftCounts: profile.craftCounts,
         craftingXp: profile.craftingXp,
+        shinyIngredientCount,
         prePlanSends: {
           addedInventory: prePlanResult.addedInventory,
           appliedLaunches: prePlanResult.appliedLaunches,

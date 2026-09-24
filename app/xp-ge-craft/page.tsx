@@ -53,6 +53,7 @@ type InventoryResponse = {
   inventory?: Record<string, number>;
   craftCounts?: Record<string, number>;
   craftingXp?: number;
+  shinyIngredientCount?: number;
   prePlanSends?: {
     addedInventory?: Record<string, number>;
     appliedLaunches?: number;
@@ -60,6 +61,12 @@ type InventoryResponse = {
   };
   error?: string;
   details?: string;
+};
+
+type ShinyIngredientFlags = {
+  rare: boolean;
+  epic: boolean;
+  legendary: boolean;
 };
 
 type ModeComparisonRow = {
@@ -132,6 +139,7 @@ type OptimizePayload = {
   inventory: Record<string, number>;
   craftCounts: Record<string, number>;
   craftingXp: number;
+  shinyIngredientCount: number;
   prePlanSends?: InventoryResponse["prePlanSends"];
 };
 
@@ -209,6 +217,7 @@ async function getOptimalCrafts(
   eid: string,
   includeSlotted: boolean,
   includeFragments: boolean,
+  includeShiny: ShinyIngredientFlags,
   saleEnabled: boolean,
   inventorySource: InventorySource,
   craftLimits: CraftLimits,
@@ -218,6 +227,9 @@ async function getOptimalCrafts(
     eid,
     includeSlotted: includeSlotted ? "true" : "false",
     includeInventoryFragments: includeFragments ? "true" : "false",
+    includeInventoryRare: includeShiny.rare ? "true" : "false",
+    includeInventoryEpic: includeShiny.epic ? "true" : "false",
+    includeInventoryLegendary: includeShiny.legendary ? "true" : "false",
     inventorySource,
   });
   const normalizedPrePlanSends = prePlanSends
@@ -253,6 +265,7 @@ async function getOptimalCrafts(
     inventory,
     craftCounts,
     craftingXp,
+    shinyIngredientCount: Math.max(0, Math.floor(data.shinyIngredientCount || 0)),
     prePlanSends: data.prePlanSends,
   };
 }
@@ -1190,6 +1203,9 @@ export default function XpGeCraftPage(): JSX.Element {
   const [eid, setEID] = useState<string>("");
   const [includeSlotted, setIncludeSlotted] = useState<boolean>(true);
   const [includeFragments, setIncludeFragments] = useState<boolean>(true);
+  const [includeRare, setIncludeRare] = useState<boolean>(false);
+  const [includeEpic, setIncludeEpic] = useState<boolean>(false);
+  const [includeLegendary, setIncludeLegendary] = useState<boolean>(false);
   const [craftingSale, setCraftingSale] = useState<boolean>(false);
   const [inventorySource, setInventorySource] = useState<InventorySource>("main");
   const [solution, setSolution] = useState<Solution | null>(null);
@@ -1217,6 +1233,7 @@ export default function XpGeCraftPage(): JSX.Element {
   const [planSourceInventory, setPlanSourceInventory] = useState<Record<string, number> | null>(null);
   const [planSourceCraftCounts, setPlanSourceCraftCounts] = useState<Record<string, number>>({});
   const [planSourceCraftingXp, setPlanSourceCraftingXp] = useState<number | null>(null);
+  const [planShinyIngredientCount, setPlanShinyIngredientCount] = useState<number>(0);
 
   useEffect(() => {
     const savedEid = readFirstStoredString(SHARED_EID_KEYS);
@@ -1230,6 +1247,18 @@ export default function XpGeCraftPage(): JSX.Element {
     const savedIncludeFragments = readStoredBoolean([LOCAL_PREF_KEYS.craftIncludeInventoryFragments]);
     if (savedIncludeFragments != null) {
       setIncludeFragments(savedIncludeFragments);
+    }
+    const savedIncludeRare = readStoredBoolean([LOCAL_PREF_KEYS.craftIncludeInventoryRare]);
+    if (savedIncludeRare != null) {
+      setIncludeRare(savedIncludeRare);
+    }
+    const savedIncludeEpic = readStoredBoolean([LOCAL_PREF_KEYS.craftIncludeInventoryEpic]);
+    if (savedIncludeEpic != null) {
+      setIncludeEpic(savedIncludeEpic);
+    }
+    const savedIncludeLegendary = readStoredBoolean([LOCAL_PREF_KEYS.craftIncludeInventoryLegendary]);
+    if (savedIncludeLegendary != null) {
+      setIncludeLegendary(savedIncludeLegendary);
     }
     const savedCraftingSale = readStoredBoolean(SHARED_CRAFTING_SALE_KEYS);
     if (savedCraftingSale != null) {
@@ -1274,6 +1303,15 @@ export default function XpGeCraftPage(): JSX.Element {
     }
     writeStoredBoolean([LOCAL_PREF_KEYS.craftIncludeInventoryFragments], includeFragments);
   }, [includeFragments, prefsLoaded]);
+
+  useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
+    writeStoredBoolean([LOCAL_PREF_KEYS.craftIncludeInventoryRare], includeRare);
+    writeStoredBoolean([LOCAL_PREF_KEYS.craftIncludeInventoryEpic], includeEpic);
+    writeStoredBoolean([LOCAL_PREF_KEYS.craftIncludeInventoryLegendary], includeLegendary);
+  }, [includeRare, includeEpic, includeLegendary, prefsLoaded]);
 
   useEffect(() => {
     if (!prefsLoaded) {
@@ -1343,6 +1381,7 @@ export default function XpGeCraftPage(): JSX.Element {
     setPlanSourceInventory(null);
     setPlanSourceCraftCounts({});
     setPlanSourceCraftingXp(null);
+    setPlanShinyIngredientCount(0);
     setLastPrePlanResult(null);
     setIsLoading(true);
     try {
@@ -1354,6 +1393,7 @@ export default function XpGeCraftPage(): JSX.Element {
         eid,
         includeSlotted,
         includeFragments,
+        { rare: includeRare, epic: includeEpic, legendary: includeLegendary },
         craftingSale,
         inventorySource,
         nextLimits,
@@ -1361,6 +1401,7 @@ export default function XpGeCraftPage(): JSX.Element {
       );
       setSolution(result.solution);
       setPlanSourceInventory(result.inventory);
+      setPlanShinyIngredientCount(result.shinyIngredientCount);
       setPlanSourceCraftCounts(result.craftCounts);
       setPlanSourceCraftingXp(result.craftingXp);
       setLastPrePlanResult(result.prePlanSends || null);
@@ -1634,13 +1675,35 @@ export default function XpGeCraftPage(): JSX.Element {
             </div>
             <fieldset className={styles.ingredientSourceGroup}>
               <legend>Include as ingredients</legend>
-              <label className={styles.inputCheckbox}>
+              <label className={styles.inputCheckbox} title="Count rare shiny artifacts as ingredients (demote them in game first)">
+                <input type="checkbox" checked={includeRare} onChange={(event) => setIncludeRare(event.target.checked)} />
+                Rare
+              </label>
+              <label className={styles.inputCheckbox} title="Count epic shiny artifacts as ingredients (demote them in game first)">
+                <input type="checkbox" checked={includeEpic} onChange={(event) => setIncludeEpic(event.target.checked)} />
+                Epic
+              </label>
+              <label
+                className={styles.inputCheckbox}
+                title="Count legendary shiny artifacts as ingredients (demote them in game first)"
+              >
+                <input
+                  type="checkbox"
+                  checked={includeLegendary}
+                  onChange={(event) => setIncludeLegendary(event.target.checked)}
+                />
+                Legendary
+              </label>
+              <label
+                className={styles.inputCheckbox}
+                title="Harvest stones slotted in artifacts. When off, shiny artifacts that hold stones are also kept out of the ingredient pool."
+              >
                 <input
                   type="checkbox"
                   checked={includeSlotted}
                   onChange={(event) => setIncludeSlotted(event.target.checked)}
                 />
-                Slotted stones
+                Slotted
               </label>
               <label className={styles.inputCheckbox}>
                 <input
@@ -1775,6 +1838,15 @@ export default function XpGeCraftPage(): JSX.Element {
         {error && (
           <div className={styles.errorBox}>
             {error} <Link href="/xp-ge-craft/diagnostics">Open diagnostics</Link>.
+          </div>
+        )}
+
+        {solution && planShinyIngredientCount > 0 && (
+          <div className={styles.shinyNotice}>
+            <span className={styles.inlineWarningLabel}>Note:</span> this plan counts{" "}
+            {planShinyIngredientCount.toLocaleString()} rare/epic/legendary artifact
+            {planShinyIngredientCount === 1 ? "" : "s"} as ingredients. Demote them in game before crafting, or the game&apos;s
+            craftable counts will be lower than shown here.
           </div>
         )}
 
