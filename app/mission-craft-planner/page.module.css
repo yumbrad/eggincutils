@@ -197,6 +197,12 @@
   transform: rotate(-45deg);
 }
 
+/* The input itself is invisible, so its keyboard focus shows on the box. */
+.customCheck:has(input:focus-visible) input + span {
+  outline: 2px solid color-mix(in oklab, var(--accent), transparent 30%);
+  outline-offset: 2px;
+}
+
 .targetRows {
   display: flex;
   flex-direction: column;
@@ -1088,6 +1094,12 @@
   background: color-mix(in oklab, var(--bg-a), var(--panel) 42%);
 }
 
+/* Let wide tables scroll inside their .table-wrap instead of widening the
+   single grid column past a phone screen. */
+.resultsGrid > * {
+  min-width: 0;
+}
+
 .timelineIntro {
   margin: 0 0 8px;
   font-size: 12px;
@@ -1838,5 +1850,1671 @@
   .shipSelectorDurations {
     grid-column: 1 / -1;
     padding-left: 36px;
+  }
+}
+
+/* ------------------------------------------------------------------
+   Path of Virtue: fuel tanks and the shift cap. Egg colors come from
+   the --egg-* tokens; per-element colors go in --egg (egg) and the
+   existing --fuel-segment-color / --timeline-block-color (mission).
+   ------------------------------------------------------------------ */
+
+.eggIcon {
+  display: inline-block;
+  flex: 0 0 auto;
+  object-fit: contain;
+  vertical-align: middle;
+}
+
+/* Notices: card A (current egg, filling, missing tank) and the Fuel tanks panel. */
+.virtueNotice {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in oklab, var(--stroke), var(--accent) 20%);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--panel), var(--accent) 6%);
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.virtueNotice svg,
+.shiftCapBanner svg,
+.timelineTankLabel svg,
+.tankMarkerRow svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.virtueNotice svg {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+}
+
+.virtueNotice[data-tone="warn"] {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+/* A. Virtue tank card */
+.virtueOptCard .controlCardHeader {
+  flex-wrap: wrap;
+}
+
+.virtueOptMeta {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.virtueOptMeta strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.virtueOptRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.virtueOptRow .fieldLabel {
+  margin: 0;
+}
+
+.virtueOptSegment {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  min-width: 0;
+  margin: 0;
+  padding: 3px;
+  border: 1px solid color-mix(in oklab, var(--stroke), transparent 8%);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--field), transparent 12%);
+}
+
+.virtueOptSegment legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.virtueOptSegment label {
+  position: relative;
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding-inline: 12px;
+  border-radius: 7px;
+  color: var(--muted);
+  font: 700 12.5px/1.15 var(--planner-control-font);
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.virtueOptSegment input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.virtueOptSegment label:hover {
+  color: var(--ink);
+}
+
+.virtueOptSegment label:has(input:checked) {
+  background: color-mix(in oklab, var(--accent), transparent 80%);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent), transparent 45%);
+  color: var(--ink);
+}
+
+.virtueOptSegment label:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.virtueOptSegment label:has(input:focus-visible) {
+  outline: 2px solid color-mix(in oklab, var(--accent), transparent 30%);
+  outline-offset: 1px;
+}
+
+.virtueOptHint {
+  max-width: 60ch;
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.virtueOptHint strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.tankReadout {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in oklab, var(--stroke), transparent 12%);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--panel), var(--accent) 3%);
+}
+
+.tankReadoutHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tankReadoutHead .fieldLabel {
+  margin: 0;
+}
+
+.tankReadoutTotal {
+  font: 700 13px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tankReadoutTotal span {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.tankReadoutBar {
+  display: flex;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--stroke), transparent 45%);
+}
+
+.tankReadoutSeg {
+  height: 100%;
+  background: var(--egg);
+}
+
+.tankReadoutSeg + .tankReadoutSeg {
+  border-left: 1px solid var(--panel);
+}
+
+.tankReadoutSeg[data-egg="humility"] {
+  background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--egg), transparent 30%) 0 3px, transparent 3px 6px);
+}
+
+.tankEggList {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tankEggItem {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 0 6px;
+  align-items: center;
+  padding: 6px 7px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--egg), transparent 88%);
+}
+
+.tankEggItem img {
+  grid-row: span 2;
+}
+
+.tankEggName {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tankEggAmount {
+  overflow: hidden;
+  font: 800 13px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tankEggItem[data-empty="1"] .tankEggAmount {
+  color: var(--muted);
+  font: 700 12px var(--font-ui);
+}
+
+.tankEggItem[data-egg="humility"] {
+  background: transparent;
+  outline: 1px dashed color-mix(in oklab, var(--egg), transparent 35%);
+  outline-offset: -1px;
+}
+
+.tankEggItem[data-egg="humility"] .tankEggAmount {
+  color: var(--muted);
+}
+
+.tankFootnote {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.tankFootnote img {
+  margin-top: 1px;
+}
+
+.tankFootnote strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* B. Shift cap: the Balance slider's detented replacement in virtue mode. */
+.shiftCapBlock {
+  min-width: 0;
+}
+
+.shiftCapHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.shiftCapHead .fieldLabel {
+  margin: 0;
+}
+
+.shiftCapValue {
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.shiftCapValue span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sliderWrap[data-need="1"] {
+  margin-top: 24px;
+}
+
+/* The shared slider rule drops the outline; give keyboard focus a ring back here. */
+.shiftCapBlock .sliderWrap input[type="range"]:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--accent), transparent 30%);
+  outline-offset: 7px;
+}
+
+/* One tick per detent, inset by half the thumb so each sits under the thumb centre. */
+.shiftCapTicks {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  padding-inline: 9px;
+}
+
+.shiftCapTick {
+  position: relative;
+  width: 0;
+  height: 22px;
+  color: var(--muted);
+  font: 600 10px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.shiftCapTick::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -1px;
+  width: 2px;
+  height: 5px;
+  border-radius: 1px;
+  background: color-mix(in oklab, var(--muted), transparent 45%);
+}
+
+.shiftCapTick span {
+  position: absolute;
+  top: 7px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.shiftCapTick[data-on="1"]::before {
+  background: var(--accent);
+}
+
+.shiftCapTick[data-current="1"] {
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.shiftCapTick[data-current="1"]::before {
+  height: 6px;
+}
+
+/* Rendered only while the plan is over the cap: display: flex would beat [hidden]. */
+.shiftCapNeed {
+  position: absolute;
+  bottom: calc(100% - 2px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: var(--warn-ink);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.shiftCapNeed span {
+  padding: 1px 6px;
+  border: 1px solid var(--warn-border);
+  border-radius: 999px;
+  background: var(--warn-bg);
+}
+
+.shiftCapNeed::after {
+  content: "";
+  width: 0;
+  height: 0;
+  border-top: 5px solid var(--warn-border);
+  border-right: 4px solid transparent;
+  border-left: 4px solid transparent;
+}
+
+/* At the last notch a centred label would stick out of the card: end it at the
+   track's end instead, with the arrow still over the notch (9px in). */
+.shiftCapNeed[data-edge="end"] {
+  align-items: flex-end;
+  transform: translateX(calc(-100% + 9px));
+}
+
+.shiftCapNeed[data-edge="end"]::after {
+  margin-right: 5px;
+}
+
+.shiftCapHint {
+  display: grid;
+  gap: 4px;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.shiftCapHint strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.shiftCapRoute {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+/* D. Over-cap banner */
+/* Read by screen readers only, e.g. what "Plan with S shifts" built once its banner is gone. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.shiftCapBanner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--warn-border);
+  border-radius: 10px;
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.shiftCapBanner svg {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+}
+
+.shiftCapBannerText {
+  min-width: 0;
+}
+
+.shiftCapBannerText strong {
+  font-weight: 700;
+}
+
+.shiftCapBannerTime {
+  white-space: nowrap;
+}
+
+.shiftCapBannerActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* !important: the global button rules (dark gradient and hover, 0,2,1) outrank a module class. */
+.shiftCapBannerAction {
+  height: 34px;
+  padding-inline: 12px;
+  border: 1px solid var(--warn-border) !important;
+  border-radius: 9px;
+  background: color-mix(in oklab, var(--warn-bg), var(--warn-border) 18%) !important;
+  box-shadow: none !important;
+  color: var(--warn-ink);
+  font: 700 12.5px var(--font-ui);
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.shiftCapBannerAction:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--warn-bg), var(--warn-border) 32%) !important;
+}
+
+/* The faster plan: it builds right away, so it reads as the main action. */
+.shiftCapBannerAction[data-primary="1"] {
+  border-color: var(--warn-ink) !important;
+  background: color-mix(in oklab, var(--warn-bg), var(--warn-border) 40%) !important;
+}
+
+.shiftCapBannerAction[data-primary="1"]:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--warn-bg), var(--warn-border) 46%) !important;
+}
+
+.shiftCapBannerAction:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* A slow plan within the cap: information in the blue --info tone, not the amber warning. */
+.shiftCapBanner[data-tone="info"] {
+  border-color: color-mix(in oklab, var(--stroke), var(--info) 45%);
+  background: color-mix(in oklab, var(--panel), var(--info) 8%);
+  color: var(--ink);
+}
+
+.shiftCapBanner[data-tone="info"] svg {
+  color: color-mix(in oklab, var(--info), var(--ink) 30%);
+}
+
+.shiftCapBanner[data-tone="info"] .shiftCapBannerAction {
+  border-color: color-mix(in oklab, var(--stroke), var(--info) 55%) !important;
+  background: color-mix(in oklab, var(--panel), var(--info) 14%) !important;
+  color: var(--ink);
+}
+
+.shiftCapBanner[data-tone="info"] .shiftCapBannerAction:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--panel), var(--info) 24%) !important;
+}
+
+.shiftCapBanner[data-tone="info"] .shiftCapBannerAction[data-primary="1"] {
+  border-color: color-mix(in oklab, var(--info), var(--ink) 20%) !important;
+  background: color-mix(in oklab, var(--panel), var(--info) 20%) !important;
+}
+
+.shiftCapBanner[data-tone="info"] .shiftCapBannerAction[data-primary="1"]:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--panel), var(--info) 28%) !important;
+}
+
+/* C. Shifts KPI */
+.kpiShiftCard {
+  position: relative;
+}
+
+.kpiShiftCard :global(.kpi) span {
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* !important: the dark theme's .card border rule is 0,3,0. */
+.kpiShiftCard[data-over="1"] {
+  border-color: var(--warn-border) !important;
+}
+
+.kpiShiftCard[data-over="1"] :global(.kpi) {
+  color: var(--warn-ink);
+}
+
+.kpiFlag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border: 1px solid var(--warn-border);
+  border-radius: 999px;
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.kpiSub {
+  display: block;
+  width: fit-content;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* E. Fuel tanks panel */
+.tankPanelHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 16px;
+}
+
+.tankPanelHead h2 {
+  margin: 0;
+}
+
+.tankPanelSummary {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tankPanelIntro {
+  max-width: 80ch;
+  margin: 6px 0 14px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.tankPanelNotices {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.tankOverview {
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  padding: 12px;
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--card), transparent 20%);
+}
+
+.tankOverview > :first-child {
+  margin-left: auto;
+}
+
+.tankOverview > :last-child {
+  margin-right: auto;
+}
+
+.tankGaugeItem {
+  display: flex;
+  min-width: 84px;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 4px;
+  border-radius: 10px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.tankGaugeItem:hover {
+  background: color-mix(in oklab, var(--accent), transparent 90%);
+}
+
+.tankGauge {
+  position: relative;
+  display: flex;
+  width: 54px;
+  height: 118px;
+  flex-direction: column-reverse;
+  overflow: hidden;
+  border: 1.5px solid color-mix(in oklab, var(--stroke), var(--ink) 22%);
+  border-radius: 14px 14px 9px 9px;
+  background: linear-gradient(180deg, color-mix(in oklab, var(--panel), transparent 18%), color-mix(in oklab, var(--bg-b), transparent 20%));
+}
+
+/* Quarter lines so the fill level reads against capacity. */
+.tankGauge::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(to top, transparent 0 calc(25% - 1px), color-mix(in oklab, var(--ink), transparent 84%) calc(25% - 1px) 25%);
+  pointer-events: none;
+}
+
+.tankGaugeLayer {
+  flex: 0 0 auto;
+  background: var(--egg);
+}
+
+/* column-reverse: a later layer sits above the one before it, so the seam is its bottom edge. */
+.tankGaugeLayer + .tankGaugeLayer {
+  border-bottom: 1px solid var(--panel);
+}
+
+.tankGaugeLayer[data-egg="humility"] {
+  background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--egg), transparent 25%) 0 3px, transparent 3px 6px);
+}
+
+.tankGaugeName {
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tankGaugeTotal {
+  color: var(--muted);
+  font: 600 11.5px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tankGaugeTotal b {
+  color: var(--ink);
+}
+
+.tankGaugeSub {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tankConnector {
+  display: flex;
+  min-width: 92px;
+  max-width: 220px;
+  flex: 1 1 96px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding-inline: 4px;
+  padding-bottom: 40px;
+}
+
+.tankConnectorLine {
+  position: relative;
+  width: 100%;
+  height: 2px;
+  background: repeating-linear-gradient(90deg, color-mix(in oklab, var(--ink), transparent 50%) 0 5px, transparent 5px 9px);
+}
+
+.tankConnectorLine::after {
+  content: "";
+  position: absolute;
+  top: -4px;
+  right: -1px;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 7px solid color-mix(in oklab, var(--ink), transparent 40%);
+}
+
+.tankConnectorShifts {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.routeChips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.routeChip {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  gap: 3px;
+  padding: 0 7px 0 4px;
+  border: 1px solid color-mix(in oklab, var(--egg), transparent 45%);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--egg), transparent 84%);
+  color: var(--ink);
+  font: 700 11px var(--font-mono);
+}
+
+.routeArrow {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.routeChips[data-size="sm"] {
+  gap: 2px;
+}
+
+.routeChips[data-size="sm"] .routeChip {
+  height: 20px;
+  padding: 0 5px 0 3px;
+  font-size: 10px;
+}
+
+.routeChips[data-size="sm"] .routeArrow {
+  font-size: 11px;
+}
+
+/* Icon-only chips on the overview connectors: a solid ring and a stronger fill so the
+   black Curiosity icon stays visible on dark grounds. */
+.routeChips[data-size="xs"] {
+  flex-wrap: nowrap;
+  gap: 3px;
+}
+
+.routeChips[data-size="xs"] .routeChip {
+  width: 20px;
+  height: 20px;
+  justify-content: center;
+  padding: 0;
+  border: 1.5px solid var(--egg);
+  background: color-mix(in oklab, var(--egg), transparent 45%);
+}
+
+.tankLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 10px 0 4px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.tankLegend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legendSwatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--egg);
+}
+
+.legendSeg {
+  width: 16px;
+  height: 12px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, hsl(278 72% 58% / 0.66) 0 50%, hsl(164 68% 43% / 0.66) 50% 100%);
+}
+
+.legendHatch {
+  width: 16px;
+  height: 12px;
+  border: 1px solid color-mix(in oklab, var(--muted), transparent 50%);
+  border-radius: 3px;
+  background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--muted), transparent 35%) 0 3px, transparent 3px 6px);
+}
+
+.legendTick {
+  width: 2px;
+  height: 14px;
+  border-radius: 1px;
+  background: var(--tank-marker);
+}
+
+.tankBlocks {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.tankBlock {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--card), transparent 20%);
+  scroll-margin-top: 16px;
+}
+
+.tankBlockHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 14px;
+}
+
+.tankBlockTitle {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.tankBlockTitle h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.tankBlockKind {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.tankBlockMeta {
+  color: var(--muted);
+  font: 600 12.5px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tankBlockMeta b {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.tankBadge {
+  display: inline-flex;
+  min-width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  padding-inline: 6px;
+  border: 1.5px solid color-mix(in oklab, var(--ink), transparent 55%);
+  border-radius: 7px 7px 5px 5px;
+  font: 800 12px var(--font-mono);
+}
+
+/* Refuel instructions: the in-game reference while shifting. */
+.refuelStrip {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in oklab, var(--stroke), var(--accent) 22%);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--panel), var(--accent) 6%);
+}
+
+.refuelHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.refuelTitle {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.shiftPill {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent), transparent 78%);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.refuelHeadNote {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.refuelWindow {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.refuelWindow b {
+  color: var(--ink);
+}
+
+.refuelWindow[data-tight="1"],
+.refuelWindow[data-tight="1"] b {
+  color: var(--warn-ink);
+}
+
+/* Free drains before the first shift. */
+.refuelPrep {
+  display: grid;
+  gap: 6px;
+}
+
+.refuelPrep .fieldLabel {
+  margin: 0;
+}
+
+.refuelDrains {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.refuelDrain {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 10px 3px 6px;
+  border: 1px dashed color-mix(in oklab, var(--egg), transparent 30%);
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.3;
+}
+
+.refuelDrain b {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.refuelDrain small {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.refuelSteps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.refuelStep {
+  display: grid;
+  grid-template-areas: "egg" "limit" "fill";
+  align-content: start;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border: 1px solid color-mix(in oklab, var(--egg), transparent 45%);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--panel), var(--egg) 7%);
+}
+
+.refuelStepEgg {
+  display: flex;
+  grid-area: egg;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.refuelStepNum {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--egg), transparent 60%);
+  color: var(--ink);
+  font: 800 11px var(--font-mono);
+}
+
+.refuelStepLimit {
+  display: grid;
+  grid-area: limit;
+  gap: 1px;
+}
+
+.refuelStepLimit .fieldLabel {
+  margin: 0;
+  font-size: 10px;
+}
+
+.refuelBig {
+  font: 800 26px/1.05 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.refuelStepWas {
+  color: var(--muted);
+  font: 600 11.5px var(--font-mono);
+}
+
+.refuelStepFill {
+  display: grid;
+  grid-area: fill;
+  gap: 1px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.refuelStepFill b {
+  color: var(--ink);
+  font: 800 15px var(--font-mono);
+}
+
+.refuelStepFill span {
+  font-family: var(--font-mono);
+}
+
+.refuelStepHome {
+  grid-template-areas: "egg" "fill";
+  align-content: center;
+  border-style: dashed;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.refuelStepHome .refuelStepEgg {
+  color: var(--ink);
+}
+
+.refuelStepHome p {
+  grid-area: fill;
+  margin: 0;
+}
+
+.refuelNote {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.refuelNote b {
+  color: var(--ink);
+}
+
+.tankMissionChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A chip wraps inside itself, target and count together, only when it is
+   wider than the panel (a long ship and target name on a phone), instead of
+   widening the page. */
+.tankMissionChip {
+  display: inline-flex;
+  max-width: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1px 6px;
+  padding: 3px 9px 3px 6px;
+  border: 1px solid color-mix(in oklab, var(--stroke), transparent 10%);
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.tankMissionChip i {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--fuel-segment-color);
+}
+
+.tankMissionChipTarget {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tankMissionChip small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tankMissionChip b {
+  font-family: var(--font-mono);
+}
+
+.tankChartDetails > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  list-style: none;
+  cursor: pointer;
+}
+
+.tankChartDetails > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tankChartDetails > summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid currentColor;
+}
+
+.tankChartDetails[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.tankChartDetails[open] > summary {
+  margin-bottom: 8px;
+}
+
+.tankChart {
+  display: grid;
+  gap: 8px;
+}
+
+.tankRow,
+.tankAxis {
+  display: grid;
+  grid-template-columns: 124px minmax(0, 1fr) 96px;
+  gap: 10px;
+  align-items: center;
+}
+
+.tankAxisScale {
+  position: relative;
+  height: 14px;
+  color: var(--muted);
+  font: 600 10px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tankAxisScale span {
+  position: absolute;
+  top: 0;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.tankAxisScale span:first-child {
+  transform: none;
+}
+
+.tankAxisScale span:last-child {
+  transform: translateX(-100%);
+}
+
+.tankAxisNote {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.tankTrack {
+  position: relative;
+  display: flex;
+  height: 30px;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  background:
+    repeating-linear-gradient(to right, transparent 0 calc(25% - 1px), color-mix(in oklab, var(--ink), transparent 88%) calc(25% - 1px) 25%),
+    linear-gradient(180deg, color-mix(in oklab, var(--panel), transparent 18%), color-mix(in oklab, var(--bg-b), transparent 20%));
+}
+
+/*
+ * Tank rows are read against the limit tick, so every piece is exactly its
+ * share of the tank: no padding, border or minimum width (the shared
+ * .fuelSegment has all three, which pushed small launches past the tick).
+ * The label shares a first flex line with a full-height spacer and wraps
+ * out of sight when the piece is too narrow for it.
+ */
+.tankSegment,
+.tankCarry {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: flex-start;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.tankSegment::before,
+.tankCarry::before {
+  content: "";
+  width: 0;
+  height: 100%;
+}
+
+.tankSegment .fuelSegmentLabel,
+.tankCarry .fuelSegmentLabel {
+  flex: none;
+  padding: 0 6px;
+}
+
+.tankSegment {
+  border-right: 0;
+  box-shadow: inset -1px 0 0 color-mix(in oklab, var(--stroke), transparent 28%);
+}
+
+/* Fuel carried into the next tank. */
+.tankCarry {
+  background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--egg), transparent 58%) 0 4px, transparent 4px 8px);
+  box-shadow: inset -1px 0 0 color-mix(in oklab, var(--egg), transparent 35%);
+}
+
+.tankCarry .fuelSegmentLabel {
+  color: var(--ink);
+}
+
+.tankLimitTick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--tank-marker);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--panel), transparent 40%);
+}
+
+.tankEmpty {
+  display: flex;
+  align-items: center;
+  padding-inline: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tankRowTotal {
+  display: grid;
+  justify-items: end;
+  font: 800 12.5px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+
+.tankRowTotal span {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.tankPanelFoot {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.tankGaugeItem:focus-visible,
+.tankMarkerRow a:focus-visible,
+.tankChartDetails > summary:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--accent), transparent 30%);
+  outline-offset: 2px;
+}
+
+/* F. Mission table by tank. The wrapper is a size container so the group and
+   marker row content can stick to the visible part of a scrolled table and wrap
+   there (100cqi = the wrapper's width) instead of running off-screen. */
+.missionTableWrap {
+  container-type: inline-size;
+}
+
+.missionTankGroupRow > th {
+  padding-block: 8px 6px;
+  border-bottom-color: color-mix(in oklab, var(--stroke), var(--ink) 8%);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.missionTankGroupRow > th > div,
+.tankMarkerRow > th > div {
+  position: sticky;
+  left: 8px;
+  display: flex;
+  max-width: calc(100cqi - 16px);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.missionTankGroupRow :global(.muted) {
+  font-weight: 600;
+  white-space: normal;
+}
+
+.tankMarkerRow > th {
+  padding: 8px;
+  border-top: 1px dashed color-mix(in oklab, var(--accent), transparent 35%);
+  border-bottom: 1px dashed color-mix(in oklab, var(--accent), transparent 35%);
+  background: color-mix(in oklab, var(--panel), var(--accent) 9%);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.tankMarkerRow svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  stroke: var(--accent);
+}
+
+.tankMarkerRow a {
+  margin-left: auto;
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.tankMarkerRow a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* The light accent is too pale for 12px text (2.1:1); the amber ink keeps the hue at 4.5:1+. */
+:global(:root[data-theme="light"]) .tankMarkerRow a {
+  color: var(--warn-ink);
+}
+
+.splitNote {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.prepBadge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border: 1px dashed color-mix(in oklab, var(--muted), transparent 30%);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+  cursor: help;
+}
+
+/* G. Tank boundaries on the timeline */
+.timelineMarkerRow {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.timelineMarkerLabels {
+  position: relative;
+  height: 22px;
+}
+
+.timelineMarkerLabels[data-rows="2"] {
+  height: 44px;
+}
+
+.timelineTankLabel {
+  position: absolute;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in oklab, var(--tank-marker), transparent 55%);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.timelineTankLabel[data-row="1"] {
+  bottom: 22px;
+}
+
+.timelineTankLabel svg {
+  width: 11px;
+  height: 11px;
+}
+
+.timelineTankLabel[data-edge="start"] {
+  transform: none;
+}
+
+.timelineTankLabel[data-edge="end"] {
+  transform: translateX(-100%);
+}
+
+.timelineTankMarker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  width: 0;
+  border-left: 2px dashed color-mix(in oklab, var(--tank-marker), transparent 25%);
+  pointer-events: none;
+}
+
+/* Refuel window: the previous tank's last launch to this tank's first. */
+.timelineRefuelBand {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  background: color-mix(in oklab, var(--tank-marker), transparent 88%);
+  pointer-events: none;
+}
+
+/* The tank timeline's legend also lists the tanks each mission launches from. */
+.timelineLegend[data-tanks="1"] .timelineLegendRow {
+  grid-template-columns: 14px minmax(150px, 1fr) minmax(110px, 0.8fr) minmax(0, 1.5fr);
+}
+
+/* A slot sitting idle, e.g. waiting for a refuel. */
+.timelineIdle {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  border: 1px dashed color-mix(in oklab, var(--muted), transparent 40%);
+  border-radius: 6px;
+  background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--muted), transparent 72%) 0 3px, transparent 3px 7px);
+}
+
+@media (max-width: 900px) {
+  .tankEggList {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .tankRow,
+  .tankAxis {
+    grid-template-columns: minmax(0, 1fr) 84px;
+    gap: 4px 10px;
+  }
+
+  .tankRow .fuelLabel {
+    grid-column: 1 / -1;
+  }
+
+  .tankAxis > :first-child {
+    display: none;
+  }
+
+  .timelineMarkerRow {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .timelineMarkerRow > :first-child {
+    display: none;
+  }
+
+  .timelineLegend[data-tanks="1"] .timelineLegendRow {
+    grid-template-columns: 14px 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .tankEggList {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .shiftCapBanner {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .shiftCapBannerActions {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+
+  .shiftCapTick:nth-child(even):not([data-current="1"]) span {
+    visibility: hidden;
+  }
+
+  .tankOverview {
+    padding-inline: 6px;
+  }
+
+  .tankGaugeItem {
+    min-width: 64px;
+  }
+
+  .tankGauge {
+    width: 44px;
+    height: 100px;
+  }
+
+  .tankConnector {
+    min-width: 56px;
+    flex-basis: auto;
+  }
+
+  .refuelWindow {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+
+  .tankAxisScale [data-quarter="1"] {
+    display: none;
+  }
+
+  /* Compact refuel steps: one row per egg, the limit on the right. */
+  .refuelSteps {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .refuelStep {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "egg limit" "fill limit";
+    gap: 2px 12px;
+    padding: 8px 10px;
+  }
+
+  .refuelStepLimit {
+    align-self: center;
+    justify-items: end;
+    text-align: right;
+  }
+
+  /* Kept on phones: the limit is an egg amount now, so without its label it reads like the fill. */
+  .refuelStepLimit .fieldLabel {
+    font-size: 9.5px;
+    line-height: 1.1;
+  }
+
+  .refuelBig {
+    font-size: 22px;
+  }
+
+  .refuelStepFill {
+    display: block;
+  }
+
+  .refuelStepFill b {
+    font-size: 13px;
+  }
+
+  .refuelStepHome {
+    grid-template-columns: 1fr;
+    grid-template-areas: "egg" "fill";
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .virtueOptSegment label {
+    transition: none;
   }
 }

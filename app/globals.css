@@ -5,6 +5,7 @@
   --font-ui: "Space Grotesk", "Avenir Next Condensed", "Trebuchet MS", "Segoe UI", sans-serif;
   --font-brand-title: "Space Grotesk", "Avenir Next Condensed", "Trebuchet MS", "Segoe UI", sans-serif;
   --font-display: "Courier New", "Eurostile", "Microgramma D Extended", "Space Grotesk", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, "Courier New", monospace;
   --bg-color: rgb(32, 32, 32);
   --bg-image:
     radial-gradient(circle at top left, rgba(0, 0, 0, 0.8), rgba(0, 0, 0, 0) 60%),
@@ -39,6 +40,22 @@
   --error-ink: #ffd2d7;
   --theme-switch-bg: rgba(7, 14, 24, 0.88);
   --brand-kicker-color: #ff5f69;
+  /* Path of Virtue eggs, from the in-game icons: Curiosity graphite, Resilience
+     gold, Integrity sandstone, Kindness cobalt, Humility pale lavender-silver.
+     3:1+ on --card; the fuel eggs stay 11+ apart (OKLab x100) from each other
+     and 10+ from --accent. */
+  --egg-curiosity: #a4a9b8;
+  --egg-resilience: #e6c23c;
+  --egg-integrity: #cf8a62;
+  --egg-kindness: #3c74f0;
+  --egg-humility: #dad3f3;
+  /* Amber notices: a valid plan that needs attention, not an error. */
+  --warn-bg: #2b2210;
+  --warn-border: #c9962e;
+  --warn-ink: #ffd98a;
+  /* Blue notices: information, kept apart from the amber warnings (light --accent is amber). */
+  --info: #58aeff;
+  --tank-marker: #e5edff;
   --sleep-bad-bg: color-mix(in oklab, #f58ca0, transparent 72%);
 }
 
@@ -49,6 +66,7 @@
   --font-ui: "Space Grotesk", "Avenir Next Condensed", "Trebuchet MS", "Segoe UI", sans-serif;
   --font-brand-title: "Space Grotesk", "Avenir Next Condensed", "Trebuchet MS", "Segoe UI", sans-serif;
   --font-display: "Courier New", "Eurostile", "Microgramma D Extended", "Space Grotesk", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, "Courier New", monospace;
   --bg-color: #f8f3e8;
   --bg-image:
     radial-gradient(1200px 550px at 0% -10%, color-mix(in oklab, var(--accent), transparent 86%) 0%, transparent 62%),
@@ -81,6 +99,17 @@
   --error-ink: #7a2d0c;
   --theme-switch-bg: rgba(255, 253, 247, 0.88);
   --brand-kicker-color: #ff1279;
+  --egg-curiosity: #3f4556;
+  --egg-resilience: #8f7700;
+  --egg-integrity: #a0553a;
+  --egg-kindness: #1f63c9;
+  --egg-humility: #7d7aa3;
+  --warn-bg: #fff4dc;
+  --warn-border: #b8862a;
+  --warn-ink: #6b4a0c;
+  /* Blue notices: information, kept apart from the amber warnings (light --accent is amber). */
+  --info: #2f6fb6;
+  --tank-marker: #213754;
   --sleep-bad-bg: color-mix(in oklab, #b9a1f1, transparent 64%);
 }
 
@@ -91,6 +120,7 @@
   --font-ui: "Space Grotesk", "Avenir Next Condensed", "Trebuchet MS", "Segoe UI", sans-serif;
   --font-brand-title: "Space Grotesk", "Avenir Next Condensed", "Trebuchet MS", "Segoe UI", sans-serif;
   --font-display: "Courier New", "Eurostile", "Microgramma D Extended", "Space Grotesk", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, "Courier New", monospace;
   --bg-color: #171a21;
   --bg-image:
     radial-gradient(1100px 520px at 0% -10%, color-mix(in oklab, var(--accent), transparent 92%) 0%, transparent 62%),
@@ -123,6 +153,17 @@
   --error-ink: #e2b8b8;
   --theme-switch-bg: rgba(20, 23, 29, 0.85);
   --brand-kicker-color: #c97a6f;
+  --egg-curiosity: #a3a6b1;
+  --egg-resilience: #d0ae3c;
+  --egg-integrity: #c28565;
+  --egg-kindness: #4a6fe3;
+  --egg-humility: #d0cae8;
+  --warn-bg: #2a2418;
+  --warn-border: #a88a3f;
+  --warn-ink: #e6cf98;
+  /* Blue notices: information, kept apart from the amber warnings (light --accent is amber). */
+  --info: #6f93c9;
+  --tank-marker: #c8cfdb;
   --sleep-bad-bg: color-mix(in oklab, #c9a0a8, transparent 74%);
 }
 

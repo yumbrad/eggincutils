@@ -2,7 +2,16 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 
 import artifactDisplay from "../../data/artifact-display.json";
 import artifactConsumption from "../../data/artifact-consumption.json";
@@ -14,7 +23,6 @@ import {
   afxIdToItemKey,
   afxIdToTargetFamilyName,
   itemIdToCanonicalKey,
-  itemIdToKey,
   itemKeyToDisplayName,
   itemKeyToIconUrl,
   itemKeyToId,
@@ -29,14 +37,42 @@ import {
 } from "../../lib/local-preferences";
 import useHighsWorker from "../../lib/use-highs-worker";
 import { planForTarget, computeMonolithicPaths, type PlannerProgressEvent } from "../../lib/planner";
+import { itemIdTakesCraftCountGoal } from "../../lib/recipes";
 import { createDemoProfile, isBlankEid } from "../../lib/demo-profile";
 import type { LootJson } from "../../lib/loot-data";
 import {
   formatVirtueFuelQuantity,
+  formatVirtueTankLimit,
+  fractionDigitsForResolution,
   getVirtueFuelConfig,
+  virtueTankLimitAmount,
+  virtueShiftCostSoulEggs,
+  virtueShiftsCostSoulEggs,
   VIRTUE_FUEL_DISPLAY,
+  VIRTUE_HUMILITY_DISPLAY,
   type VirtueFuelKey,
+  type VirtueTankEggKey,
+  type VirtueTankSnapshot,
 } from "../../lib/virtue-fuel";
+import {
+  buildVirtueTankPlannerOptions,
+  DEFAULT_VIRTUE_SHIFT_CAP,
+  snapVirtueTankReading,
+  VIRTUE_LAUNCH_EFFORT_SECONDS,
+  type VirtueTankPlannerResult,
+  type VirtueTankPlanUnit,
+} from "../../lib/virtue-tank-plan";
+import {
+  nearestVirtueShiftCapDetent,
+  VIRTUE_REFILL_ROUTE_ORDER,
+  VIRTUE_SHIFT_CAP_DETENTS,
+  VIRTUE_SHIFT_PENALTY_SECONDS,
+  virtueFuelTolerance,
+  type VirtueFuelVector,
+  type VirtueTank,
+  type VirtueTankPlan,
+  type VirtueTankStartMode,
+} from "../../lib/virtue-tanks";
 import styles from "./page.module.css";
 
 type ShipLevelInfo = {
@@ -74,6 +110,8 @@ type ProfileSnapshot = {
   epicResearchZerogLevel: number;
   shipLevels: ShipLevelInfoDetailed[];
   missionOptions: MissionOption[];
+  /** Path of Virtue tank and shift state; absent on older saved sessions and backups without it. */
+  virtueTank?: VirtueTankSnapshot;
 };
 
 type PlannerSourceFilters = {
@@ -127,6 +165,8 @@ type PlanResponse = {
       inAir?: boolean;
       secondsRemaining?: number;
       launchSecondsRemaining?: number[];
+      /** Stable row id that virtue tank units point back at. */
+      rowKey?: string;
     }>;
     unmetItems: Array<{ itemId: string; quantity: number }>;
     targetBreakdown: {
@@ -170,6 +210,8 @@ type PlanResponse = {
       durationType: string;
       targetAfxId: number;
     }>;
+    /** Path of Virtue tank mode only; absent on main-farm plans and older saved sessions. */
+    virtueTanks?: VirtueTankPlannerResult;
   };
 };
 
@@ -203,6 +245,9 @@ type SolveSnapshotRequest = {
   fastMode: boolean;
   allowedShipDurations?: Array<{ ship: string; durationType: "SHORT" | "LONG" | "EPIC" }>;
   selectedConsumptionItemIds?: string[];
+  /** Path of Virtue only: the shift-cap slider and the Initial Tank toggle. */
+  virtueShiftCap?: number;
+  virtueStartTank?: VirtueTankStartMode;
 };
 
 type LastSolveInputs = SolveSnapshotRequest & {
@@ -217,6 +262,49 @@ type PersistedPlannerSession = {
   profileSnapshot: ProfileSnapshot;
   lastSolveRequest: LastSolveInputs;
 };
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Loose shape check for a saved tank plan and tank reading: what the tank views
+ * read without guards. A session saved by an older build fails it and is
+ * dropped, rather than breaking the page on every load.
+ */
+function isRestorableVirtueTankSession(tanks: unknown, virtueTank: unknown): boolean {
+  if (
+    virtueTank != null &&
+    (!isPlainObject(virtueTank) || !isPlainObject(virtueTank.fuels) || !isPlainObject(virtueTank.limits))
+  ) {
+    return false;
+  }
+  if (tanks == null) {
+    return true;
+  }
+  if (!isPlainObject(tanks) || !Array.isArray(tanks.units) || !Array.isArray(tanks.notes) || !isPlainObject(tanks.pack)) {
+    return false;
+  }
+  const { pack } = tanks;
+  return (
+    typeof pack.totalShifts === "number" &&
+    Array.isArray(pack.tanks) &&
+    Array.isArray(pack.unplaced) &&
+    Array.isArray(pack.notes) &&
+    isPlainObject(pack.schedule) &&
+    Array.isArray(pack.schedule.lanes) &&
+    pack.schedule.lanes.every(Array.isArray) &&
+    pack.tanks.every(
+      (tank) =>
+        isPlainObject(tank) &&
+        Array.isArray(tank.launches) &&
+        isPlainObject(tank.startContents) &&
+        isPlainObject(tank.leftover) &&
+        (tank.refill == null || (isPlainObject(tank.refill) && Array.isArray(tank.refill.route)))
+    ) &&
+    tanks.units.every((unit) => isPlainObject(unit) && typeof unit.id === "string")
+  );
+}
 
 function readPersistedPlannerSession(): PersistedPlannerSession | null {
   const raw = readFirstStoredString([LOCAL_PREF_KEYS.plannerSession]);
@@ -237,6 +325,9 @@ function readPersistedPlannerSession(): PersistedPlannerSession | null {
       !parsed.lastSolveRequest ||
       typeof parsed.lastSolveRequest !== "object"
     ) {
+      return null;
+    }
+    if (!isRestorableVirtueTankSession(parsed.response.plan.virtueTanks, parsed.profileSnapshot.virtueTank)) {
       return null;
     }
     if (typeof parsed.lastSolveRequest.eid !== "string") {
@@ -458,9 +549,16 @@ type PlannerSourcePreferenceStore = Partial<Record<InventorySource, PlannerSourc
 const ARTIFACT_DISPLAY = artifactDisplay as Record<string, { id: string; name: string; tierName: string; tierNumber: number }>;
 const ARTIFACT_CONSUMPTION = artifactConsumption as Record<string, Record<string, number>>;
 const ARTIFACT_SHORT_NAMES = artifactShortNames as Array<{ familyKey: string; shortName: string }>;
-/** Where an artifact's crafting discount stops improving, and so the craft
- *  count most players are chasing. Mirrors MAX_CRAFT_COUNT_FOR_DISCOUNT. */
-const MAX_CRAFT_DISCOUNT_COUNT = 300;
+/** Craft count a new craft-count goal starts at: where an artifact's shiny
+ *  (rarity) luck from crafting stops improving. Only artifacts take the goal
+ *  (itemIdTakesCraftCountGoal). */
+const CRAFT_GOAL_DEFAULT_COUNT = 400;
+/** Where an artifact's GE crafting discount stops improving. Mirrors
+ *  MAX_CRAFT_COUNT_FOR_DISCOUNT in lib/planner.ts. Earlier builds seeded every
+ *  craft-count goal here (artifacts, stones and ingredients alike), so it still
+ *  counts as a seed. A saved artifact goal at 300 loads as 300: it is also the
+ *  GE-discount target, so it may be the count the player wants. */
+const CRAFT_DISCOUNT_MAX_COUNT = 300;
 const SHARED_EID_KEYS = [LOCAL_PREF_KEYS.sharedEid, LOCAL_PREF_KEYS.legacyEid] as const;
 const SHARED_INCLUDE_SLOTTED_KEYS = [LOCAL_PREF_KEYS.sharedIncludeSlotted, LOCAL_PREF_KEYS.legacyIncludeSlotted] as const;
 
@@ -468,7 +566,7 @@ function buildDefaultConsumptionItemIds(): string[] {
   return ARTIFACT_SHORT_NAMES.flatMap((entry) => [1, 2, 3, 4].map((tier) => `${entry.familyKey}_${tier}`))
     .filter((itemKey) => ARTIFACT_DISPLAY[itemKey] && Object.keys(ARTIFACT_CONSUMPTION[itemKey] || {}).length > 0)
     .map((itemKey) => ARTIFACT_DISPLAY[itemKey]?.id || itemKeyToId(itemKey))
-    .sort((a, b) => itemIdToKey(a).localeCompare(itemIdToKey(b)));
+    .sort((a, b) => itemIdToCanonicalKey(a).localeCompare(itemIdToCanonicalKey(b)));
 }
 
 const DEFAULT_CONSUMPTION_ITEM_IDS = buildDefaultConsumptionItemIds();
@@ -487,6 +585,11 @@ function isCraftedOnlyEligibleGoalKey(itemKey: string): boolean {
     /^tau_ceti_geode_\d+$/.test(itemKey) ||
     /^solar_titanium_\d+$/.test(itemKey)
   );
+}
+
+/** A craft-count goal still at a seeded default (or the older 300 seed) rather than a number the player typed. */
+function isCraftGoalSeed(quantity: number): boolean {
+  return quantity === CRAFT_GOAL_DEFAULT_COUNT || quantity === CRAFT_DISCOUNT_MAX_COUNT;
 }
 
 function durationTypeLabel(durationType: string): string {
@@ -1061,7 +1164,8 @@ function buildVirtueFuelCharts(plan: PlanResponse["plan"]): FuelCharts | null {
 
   plan.missions.forEach((mission, missionIndex) => {
     const launches = Math.max(0, Math.round(mission.launches));
-    if (launches <= 0) {
+    // In-air missions paid for their fuel when they launched.
+    if (launches <= 0 || mission.inAir) {
       return;
     }
     const fuelConfig = getVirtueFuelConfig(mission.ship, mission.durationType);
@@ -1115,6 +1219,1609 @@ function buildVirtueFuelCharts(plan: PlanResponse["plan"]): FuelCharts | null {
   const maxTotal = Math.max(0, ...rows.map((row) => row.total));
   const total = rows.reduce((sum, row) => sum + row.total, 0);
   return rows.length > 0 && maxTotal > 0 ? { rows, maxTotal, total } : null;
+}
+
+// ---------------------------------------------------------------------------
+// Path of Virtue fuel tanks. The planner packs the plan's launches into tanks
+// (PlannerResult.virtueTanks, from lib/virtue-tanks.ts); everything below only
+// joins that packing to the plan's mission rows and the player's tank
+// snapshot for the tank card, the Fuel tanks panel, the mission table grouped
+// by tank and the tank timeline.
+//
+// Humility is never planned: ships fuel it straight from the Humility farm,
+// so the advice is always a Humility limit of 0, and any Humility sitting in the
+// tank is drained (free) before anything launches.
+//
+// Limit sliders: the game shows each limit as an egg amount snapping to 1% of
+// the tank (5T steps on a 500T tank), so every instruction names the amount
+// (formatVirtueTankLimit) and never the percent. limitPct stays an integer
+// percent internally.
+// ---------------------------------------------------------------------------
+
+type VirtueEggDisplay = { key: VirtueTankEggKey; label: string; short: string; imageSrc: string };
+
+const VIRTUE_EGG_DISPLAY = Object.fromEntries(
+  [...VIRTUE_FUEL_DISPLAY, VIRTUE_HUMILITY_DISPLAY].map((egg) => [
+    egg.key,
+    { key: egg.key, label: egg.label, short: egg.label.charAt(0), imageSrc: egg.imageSrc },
+  ])
+) as Record<VirtueTankEggKey, VirtueEggDisplay>;
+
+/** Tank readout order: the refuel route (C, R, I, K), then Humility. */
+const VIRTUE_TANK_READOUT_ORDER: VirtueTankEggKey[] = [...VIRTUE_REFILL_ROUTE_ORDER, "humility"];
+
+/**
+ * Display only: amounts below this read as empty in the tank charts and readouts. Whether a
+ * drain or a fill happens is decided with the packer's own tolerance (virtueFuelTolerance), which
+ * is far smaller on the small tanks: the 2B tank drains in 20M steps and can drain 0.5M.
+ */
+const VIRTUE_FUEL_NOISE = 1e6;
+
+/** A refuel window shorter than this means the next tank's first launch waits on the refuel. */
+const VIRTUE_TIGHT_REFUEL_WINDOW_SECONDS = 30 * 60;
+
+const VIRTUE_EID_PATTERN = /^EI\d{16}$/i;
+
+/** Planner notes the shift-cap banners (over the cap, or a slow plan within it) already say; the notes panel skips them while a banner shows. */
+const VIRTUE_BANNER_NOTE_PATTERNS = [
+  /^These goals need at least \d+ shifts/,
+  /^No plan (within \d+ shifts|without shifts)/,
+  /^With \d+ shifts the goals take/,
+];
+
+/** Notes the page already shows in its own structure: drains, unplaced launches, the over-cap banner. */
+const VIRTUE_TANK_NOTES_SHOWN_ELSEWHERE = [
+  "Drain the leftover Humility",
+  "Some refuel loops drain",
+  "These goals need at least",
+  "No plan within",
+  "No plan without shifts",
+];
+
+type VirtueTankUnitView = {
+  unit: VirtueTankPlanUnit;
+  /** Index into plan.missions; null for prep launches that have no mission row. */
+  missionIndex: number | null;
+  label: string;
+  subtitle: string;
+  color: string;
+  fuelPerLaunch: VirtueFuelVector;
+};
+
+type VirtueTankFill = {
+  egg: VirtueFuelKey;
+  /** Limit to set, in whole percent; shown to the player as an amount (formatVirtueTankLimit). */
+  limitPct: number;
+  /** The egg's limit before this fill, in whole percent; null when the snapshot is unknown. */
+  limitWasPct: number | null;
+  /** Contents once filled: the limit rounds up to a whole percent. */
+  fillsTo: number;
+  /** What the plan needs; below `fillsTo` when the limit rounds up. */
+  needs: number;
+  from: number;
+  /** The tank is full before this egg reaches its limit, so it stops at `fillsTo`, below the limit. */
+  stopsAtFull: boolean;
+};
+
+type VirtueTankDrain =
+  | { egg: VirtueFuelKey; to: number; amount: number }
+  /**
+   * Drain Humility and zero its limit. `amount` is what the backup shows, or null when it is
+   * unknown: Humility can come back in while the limit is still up, before the first refuel.
+   */
+  | { egg: "humility"; amount: number | null; limitWasPct: number | null }
+  /** No tank data: the first fill starts from an empty tank. */
+  | { egg: "all" };
+
+type VirtueTankView = {
+  tank: VirtueTank;
+  /** "current" and "ideal" are the Initial Tank; every later tank is a refuel loop. */
+  kind: "current" | "ideal" | "refill";
+  /** Fuel eggs shifted to before going back to Humility, in route order. */
+  route: VirtueFuelKey[];
+  shifts: number;
+  fills: VirtueTankFill[];
+  /** Free drains before the first shift, or before the first launch from the current tank. */
+  drains: VirtueTankDrain[];
+  /** Eggs already in the tank that this fill leaves as they are. */
+  kept: VirtueFuelKey[];
+  launchCount: number;
+  /** Refuel loops: the previous tanks' last launch to this tank's first, in seconds from the plan start. */
+  window: { fromSeconds: number; toSeconds: number } | null;
+  /** Current-contents Initial Tank only: Humility sitting in the tank now. Drawn, never planned. */
+  humility: number;
+};
+
+/** The tank the virtue card shows; "pending" until the EID is complete enough to fetch. */
+type VirtueTankPreview = {
+  eid: string;
+  status: "pending" | "loading" | "ready" | "error";
+  virtueTank: VirtueTankSnapshot | null;
+  error: string | null;
+};
+
+type VirtueTankPlanView = {
+  result: VirtueTankPlannerResult;
+  pack: VirtueTankPlan;
+  capacity: number;
+  tanks: VirtueTankView[];
+  units: Map<string, VirtueTankUnitView>;
+  /** Shifts to fill an ideal Initial Tank from what is in the tank now; not counted toward the cap. */
+  firstFillShifts: number;
+  /** Soul Egg prices, null without the player's Soul Eggs and shift count. */
+  firstFillCostSoulEggs: number | null;
+  planCostSoulEggs: number | null;
+  perShiftCostSoulEggs: number[];
+};
+
+function virtueFuelAmount(vector: VirtueFuelVector | undefined, egg: VirtueFuelKey): number {
+  const value = vector?.[egg];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function virtueFuelTotal(vector: VirtueFuelVector | undefined): number {
+  return VIRTUE_REFILL_ROUTE_ORDER.reduce((sum, egg) => sum + virtueFuelAmount(vector, egg), 0);
+}
+
+function virtueTankPct(value: number, capacity: number): number {
+  return capacity > 0 ? Math.max(0, Math.min(100, (value / capacity) * 100)) : 0;
+}
+
+function virtueEggStyle(egg: VirtueTankEggKey, extra?: CSSProperties): CSSProperties {
+  return { "--egg": `var(--egg-${egg})`, ...extra } as CSSProperties;
+}
+
+/**
+ * Tank amounts to one decimal ("108.7T", "42T"). formatVirtueFuelQuantity
+ * drops the decimal from 10 up, which is too coarse for fill targets. With the
+ * tank's capacity, amounts get the decimals its 1% steps need, so a drain
+ * target reads the same as that step's limit ("1.02B" on the 2B tank).
+ * Below 1M the eggs are counted ("500,000"): the 2B tank drains that little.
+ */
+function formatTankFuel(value: number, capacity = 0): string {
+  const absValue = Math.abs(value);
+  const units: Array<[number, string]> = [[1e18, "Q"], [1e15, "q"], [1e12, "T"], [1e9, "B"], [1e6, "M"]];
+  for (const [unit, suffix] of units) {
+    if (absValue >= unit * 0.9995) {
+      const digits = Math.max(1, fractionDigitsForResolution(capacity / 100 / unit));
+      const scaled = Math.round((value / unit) * 10 ** digits) / 10 ** digits;
+      return `${scaled.toLocaleString(undefined, { maximumFractionDigits: digits })}${suffix}`;
+    }
+  }
+  const eggs = Math.round(value);
+  return (eggs === 0 ? 0 : eggs).toLocaleString();
+}
+
+/** Soul Eggs with the game's suffixes: one decimal below 10 ("1.4s"), whole numbers above ("803Q"). */
+function formatSoulEggs(value: number): string {
+  const units: Array<[number, string]> = [
+    [1e33, "d"], [1e30, "N"], [1e27, "o"], [1e24, "S"], [1e21, "s"], [1e18, "Q"],
+    [1e15, "q"], [1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"],
+  ];
+  for (const [unit, suffix] of units) {
+    if (value >= unit) {
+      const scaled = value / unit;
+      return `${scaled < 10 ? scaled.toFixed(1) : Math.round(scaled).toString()}${suffix}`;
+    }
+  }
+  return Math.round(value).toLocaleString();
+}
+
+/** Weekday and time, e.g. "Mon 5:12 AM"; the date too ("Mon Oct 5, 5:12 AM") once the weekday could mean two days. */
+function formatClockTime(at: Date, fromMs: number): string {
+  const time = at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (at.getTime() - fromMs < 6 * 24 * 3600 * 1000) {
+    return `${at.toLocaleDateString(undefined, { weekday: "short" })} ${time}`;
+  }
+  return `${at.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}, ${time}`;
+}
+
+function pluralize(count: number, one: string, many = `${one}s`): string {
+  return `${count.toLocaleString()} ${count === 1 ? one : many}`;
+}
+
+/** "Backup 12 min ago", or null for a synthetic (demo) tank. */
+function formatBackupAge(backupTimeSeconds: number | null, nowMs: number): string | null {
+  if (backupTimeSeconds == null || !Number.isFinite(backupTimeSeconds)) {
+    return null;
+  }
+  const minutes = Math.max(0, Math.round((nowMs / 1000 - backupTimeSeconds) / 60));
+  if (minutes < 1) {
+    return "Backup just now";
+  }
+  if (minutes < 60) {
+    return `Backup ${minutes} min ago`;
+  }
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) {
+    return `Backup ${hours} h ago`;
+  }
+  return `Backup ${Math.round(hours / 24)} days ago`;
+}
+
+/** The smallest shift-cap detent that allows `shifts`, or null past the slider's end. */
+function shiftCapDetentFor(shifts: number): number | null {
+  return VIRTUE_SHIFT_CAP_DETENTS.find((detent) => detent >= shifts) ?? null;
+}
+
+type VirtueTankLaunchGroup = {
+  key: string;
+  /** plan.missions row; null for prep launches with no row, which stay one group per unit. */
+  missionIndex: number | null;
+  unitView: VirtueTankUnitView | null;
+  launches: number;
+};
+
+/**
+ * A tank's launches per mission row, in launch order. A row's prep and farming
+ * launches are separate packer units but one line for the player.
+ */
+function groupTankLaunches(view: VirtueTankPlanView, tank: VirtueTank): VirtueTankLaunchGroup[] {
+  const groups: VirtueTankLaunchGroup[] = [];
+  for (const entry of tank.launches) {
+    const unitView = view.units.get(entry.unitId) || null;
+    const missionIndex = unitView?.missionIndex ?? null;
+    const existing = missionIndex != null ? groups.find((group) => group.missionIndex === missionIndex) : null;
+    if (existing) {
+      existing.launches += entry.launches;
+    } else {
+      groups.push({
+        key: missionIndex != null ? `row:${missionIndex}` : `unit:${entry.unitId}`,
+        missionIndex,
+        unitView,
+        launches: entry.launches,
+      });
+    }
+  }
+  return groups;
+}
+
+function buildVirtueTankPlanView(
+  plan: PlanResponse["plan"],
+  snapshot: VirtueTankSnapshot | undefined
+): VirtueTankPlanView | null {
+  const result = plan.virtueTanks;
+  if (!result?.pack) {
+    return null;
+  }
+  const pack = result.pack;
+  const capacity = pack.capacity > 0 ? pack.capacity : result.capacity;
+  const missionColorByKey = buildMissionColorMap(plan.missions);
+  const missionIndexByRowKey = new Map<string, number>();
+  plan.missions.forEach((mission, index) => {
+    if (mission.rowKey && !mission.inAir) {
+      missionIndexByRowKey.set(mission.rowKey, index);
+    }
+  });
+  const prepReasonByShape = new Map<string, string>();
+  for (const prep of plan.progression.prepLaunches) {
+    const key = `${prep.ship}|${prep.durationType}`;
+    if (!prepReasonByShape.has(key)) {
+      prepReasonByShape.set(key, prep.reason);
+    }
+  }
+
+  const units = new Map<string, VirtueTankUnitView>();
+  for (const unit of result.units) {
+    const missionIndex = unit.missionRowKey ? missionIndexByRowKey.get(unit.missionRowKey) ?? null : null;
+    const mission = missionIndex != null ? plan.missions[missionIndex] : null;
+    const prepReason = prepReasonByShape.get(`${unit.ship}|${unit.durationType}`);
+    const subtitle = mission
+      ? afxIdToTargetFamilyName(mission.targetAfxId)
+      : unit.isPrep && prepReason
+        ? prepReasonLabel(prepReason)
+        : unit.targetAfxId != null
+          ? afxIdToTargetFamilyName(unit.targetAfxId)
+          : "Ship prep";
+    const colorKey = mission ? missionColorKey(mission) : `prep|${unit.ship}|${unit.durationType}`;
+    units.set(unit.id, {
+      unit,
+      missionIndex,
+      label: `${titleCaseShip(unit.ship)} ${durationTypeWithLevelLabel(unit.durationType, unit.level)}`,
+      subtitle,
+      color: missionColorByKey.get(colorKey) || prepTimelineColor(colorKey),
+      fuelPerLaunch: unit.fuelPerLaunch ?? getVirtueFuelConfig(unit.ship, unit.durationType),
+    });
+  }
+
+  // One start time per launch: a schedule block of n launches starts one every (end - start) / n.
+  const launchStarts: Array<{ tankIndex: number; at: number }> = [];
+  for (const lane of pack.schedule.lanes) {
+    for (const block of lane) {
+      const each = block.launches > 0 ? (block.endSeconds - block.startSeconds) / block.launches : 0;
+      for (let launch = 0; launch < block.launches; launch += 1) {
+        launchStarts.push({ tankIndex: block.tankIndex, at: block.startSeconds + launch * each });
+      }
+    }
+  }
+
+  // Limit sliders as the player walks through the fills ("now 150T" / "already set"), in whole percent.
+  const limitPct: Partial<Record<VirtueTankEggKey, number>> = {};
+  if (snapshot) {
+    for (const egg of VIRTUE_TANK_READOUT_ORDER) {
+      limitPct[egg] = Math.round((snapshot.limits[egg] ?? 1) * 100);
+    }
+  }
+  // Drains and fills are compared the way the packer plans them: to its fuel tolerance (a couple
+  // of eggs on the 2B tank), on the readings as the planner snapped them. A 0.5M drain there is
+  // real room the route's last egg fills into.
+  const tolerance = virtueFuelTolerance(capacity);
+  const reading = (egg: VirtueTankEggKey) => (snapshot ? snapVirtueTankReading(snapshot.fuels[egg]) : 0);
+  const humilityNow = reading("humility") > tolerance ? reading("humility") : 0;
+  // Humility is drained and its limit zeroed before anything launches: on the
+  // current tank, or with the ideal fill. Without tank data the ideal fill
+  // starts by emptying the whole tank, since its amounts assume an empty one.
+  const humilityDrain = (kind: "current" | "ideal", flagged: boolean): VirtueTankDrain | null => {
+    if (!snapshot) {
+      return kind === "ideal" ? { egg: "all" } : { egg: "humility", amount: null, limitWasPct: null };
+    }
+    const limitWasPct = limitPct.humility ?? null;
+    if (humilityNow <= 0 && !flagged && !(limitWasPct != null && limitWasPct > 0)) {
+      return null;
+    }
+    return { egg: "humility", amount: humilityNow, limitWasPct };
+  };
+  let firstFillShifts = 0;
+
+  const tanks = pack.tanks.map((tank, tankIndex): VirtueTankView => {
+    const launchCount = tank.launches.reduce((sum, entry) => sum + entry.launches, 0);
+    const view: VirtueTankView = {
+      tank,
+      kind: tankIndex === 0 ? (pack.startMode === "ideal" ? "ideal" : "current") : "refill",
+      route: [],
+      shifts: 0,
+      fills: [],
+      drains: [],
+      kept: [],
+      launchCount,
+      window: null,
+      humility: 0,
+    };
+    if (view.kind === "current") {
+      view.humility = humilityNow;
+      const drain = humilityDrain("current", false);
+      if (drain) {
+        view.drains.push(drain);
+      }
+      limitPct.humility = 0;
+      return view;
+    }
+
+    const refill = tank.refill;
+    const previous = tankIndex > 0 ? pack.tanks[tankIndex - 1] : null;
+    // A limit above what the egg fills to only happens when the tank fills up first.
+    const tankFull = virtueFuelTotal(tank.startContents) >= capacity - tolerance;
+    const stopsAtFull = (limit: number, fillsTo: number) =>
+      tankFull && virtueTankLimitAmount(limit, capacity) - fillsTo > tolerance;
+    for (const egg of VIRTUE_REFILL_ROUTE_ORDER) {
+      const start = virtueFuelAmount(tank.startContents, egg);
+      if (view.kind === "ideal") {
+        const idealFill = tank.idealFill;
+        const now = reading(egg);
+        // From what the tank starts with, not idealFill.changeFromCurrent: an egg
+        // needed below what is in it now stays as it is when there is room.
+        const change = start - now;
+        if (change > tolerance) {
+          const limit = idealFill?.limitPct[egg] ?? Math.ceil(virtueTankPct(start, capacity));
+          view.fills.push({
+            egg,
+            limitPct: limit,
+            limitWasPct: limitPct[egg] ?? null,
+            fillsTo: start,
+            needs: virtueFuelAmount(idealFill?.fillTo, egg),
+            from: now,
+            stopsAtFull: stopsAtFull(limit, start),
+          });
+          limitPct[egg] = limit;
+        } else if (change < -tolerance) {
+          // Drain-only: no shift, just drain down to what the tank should start with.
+          view.drains.push({ egg, to: start, amount: now - start });
+        } else if (start > tolerance) {
+          view.kept.push(egg);
+        }
+        continue;
+      }
+      // A drain leaves the egg at the previous tank's leftover minus the drain,
+      // on a slider step. That is the loop's start level unless the egg is
+      // then refilled (the route's last egg, drained below its room and
+      // filled back to the brim).
+      const drain = virtueFuelAmount(refill?.drain, egg);
+      const leftover = virtueFuelAmount(previous?.leftover, egg);
+      const drainedTo = drain > tolerance ? Math.max(0, leftover - drain) : leftover;
+      const refilled = refill?.route.includes(egg) ?? false;
+      if (refilled) {
+        const limit = refill?.limitPct[egg] ?? Math.ceil(virtueTankPct(start, capacity));
+        view.fills.push({
+          egg,
+          limitPct: limit,
+          limitWasPct: limitPct[egg] ?? null,
+          fillsTo: start,
+          needs: virtueFuelAmount(refill?.fillTo, egg),
+          from: drainedTo,
+          stopsAtFull: stopsAtFull(limit, start),
+        });
+        limitPct[egg] = limit;
+      } else if (start > tolerance) {
+        view.kept.push(egg);
+      }
+      if (drain > tolerance) {
+        view.drains.push({ egg, to: drainedTo, amount: drain });
+      }
+    }
+    view.route = view.fills.map((fill) => fill.egg);
+    if (view.kind === "ideal") {
+      const drain = humilityDrain("ideal", Boolean(tank.idealFill?.drainHumility));
+      if (drain) {
+        view.drains.unshift(drain);
+      }
+      limitPct.humility = 0;
+    } else if (tankIndex === 1 && pack.startMode === "current") {
+      // Humility refills live while the current tank launches if its limit
+      // went to 0 late, and this loop's fills need that room: drain whatever
+      // is there, whatever the backup said.
+      view.drains.unshift({ egg: "humility", amount: null, limitWasPct: 0 });
+    }
+
+    if (view.kind === "ideal") {
+      view.shifts = view.route.length > 0 ? view.route.length + 1 : 0;
+      firstFillShifts = view.shifts;
+      return view;
+    }
+    view.shifts = refill?.shifts ?? 0;
+    const ownStarts = launchStarts.filter((entry) => entry.tankIndex === tankIndex).map((entry) => entry.at);
+    const earlierStarts = launchStarts.filter((entry) => entry.tankIndex < tankIndex).map((entry) => entry.at);
+    if (ownStarts.length > 0) {
+      view.window = {
+        fromSeconds: earlierStarts.length > 0 ? Math.max(...earlierStarts) : 0,
+        toSeconds: Math.min(...ownStarts),
+      };
+    }
+    return view;
+  });
+
+  // The first fill happens first, so the plan's shifts are priced after it.
+  let firstFillCostSoulEggs: number | null = null;
+  let planCostSoulEggs: number | null = null;
+  let perShiftCostSoulEggs: number[] = [];
+  if (snapshot) {
+    const planStartCount = snapshot.shiftCount + firstFillShifts;
+    firstFillCostSoulEggs = virtueShiftsCostSoulEggs(snapshot.soulEggs, snapshot.shiftCount, firstFillShifts);
+    planCostSoulEggs = virtueShiftsCostSoulEggs(snapshot.soulEggs, planStartCount, pack.totalShifts);
+    perShiftCostSoulEggs = Array.from({ length: pack.totalShifts }, (_, index) =>
+      virtueShiftCostSoulEggs(snapshot.soulEggs, planStartCount + index)
+    );
+  }
+
+  return {
+    result,
+    pack,
+    capacity,
+    tanks,
+    units,
+    firstFillShifts,
+    firstFillCostSoulEggs,
+    planCostSoulEggs,
+    perShiftCostSoulEggs,
+  };
+}
+
+const VIRTUE_WARN_ICON = (
+  <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+    <path d="M10 2.8 18 16.6H2Z" />
+    <path d="M10 8v4" />
+    <path d="M10 14.4v.1" />
+  </svg>
+);
+
+const VIRTUE_INFO_ICON = (
+  <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+    <circle cx="10" cy="10" r="7.5" />
+    <path d="M10 9v5" />
+    <path d="M10 6.2v.1" />
+  </svg>
+);
+
+const VIRTUE_REFUEL_ICON = (
+  <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+    <path d="M3 6.5a5 5 0 0 1 8.6-2.2L13 5.8" />
+    <path d="M13 2.5v3.3H9.7" />
+    <path d="M13 9.5a5 5 0 0 1-8.6 2.2L3 10.2" />
+    <path d="M3 13.5v-3.3h3.3" />
+  </svg>
+);
+
+function VirtueNotice({ tone, children }: { tone: "warn" | "info"; children: ReactNode }) {
+  return (
+    <p className={styles.virtueNotice} data-tone={tone}>
+      {tone === "warn" ? VIRTUE_WARN_ICON : VIRTUE_INFO_ICON}
+      <span>{children}</span>
+    </p>
+  );
+}
+
+function VirtueEggIcon({ egg, size }: { egg: VirtueTankEggKey; size: number }) {
+  return <img className={styles.eggIcon} src={VIRTUE_EGG_DISPLAY[egg].imageSrc} alt="" width={size} height={size} />;
+}
+
+/** A shift route as egg chips: letters by default, icons only on the overview connectors ("xs"). */
+function VirtueRouteChips({ eggs, size }: { eggs: VirtueTankEggKey[]; size?: "sm" | "xs" }) {
+  return (
+    <ol
+      className={styles.routeChips}
+      data-size={size}
+      aria-label={`Route: ${eggs.map((egg) => VIRTUE_EGG_DISPLAY[egg].label).join(", then ")}`}
+    >
+      {eggs.map((egg, index) => (
+        <Fragment key={`${egg}:${index}`}>
+          {index > 0 && size !== "xs" && (
+            <li className={styles.routeArrow} aria-hidden="true">→</li>
+          )}
+          <li className={styles.routeChip} style={virtueEggStyle(egg)} title={VIRTUE_EGG_DISPLAY[egg].label}>
+            <VirtueEggIcon egg={egg} size={size ? 12 : 14} />
+            {size === "xs" ? null : VIRTUE_EGG_DISPLAY[egg].short}
+          </li>
+        </Fragment>
+      ))}
+    </ol>
+  );
+}
+
+/** Card A's readout of what is in the tank now, Humility included (hatched, never planned). */
+function VirtueTankReadout({ tank }: { tank: VirtueTankSnapshot }) {
+  const capacity = tank.capacity;
+  const physical = VIRTUE_TANK_READOUT_ORDER.reduce((sum, egg) => sum + Math.max(0, tank.fuels[egg] || 0), 0);
+  return (
+    <div className={styles.tankReadout}>
+      <div className={styles.tankReadoutHead}>
+        <span className={styles.fieldLabel}>In your tank now</span>
+        <span className={styles.tankReadoutTotal}>
+          {formatTankFuel(physical)} <span>of {formatTankFuel(capacity)}</span>
+        </span>
+      </div>
+      <div
+        className={styles.tankReadoutBar}
+        role="img"
+        aria-label={`Tank holds ${formatTankFuel(physical)} of ${formatTankFuel(capacity)}`}
+      >
+        {VIRTUE_TANK_READOUT_ORDER.filter((egg) => tank.fuels[egg] > VIRTUE_FUEL_NOISE).map((egg) => (
+          <span
+            key={egg}
+            className={styles.tankReadoutSeg}
+            data-egg={egg}
+            style={virtueEggStyle(egg, { width: `${virtueTankPct(tank.fuels[egg], capacity)}%` })}
+            title={`${VIRTUE_EGG_DISPLAY[egg].label} ${formatTankFuel(tank.fuels[egg])}`}
+          />
+        ))}
+      </div>
+      <ul className={styles.tankEggList}>
+        {VIRTUE_TANK_READOUT_ORDER.map((egg) => {
+          const amount = tank.fuels[egg] || 0;
+          const empty = amount <= VIRTUE_FUEL_NOISE;
+          return (
+            <li
+              key={egg}
+              className={styles.tankEggItem}
+              data-egg={egg}
+              data-empty={empty ? "1" : "0"}
+              style={virtueEggStyle(egg)}
+              title={egg === "humility" ? "Not planned: ships fuel it straight from the Humility farm" : undefined}
+            >
+              <VirtueEggIcon egg={egg} size={22} />
+              <span className={styles.tankEggName}>{VIRTUE_EGG_DISPLAY[egg].label}</span>
+              <span className={styles.tankEggAmount}>{empty ? "Empty" : formatTankFuel(amount)}</span>
+            </li>
+          );
+        })}
+      </ul>
+      <p className={styles.tankFootnote}>
+        <VirtueEggIcon egg="humility" size={14} />
+        <span>
+          <strong>Humility isn&apos;t planned:</strong> ships fuel it straight from the Humility farm. Drain any
+          Humility in the tank and set its limit to 0.
+        </span>
+      </p>
+    </div>
+  );
+}
+
+function VirtueDrainItem({ drain, capacity }: { drain: VirtueTankDrain; capacity: number }) {
+  if (drain.egg === "all") {
+    return (
+      <li className={styles.refuelDrain} style={virtueEggStyle("humility")}>
+        <VirtueEggIcon egg="humility" size={18} />
+        <span>
+          No tank data, so these fills start from empty: drain <b>every egg</b>, Humility too, and set the Humility
+          limit to <b>0</b>
+        </span>
+      </li>
+    );
+  }
+  let text: ReactNode;
+  if (drain.egg === "humility") {
+    // The limit as the slider shows it: an amount ("250T"), never a percent.
+    const limitWas = drain.limitWasPct != null ? formatVirtueTankLimit(drain.limitWasPct, capacity) : null;
+    const limit =
+      drain.limitWasPct === 0 ? (
+        <>
+          {" "}
+          and keep its limit at <b>0</b>
+        </>
+      ) : (
+        <>
+          {" "}
+          and set its limit to <b>0</b>
+          {limitWas != null && <small> (now {limitWas})</small>}
+        </>
+      );
+    if (drain.amount == null) {
+      text = (
+        <>
+          Drain any <b>Humility</b> in the tank{limit}
+        </>
+      );
+    } else if (drain.amount > 0) {
+      text = (
+        <>
+          Drain <b>Humility {formatTankFuel(drain.amount, capacity)}</b>
+          {limit}
+        </>
+      );
+    } else if (limitWas != null) {
+      text = (
+        <>
+          Set the <b>Humility</b> limit to <b>0</b> <small>(now {limitWas})</small>
+        </>
+      );
+    } else {
+      text = (
+        <>
+          Drain <b>Humility</b>
+          {limit}
+        </>
+      );
+    }
+  } else if (drain.to <= VIRTUE_FUEL_NOISE) {
+    text = (
+      <>
+        Drain all <b>{VIRTUE_EGG_DISPLAY[drain.egg].label}</b> <small>{formatTankFuel(drain.amount, capacity)}</small>
+      </>
+    );
+  } else {
+    text = (
+      <>
+        Drain <b>{VIRTUE_EGG_DISPLAY[drain.egg].label}</b> to <b>{formatTankFuel(drain.to, capacity)}</b>{" "}
+        <small>−{formatTankFuel(drain.amount, capacity)}</small>
+      </>
+    );
+  }
+  return (
+    <li className={styles.refuelDrain} style={virtueEggStyle(drain.egg)}>
+      <VirtueEggIcon egg={drain.egg} size={18} />
+      <span>{text}</span>
+    </li>
+  );
+}
+
+/** The free drains before a fill or a first launch. */
+function VirtueDrainList({ drains, label, capacity }: { drains: VirtueTankDrain[]; label: string; capacity: number }) {
+  return (
+    <div className={styles.refuelPrep}>
+      <span className={styles.fieldLabel}>{label}</span>
+      <ul className={styles.refuelDrains}>
+        {drains.map((drain) => (
+          <VirtueDrainItem key={drain.egg} drain={drain} capacity={capacity} />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function VirtueRefuelStep({ fill, step, capacity }: { fill: VirtueTankFill; step: number; capacity: number }) {
+  const rounded = fill.fillsTo - fill.needs > VIRTUE_FUEL_NOISE;
+  // Sliders snap to 1% of the tank, so the same whole percent is the same amount.
+  const was =
+    fill.limitWasPct == null
+      ? null
+      : fill.limitWasPct === fill.limitPct
+        ? "already set"
+        : `now ${formatVirtueTankLimit(fill.limitWasPct, capacity)}`;
+  return (
+    <li className={styles.refuelStep} style={virtueEggStyle(fill.egg)}>
+      <div className={styles.refuelStepEgg}>
+        <span className={styles.refuelStepNum}>{step}</span>
+        <VirtueEggIcon egg={fill.egg} size={20} />
+        Shift to {VIRTUE_EGG_DISPLAY[fill.egg].label}
+      </div>
+      <div className={styles.refuelStepLimit}>
+        <span className={styles.fieldLabel}>Set limit</span>
+        <span className={styles.refuelBig}>{formatVirtueTankLimit(fill.limitPct, capacity)}</span>
+        {was && <span className={styles.refuelStepWas}>{was}</span>}
+      </div>
+      <div className={styles.refuelStepFill}>
+        <span>
+          Fills to <b>{formatTankFuel(fill.fillsTo, capacity)}</b>
+          {fill.stopsAtFull ? " (tank full)" : ""}
+        </span>{" "}
+        <span>
+          +{formatTankFuel(Math.max(0, fill.fillsTo - fill.from), capacity)} from{" "}
+          {fill.from > virtueFuelTolerance(capacity) ? formatTankFuel(fill.from, capacity) : "empty"}
+          {rounded ? ` · plan needs ${formatTankFuel(fill.needs, capacity)}` : ""}
+        </span>
+      </div>
+    </li>
+  );
+}
+
+/** Refuel instructions for one tank: the in-game reference while shifting. */
+function VirtueRefuelStrip({
+  view,
+  tankView,
+  planStartMs,
+}: {
+  view: VirtueTankPlanView;
+  tankView: VirtueTankView;
+  planStartMs: number;
+}) {
+  const { tank } = tankView;
+  if (tankView.kind === "current") {
+    // Nothing may launch from the tank as it is: the plan needs no missions, or
+    // every launch waits for the first refuel loop.
+    const refuelNext = view.tanks.length > 1;
+    return (
+      <>
+        <p className={styles.refuelNote}>
+          {tankView.launchCount > 0 ? (
+            <>
+              <b>No refuel.</b> Launch these from what&apos;s in your tank now, starting on Humility.
+            </>
+          ) : refuelNext ? (
+            <>
+              <b>Nothing launches from this tank.</b> Start with refuel loop 1.
+            </>
+          ) : (
+            <>
+              <b>Nothing to launch.</b> This plan needs no missions.
+            </>
+          )}
+        </p>
+        {tankView.drains.length > 0 && (
+          <VirtueDrainList
+            drains={tankView.drains}
+            label={tankView.launchCount > 0 || refuelNext ? "Before you launch · free" : "Anytime · free"}
+            capacity={view.capacity}
+          />
+        )}
+      </>
+    );
+  }
+  const homeStep = tankView.fills.length + 1;
+  let head: ReactNode;
+  if (tankView.kind === "ideal") {
+    const cost = view.firstFillCostSoulEggs;
+    head = (
+      <div className={styles.refuelHead}>
+        <span className={styles.refuelTitle}>Fill before you start</span>
+        {tankView.route.length > 0 && <VirtueRouteChips eggs={[...tankView.route, "humility"]} size="sm" />}
+        <span className={styles.shiftPill}>
+          {tankView.shifts > 0 ? pluralize(tankView.shifts, "shift") : "No shifts"}
+          {tankView.shifts > 0 && cost != null ? ` ≈ ${formatSoulEggs(cost)} SE` : ""}
+        </span>
+        <span className={styles.refuelHeadNote}>not counted toward the cap</span>
+      </div>
+    );
+  } else {
+    const refuelWindow = tankView.window;
+    const windowSeconds = refuelWindow ? Math.max(0, refuelWindow.toSeconds - refuelWindow.fromSeconds) : 0;
+    const tight = refuelWindow != null && windowSeconds < VIRTUE_TIGHT_REFUEL_WINDOW_SECONDS;
+    head = (
+      <div className={styles.refuelHead}>
+        <span className={styles.refuelTitle}>Refuel loop {tank.index}</span>
+        {tank.refill && <VirtueRouteChips eggs={tank.refill.route} />}
+        <span className={styles.shiftPill}>{pluralize(tankView.shifts, "shift")}</span>
+        {refuelWindow && (
+          <span
+            className={`${styles.refuelWindow} ${styles.tooltipValue}`}
+            data-tight={tight ? "1" : "0"}
+            title="After the last launch from the tank before and before the first launch from this one, while every slot is busy."
+          >
+            {tight ? (
+              "No slack: refuel right after the last launch; the next launch waits for it"
+            ) : (
+              <>
+                Refuel between <b>{formatClockTime(new Date(planStartMs + refuelWindow.fromSeconds * 1000), planStartMs)}</b>{" "}
+                and <b>{formatClockTime(new Date(planStartMs + refuelWindow.toSeconds * 1000), planStartMs)}</b> ·{" "}
+                {formatDurationFromHours(windowSeconds / 3600)}
+              </>
+            )}
+          </span>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className={styles.refuelStrip}>
+      {head}
+      {tankView.drains.length > 0 && (
+        <VirtueDrainList drains={tankView.drains} label="Before you shift · free" capacity={view.capacity} />
+      )}
+      <ol className={styles.refuelSteps}>
+        {tankView.fills.map((fill, index) => (
+          <VirtueRefuelStep key={fill.egg} fill={fill} step={index + 1} capacity={view.capacity} />
+        ))}
+        <li className={`${styles.refuelStep} ${styles.refuelStepHome}`} style={virtueEggStyle("humility")}>
+          <div className={styles.refuelStepEgg}>
+            <span className={styles.refuelStepNum}>{homeStep}</span>
+            <VirtueEggIcon egg="humility" size={20} />
+            {homeStep === 1 ? "Start on Humility" : "Back to Humility"}
+          </div>
+          <p>
+            {tankView.kind === "ideal" ? "Launch the Initial Tank missions from there." : `Then launch ${tank.label}.`}
+          </p>
+        </li>
+      </ol>
+      {tankView.kept.length > 0 && (
+        <p className={styles.refuelNote}>
+          {tankView.kept.map((egg, index) => (
+            <Fragment key={egg}>
+              {index > 0 && ", "}
+              <b>
+                {VIRTUE_EGG_DISPLAY[egg].label} {formatTankFuel(virtueFuelAmount(tank.startContents, egg), view.capacity)}
+              </b>
+            </Fragment>
+          ))}
+          {tankView.kind === "ideal" ? " already in the tank." : " carried over, no refill."}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** One egg's row in a tank chart, drawn against the full tank: burned by mission, carried over, limit tick. */
+function VirtueTankChartRow({
+  view,
+  tankView,
+  egg,
+}: {
+  view: VirtueTankPlanView;
+  tankView: VirtueTankView;
+  egg: VirtueFuelKey;
+}) {
+  const { tank } = tankView;
+  const { capacity } = view;
+  const start = virtueFuelAmount(tank.startContents, egg);
+  const used = virtueFuelAmount(tank.used, egg);
+  const left = virtueFuelAmount(tank.leftover, egg);
+  const eggLabel = VIRTUE_EGG_DISPLAY[egg].label;
+  const fill = tankView.fills.find((row) => row.egg === egg) || null;
+  const segments = groupTankLaunches(view, tank)
+    .map((group) => ({
+      ...group,
+      quantity: group.unitView ? virtueFuelAmount(group.unitView.fuelPerLaunch, egg) * group.launches : 0,
+    }))
+    .filter((segment) => segment.unitView && segment.quantity > 0);
+  const label = [
+    `${eggLabel}: ${formatTankFuel(start, capacity)} in tank, ${formatTankFuel(used)} used`,
+    left > VIRTUE_FUEL_NOISE ? `, ${formatTankFuel(left, capacity)} left` : "",
+    fill ? `, limit ${formatVirtueTankLimit(fill.limitPct, capacity)}` : "",
+  ].join("");
+  const sub = start <= VIRTUE_FUEL_NOISE ? "" : left > VIRTUE_FUEL_NOISE ? `${formatTankFuel(left, capacity)} left` : "all used";
+  return (
+    <div className={styles.tankRow}>
+      <div className={styles.fuelLabel}>
+        <VirtueEggIcon egg={egg} size={22} />
+        <span>{eggLabel}</span>
+      </div>
+      <div className={styles.tankTrack} role="img" aria-label={label}>
+        {segments.map((segment) => (
+          <div
+            key={segment.key}
+            className={`${styles.fuelSegment} ${styles.tankSegment}`}
+            style={
+              {
+                width: `${virtueTankPct(segment.quantity, capacity)}%`,
+                "--fuel-segment-color": segment.unitView?.color,
+              } as CSSProperties
+            }
+            title={[
+              `${segment.unitView?.label} ×${segment.launches.toLocaleString()}`,
+              segment.unitView?.subtitle,
+              `${formatTankFuel(segment.quantity)} ${eggLabel}`,
+            ].join("\n")}
+          >
+            <span className={styles.fuelSegmentLabel}>{formatTankFuel(segment.quantity)}</span>
+          </div>
+        ))}
+        {left > VIRTUE_FUEL_NOISE && (
+          <div
+            className={styles.tankCarry}
+            style={virtueEggStyle(egg, { width: `${virtueTankPct(left, capacity)}%` })}
+            title={`${formatTankFuel(left)} ${eggLabel} left in the tank`}
+          >
+            <span className={styles.fuelSegmentLabel}>{formatTankFuel(left)}</span>
+          </div>
+        )}
+        {start <= VIRTUE_FUEL_NOISE && <div className={styles.tankEmpty}>empty</div>}
+        {fill && (
+          <span
+            className={styles.tankLimitTick}
+            style={{ left: `${fill.limitPct}%` }}
+            title={`Set limit ${formatVirtueTankLimit(fill.limitPct, capacity)}`}
+          />
+        )}
+      </div>
+      <div className={styles.tankRowTotal}>
+        {formatTankFuel(start, capacity)}
+        {sub && <span>{sub}</span>}
+      </div>
+    </div>
+  );
+}
+
+function VirtueTankGauge({ view, tankView }: { view: VirtueTankPlanView; tankView: VirtueTankView }) {
+  const { tank } = tankView;
+  const { capacity } = view;
+  const total = virtueFuelTotal(tank.startContents);
+  const eggs = VIRTUE_REFILL_ROUTE_ORDER.filter((egg) => virtueFuelAmount(tank.startContents, egg) > VIRTUE_FUEL_NOISE);
+  const humility = tankView.humility;
+  const label = [
+    `${tank.label}: ${formatTankFuel(total)} of ${formatTankFuel(capacity)}. `,
+    VIRTUE_REFILL_ROUTE_ORDER.map(
+      (egg) => `${VIRTUE_EGG_DISPLAY[egg].label} ${formatTankFuel(virtueFuelAmount(tank.startContents, egg), capacity)}`
+    ).join(", "),
+    humility > 0 ? `, plus Humility ${formatTankFuel(humility)}` : "",
+  ].join("");
+  const sub =
+    humility > 0
+      ? `+${formatTankFuel(humility)} Humility`
+      : tankView.kind === "ideal"
+        ? "ideal fill"
+        : pluralize(tankView.launchCount, "launch", "launches");
+  return (
+    <a className={styles.tankGaugeItem} href={`#tank-${tank.index}`}>
+      <span className={styles.tankGauge} role="img" aria-label={label}>
+        {eggs.map((egg) => (
+          <span
+            key={egg}
+            className={styles.tankGaugeLayer}
+            style={virtueEggStyle(egg, { height: `${virtueTankPct(virtueFuelAmount(tank.startContents, egg), capacity)}%` })}
+            title={`${VIRTUE_EGG_DISPLAY[egg].label} ${formatTankFuel(virtueFuelAmount(tank.startContents, egg), capacity)}`}
+          />
+        ))}
+        {humility > 0 && (
+          <span
+            className={styles.tankGaugeLayer}
+            data-egg="humility"
+            style={virtueEggStyle("humility", { height: `${virtueTankPct(humility, capacity)}%` })}
+            title={`Humility ${formatTankFuel(humility)}: not planned, drain it`}
+          />
+        )}
+      </span>
+      <span className={styles.tankGaugeName}>{tank.label}</span>
+      <span className={styles.tankGaugeTotal}>
+        <b>{formatTankFuel(total)}</b>
+      </span>
+      <span className={styles.tankGaugeSub}>{sub}</span>
+    </a>
+  );
+}
+
+/** Panel E: what each tank holds, how to refuel into it, and what burns it. */
+function VirtueFuelTanksPanel({ view, planStartMs }: { view: VirtueTankPlanView; planStartMs: number }) {
+  const { pack, capacity, tanks } = view;
+  const chartsOpen = tanks.length <= 3;
+  const notes = Array.from(new Set([...view.result.notes, ...pack.notes])).filter(
+    (note) =>
+      !VIRTUE_TANK_NOTES_SHOWN_ELSEWHERE.some((prefix) => note.startsWith(prefix)) &&
+      !pack.unplaced.some((entry) => note.includes(entry.reason))
+  );
+  return (
+    <div className="panel">
+      <div className={styles.tankPanelHead}>
+        <h2 id="virtue-fuel-tanks-title">Fuel tanks</h2>
+        <span className={styles.tankPanelSummary}>
+          {pluralize(tanks.length, "tank")} · {pluralize(pack.totalShifts, "shift")} · {formatTankFuel(capacity)} tank
+        </span>
+      </div>
+      <p className={styles.tankPanelIntro}>
+        Each tank is what you launch from before the next refuel. Rows are drawn against the full tank, the same scale as
+        the in-game limit sliders. Missions already in the air paid for their fuel and aren&apos;t counted.
+      </p>
+      {pack.unplaced.length > 0 && (
+        <div className={styles.tankPanelNotices}>
+          {pack.unplaced.map((entry) => {
+            const unitView = view.units.get(entry.unitId);
+            return (
+              <VirtueNotice key={entry.unitId} tone="warn">
+                <strong>{pluralize(entry.launches, "launch", "launches")} left out.</strong>{" "}
+                {unitView?.label || "This mission"} {entry.reason}. Upgrade the tank or pick another ship.
+              </VirtueNotice>
+            );
+          })}
+        </div>
+      )}
+      <div className={styles.tankOverview}>
+        {tanks.map((tankView) => (
+          <Fragment key={tankView.tank.index}>
+            {tankView.kind === "refill" && tankView.tank.refill && (
+              <div className={styles.tankConnector}>
+                <VirtueRouteChips eggs={tankView.tank.refill.route} size="xs" />
+                <span className={styles.tankConnectorLine} aria-hidden="true" />
+                <span className={styles.tankConnectorShifts}>{pluralize(tankView.shifts, "shift")}</span>
+              </div>
+            )}
+            <VirtueTankGauge view={view} tankView={tankView} />
+          </Fragment>
+        ))}
+      </div>
+      <div className={styles.tankLegend}>
+        {VIRTUE_REFILL_ROUTE_ORDER.map((egg) => (
+          <span key={egg}>
+            <i className={styles.legendSwatch} style={virtueEggStyle(egg)} />
+            {VIRTUE_EGG_DISPLAY[egg].label}
+          </span>
+        ))}
+        <span>
+          <i className={styles.legendSeg} />
+          Burned, by mission
+        </span>
+        <span>
+          <i className={styles.legendHatch} />
+          Left in tank
+        </span>
+        <span>
+          <i className={styles.legendTick} />
+          Limit to set
+        </span>
+      </div>
+      <div className={styles.tankBlocks}>
+        {tanks.map((tankView) => {
+          const { tank } = tankView;
+          const kind =
+            tankView.kind === "current"
+              ? "current contents"
+              : tankView.kind === "ideal"
+                ? "ideal mix"
+                : `after refuel loop ${tank.index}`;
+          return (
+            <article
+              key={tank.index}
+              className={styles.tankBlock}
+              id={`tank-${tank.index}`}
+              aria-labelledby={`tank-${tank.index}-title`}
+            >
+              <header className={styles.tankBlockHead}>
+                <div className={styles.tankBlockTitle}>
+                  <span className={styles.tankBadge} aria-hidden="true">
+                    {tank.index + 1}
+                  </span>
+                  <h3 id={`tank-${tank.index}-title`}>{tank.label}</h3>
+                  <span className={styles.tankBlockKind}>{kind}</span>
+                </div>
+                <div className={styles.tankBlockMeta}>
+                  <b>{formatTankFuel(virtueFuelTotal(tank.startContents))}</b> of {formatTankFuel(capacity)} ·{" "}
+                  {pluralize(tankView.launchCount, "launch", "launches")}
+                </div>
+              </header>
+              <VirtueRefuelStrip view={view} tankView={tankView} planStartMs={planStartMs} />
+              {tank.launches.length > 0 && (
+                <ul className={styles.tankMissionChips} aria-label={`Missions launched from ${tank.label}`}>
+                  {groupTankLaunches(view, tank).map((group) => (
+                    <li
+                      key={group.key}
+                      className={styles.tankMissionChip}
+                      style={{ "--fuel-segment-color": group.unitView?.color } as CSSProperties}
+                    >
+                      <i aria-hidden="true" />
+                      <span>{group.unitView?.label || group.key}</span>
+                      {/* One ship often farms several targets, so the chip names the target too. */}
+                      <span className={styles.tankMissionChipTarget}>
+                        <small>{group.missionIndex == null ? "prep" : group.unitView?.subtitle}</small>
+                        <b>×{group.launches.toLocaleString()}</b>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <details className={styles.tankChartDetails} open={chartsOpen}>
+                <summary>Fuel by mission</summary>
+                <div className={styles.tankChart}>
+                  <div className={styles.tankAxis} aria-hidden="true">
+                    <span />
+                    <div className={styles.tankAxisScale}>
+                      {[0, 0.25, 0.5, 0.75, 1].map((fraction) => (
+                        <span
+                          key={fraction}
+                          style={{ left: `${fraction * 100}%` }}
+                          data-quarter={fraction === 0.25 || fraction === 0.75 ? "1" : undefined}
+                        >
+                          {fraction === 0 ? "0" : formatTankFuel(capacity * fraction)}
+                        </span>
+                      ))}
+                    </div>
+                    <span className={styles.tankAxisNote}>in tank</span>
+                  </div>
+                  {VIRTUE_REFILL_ROUTE_ORDER.map((egg) => (
+                    <VirtueTankChartRow key={egg} view={view} tankView={tankView} egg={egg} />
+                  ))}
+                </div>
+              </details>
+            </article>
+          );
+        })}
+      </div>
+      <div className={styles.tankPanelFoot}>
+        <p className={styles.tankFootnote}>
+          <VirtueEggIcon egg="humility" size={14} />
+          <span>
+            Humility isn&apos;t in these tanks: ships fuel it straight from the Humility farm. Keep its limit at 0 and
+            drain any that&apos;s in the tank.
+          </span>
+        </p>
+        {!pack.exact && (
+          <p className={styles.tankFootnote}>
+            <span>Tank split is the best found in the time allowed, not proven optimal.</span>
+          </p>
+        )}
+        {notes.map((note) => (
+          <p key={note} className={styles.tankFootnote}>
+            <span>{note}</span>
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Panel G in tank mode: the packer's schedule, with tank boundaries and refuel windows. */
+function VirtueTankTimeline({
+  view,
+  plan,
+  planStartMs,
+}: {
+  view: VirtueTankPlanView;
+  plan: PlanResponse["plan"];
+  planStartMs: number;
+}) {
+  const { pack } = view;
+  const totalSeconds = Math.max(1, pack.schedule.makespanSeconds);
+  const at = (seconds: number) => Math.max(0, Math.min(100, (seconds / totalSeconds) * 100));
+  const missionColorByKey = buildMissionColorMap(plan.missions);
+  // In-air ships seed the lanes the way the packer does: longest wait on slot 1.
+  const inAirLaunches = plan.missions
+    .filter((mission) => mission.inAir)
+    .flatMap((mission) =>
+      (mission.launchSecondsRemaining || [mission.secondsRemaining || 0]).map((seconds) => ({
+        mission,
+        seconds: Math.max(0, Math.round(seconds)),
+      }))
+    )
+    .sort((a, b) => b.seconds - a.seconds)
+    .slice(0, 3);
+  const boundaries = view.tanks
+    .filter((tankView) => tankView.window)
+    .map((tankView) => ({
+      tankIndex: tankView.tank.index,
+      label: tankView.tank.label,
+      fromSeconds: tankView.window!.fromSeconds,
+      toSeconds: tankView.window!.toSeconds,
+    }));
+  const clock = (seconds: number) => formatClockTime(new Date(planStartMs + seconds * 1000), planStartMs);
+  // Boundaries that nearly coincide share one label ("Tanks 2–5"); close labels
+  // then stack in two rows, the earlier one on top so they read in order.
+  const markerGroups: Array<typeof boundaries> = [];
+  for (const boundary of boundaries) {
+    const group = markerGroups[markerGroups.length - 1];
+    if (group && at(boundary.toSeconds) - at(group[0].toSeconds) < 7) {
+      group.push(boundary);
+    } else {
+      markerGroups.push([boundary]);
+    }
+  }
+  const markers = markerGroups.map((group) => {
+    const first = group[0];
+    const last = group[group.length - 1];
+    return {
+      key: first.label,
+      label: group.length === 1 ? first.label : `Tanks ${first.tankIndex + 1}–${last.tankIndex + 1}`,
+      title: group
+        .map(
+          (boundary) =>
+            `${boundary.label}: refuel between ${clock(boundary.fromSeconds)} and ${clock(boundary.toSeconds)} (${formatDurationFromHours((boundary.toSeconds - boundary.fromSeconds) / 3600)})`
+        )
+        .join("\n"),
+      left: at(first.toSeconds),
+      row: 0,
+      edge: "" as "" | "start" | "end",
+    };
+  });
+  let markerRows = 1;
+  markers.forEach((marker, index) => {
+    const previous = markers[index - 1];
+    if (previous && marker.left - previous.left < 14 && previous.row === 0) {
+      previous.row = 1;
+      markerRows = 2;
+    }
+    marker.edge = marker.left < 6 ? "start" : marker.left > 94 ? "end" : "";
+  });
+  const windowsText = boundaries
+    .map((boundary) => {
+      const seconds = boundary.toSeconds - boundary.fromSeconds;
+      return `${boundary.label} ${seconds < VIRTUE_TIGHT_REFUEL_WINDOW_SECONDS ? "none" : formatDurationFromHours(seconds / 3600)}`;
+    })
+    .join(", ");
+
+  const legendIds: string[] = [];
+  for (const tank of pack.tanks) {
+    for (const entry of tank.launches) {
+      if (!legendIds.includes(entry.unitId)) {
+        legendIds.push(entry.unitId);
+      }
+    }
+  }
+
+  return (
+    <div className={styles.timelinePanel}>
+      <p className={`muted ${styles.timelineIntro}`}>
+        Launches in tank order: a tank&apos;s launches start only after the previous tank&apos;s last launch and its
+        refuel. Shaded spans are refuel windows.
+      </p>
+      <div className={styles.timelineStats}>
+        <span>
+          Model total: <strong>{formatDurationFromHours(plan.expectedHours)}</strong>
+        </span>
+        <span>
+          Timeline makespan: <strong>{formatDurationFromHours(pack.schedule.makespanSeconds / 3600)}</strong>
+        </span>
+        {windowsText && (
+          <span>
+            Refuel windows: <strong>{windowsText}</strong>
+          </span>
+        )}
+      </div>
+      <div className={styles.timelineLanes}>
+        {markers.length > 0 && (
+          <div className={styles.timelineMarkerRow} aria-hidden="true">
+            <span />
+            <div className={styles.timelineMarkerLabels} data-rows={markerRows}>
+              {markers.map((marker) => (
+                <span
+                  key={marker.key}
+                  className={styles.timelineTankLabel}
+                  data-row={marker.row}
+                  data-edge={marker.edge || undefined}
+                  style={{ left: `${marker.left}%` }}
+                  title={marker.title}
+                >
+                  {VIRTUE_REFUEL_ICON}
+                  {marker.label}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        {pack.schedule.lanes.map((lane, laneIndex) => {
+          const seed = inAirLaunches[laneIndex];
+          let cursor = 0;
+          const items: ReactNode[] = [];
+          if (seed && seed.seconds > 0) {
+            const color =
+              missionColorByKey.get(missionColorKey(seed.mission)) || prepTimelineColor(missionColorKey(seed.mission));
+            items.push(
+              <div
+                key="in-air"
+                className={styles.timelineBlock}
+                data-phase="inAir"
+                style={
+                  {
+                    left: "0%",
+                    width: `${Math.max(at(seed.seconds), 0.7)}%`,
+                    "--timeline-block-color": color,
+                  } as CSSProperties
+                }
+                title={[
+                  `${titleCaseShip(seed.mission.ship)} ${durationTypeWithLevelLabel(seed.mission.durationType, seed.mission.level)}`,
+                  `In air · ${afxIdToTargetFamilyName(seed.mission.targetAfxId)}`,
+                  "Already launched — this slot is busy until it lands",
+                  `0m → ${formatDurationFromHours(seed.seconds / 3600)}`,
+                ].join("\n")}
+              >
+                <span className={styles.timelineBlockLabel}>in air</span>
+              </div>
+            );
+            cursor = seed.seconds;
+          }
+          lane.forEach((block, blockIndex) => {
+            if (block.startSeconds - cursor > 60) {
+              items.push(
+                <div
+                  key={`idle:${blockIndex}`}
+                  className={styles.timelineIdle}
+                  style={{ left: `${at(cursor)}%`, width: `${at(block.startSeconds) - at(cursor)}%` }}
+                  title={`Slot idle ${formatDurationFromHours((block.startSeconds - cursor) / 3600)}`}
+                />
+              );
+            }
+            const unitView = view.units.get(block.unitId);
+            items.push(
+              <div
+                key={`block:${blockIndex}`}
+                className={styles.timelineBlock}
+                data-phase={unitView && unitView.missionIndex == null ? "prep" : "mission"}
+                style={
+                  {
+                    left: `${at(block.startSeconds)}%`,
+                    width: `${Math.max(at(block.endSeconds) - at(block.startSeconds), 0.7)}%`,
+                    "--timeline-block-color": unitView?.color,
+                  } as CSSProperties
+                }
+                title={[
+                  unitView?.label || block.unitId,
+                  unitView?.subtitle || "",
+                  `${pluralize(block.launches, "launch", "launches")} from ${pack.tanks[block.tankIndex]?.label || "a tank"}`,
+                  `${formatDurationFromHours(block.startSeconds / 3600)} → ${formatDurationFromHours(block.endSeconds / 3600)}`,
+                ].join("\n")}
+              >
+                <span className={styles.timelineBlockLabel}>x{block.launches.toLocaleString()}</span>
+              </div>
+            );
+            cursor = block.endSeconds;
+          });
+          return (
+            <div key={`lane:${laneIndex}`} className={styles.timelineLaneRow}>
+              <div className={styles.timelineLaneLabel}>Slot {laneIndex + 1}</div>
+              <div className={styles.timelineTrack}>
+                {items}
+                {boundaries.map((boundary) => (
+                  <Fragment key={boundary.label}>
+                    <span
+                      className={styles.timelineRefuelBand}
+                      style={{
+                        left: `${at(boundary.fromSeconds)}%`,
+                        width: `${Math.max(0, at(boundary.toSeconds) - at(boundary.fromSeconds))}%`,
+                      }}
+                    />
+                    <span className={styles.timelineTankMarker} style={{ left: `${at(boundary.toSeconds)}%` }} />
+                  </Fragment>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className={styles.timelineLegend} data-tanks="1">
+        {legendIds.map((unitId) => {
+          const unitView = view.units.get(unitId);
+          const where = pack.tanks.filter((tank) => tank.launches.some((entry) => entry.unitId === unitId));
+          const launches = where.reduce(
+            (sum, tank) =>
+              sum + tank.launches.filter((entry) => entry.unitId === unitId).reduce((total, entry) => total + entry.launches, 0),
+            0
+          );
+          const slotSeconds = launches * (unitView?.unit.durationSeconds || 0);
+          return (
+            <div key={unitId} className={styles.timelineLegendRow}>
+              <span className={styles.timelineSwatch} style={{ background: unitView?.color }} aria-hidden="true" />
+              <span>{unitView?.label || unitId}</span>
+              <span className={styles.timelineLegendMuted}>{unitView?.subtitle}</span>
+              <span className={styles.timelineLegendMeta}>
+                {pluralize(launches, "launch", "launches")} · {formatDurationFromHours(slotSeconds / 3600)} slot-time ·{" "}
+                {where.map((tank) => tank.label).join(", ")}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** A plan.missions row in the mission table; tank mode passes the launches that go in one tank. */
+function renderMissionTableRow(
+  mission: PlanMissionRow,
+  missionIndex: number,
+  targetOverride: string | null,
+  options: { key: string; launches?: number; splitAcrossTanks?: boolean }
+) {
+  const targetLabel = targetOverride || afxIdToTargetFamilyName(mission.targetAfxId);
+  const targetItemKey = targetOverride ? null : afxIdToItemKey(mission.targetAfxId);
+  const targetIconUrl = targetItemKey ? itemKeyToIconUrl(targetItemKey) : null;
+  const launches = options.launches ?? mission.launches;
+  // A row split across tanks shows its share of the row's expected yields.
+  const yieldScale = mission.launches > 0 && options.launches != null ? options.launches / mission.launches : 1;
+  return (
+    <tr key={options.key} className={mission.inAir ? styles.inAirRow : undefined}>
+      <td>
+        {mission.inAir && (
+          <span className={styles.inAirBadge} title="Already launched — nothing to send">
+            In air
+          </span>
+        )}
+        {titleCaseShip(mission.ship)}<br />
+        <span className="muted">{durationTypeWithLevelLabel(mission.durationType, mission.level)}</span>
+      </td>
+      <td>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {targetIconUrl && (
+            <img
+              src={targetIconUrl}
+              alt={afxIdToDisplayName(mission.targetAfxId)}
+              width={24}
+              height={24}
+              loading="lazy"
+            />
+          )}
+          <div>
+            <div>{targetLabel}</div>
+          </div>
+        </div>
+      </td>
+      <td>
+        {mission.inAir ? (
+          <span className="muted" title="Already sent — do not launch these again">
+            {mission.launches.toLocaleString()} sent
+          </span>
+        ) : (
+          <>
+            {launches.toLocaleString()}
+            {options.splitAcrossTanks && <span className={styles.splitNote}>split across tanks</span>}
+          </>
+        )}
+      </td>
+      <td>
+        {mission.inAir
+          ? formatInAirReturnLabel(mission.launchSecondsRemaining, mission.secondsRemaining)
+          : formatDurationFromHours(mission.durationSeconds / 3600)}
+      </td>
+      <td>
+        {mission.expectedYields.slice(0, 3).map((yieldRow) => {
+          const iconUrl = itemIdToIconUrl(yieldRow.itemId);
+          return (
+            <div key={yieldRow.itemId} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {iconUrl && (
+                <img
+                  src={iconUrl}
+                  alt={itemIdToLabel(yieldRow.itemId)}
+                  width={18}
+                  height={18}
+                  loading="lazy"
+                />
+              )}
+              <span>{itemIdToLabel(yieldRow.itemId)}: {(yieldRow.quantity * yieldScale).toFixed(2)}</span>
+            </div>
+          );
+        })}
+      </td>
+    </tr>
+  );
+}
+
+/** Tank-mode mission table body: in-air rows, then one tbody per tank with a refuel row between. */
+function VirtueTankMissionRows({
+  view,
+  plan,
+  targetOverrideByIndex,
+}: {
+  view: VirtueTankPlanView;
+  plan: PlanResponse["plan"];
+  targetOverrideByIndex: Map<number, string>;
+}) {
+  const tankRows = view.tanks.map((tankView) => groupTankLaunches(view, tankView.tank));
+  const tanksByMissionIndex = new Map<number, number>();
+  tankRows.forEach((rows) =>
+    rows.forEach((row) => {
+      if (row.missionIndex != null) {
+        tanksByMissionIndex.set(row.missionIndex, (tanksByMissionIndex.get(row.missionIndex) || 0) + 1);
+      }
+    })
+  );
+  const inAirRows = Array.from(plan.missions.entries()).filter(([, mission]) => mission.inAir);
+  const unpackedRows = Array.from(plan.missions.entries()).filter(
+    ([missionIndex, mission]) => !mission.inAir && mission.launches > 0 && !tanksByMissionIndex.has(missionIndex)
+  );
+
+  return (
+    <>
+      {inAirRows.length > 0 && (
+        <tbody>
+          {inAirRows.map(([missionIndex, mission]) =>
+            renderMissionTableRow(mission, missionIndex, null, {
+              key: `${missionIndex}:${mission.ship}:${mission.durationType}:${mission.missionId}:${mission.targetAfxId}`,
+            })
+          )}
+        </tbody>
+      )}
+      {view.tanks.map((tankView, tankIndex) => {
+        const { tank } = tankView;
+        const rows = tankRows[tankIndex];
+        return (
+          <tbody key={tank.index} data-tank={tank.index}>
+            {tankView.kind === "refill" ? (
+              <tr className={styles.tankMarkerRow}>
+                <th colSpan={5} scope="rowgroup">
+                  <div>
+                    {VIRTUE_REFUEL_ICON}
+                    <span>Shift &amp; refuel → {tank.label}</span>
+                    {tank.refill && <VirtueRouteChips eggs={tank.refill.route} size="sm" />}
+                    <span className={styles.shiftPill}>{pluralize(tankView.shifts, "shift")}</span>
+                    <a href={`#tank-${tank.index}`}>Refuel steps</a>
+                  </div>
+                </th>
+              </tr>
+            ) : (
+              <tr className={styles.missionTankGroupRow}>
+                <th colSpan={5} scope="rowgroup">
+                  <div>
+                    <span className={styles.tankBadge} aria-hidden="true">
+                      {tank.index + 1}
+                    </span>
+                    <span>{tank.label}</span>
+                    <span className="muted">
+                      {tankView.kind === "ideal" ? "ideal mix, filled before you start" : "current contents"} ·{" "}
+                      {pluralize(tankView.launchCount, "launch", "launches")}
+                    </span>
+                  </div>
+                </th>
+              </tr>
+            )}
+            {rows.map((row) => {
+              if (row.missionIndex != null) {
+                const mission = plan.missions[row.missionIndex];
+                return renderMissionTableRow(
+                  mission,
+                  row.missionIndex,
+                  targetOverrideByIndex.get(row.missionIndex) || null,
+                  {
+                    key: `${tank.index}:${row.key}`,
+                    launches: row.launches,
+                    splitAcrossTanks: (tanksByMissionIndex.get(row.missionIndex) || 0) > 1,
+                  }
+                );
+              }
+              const unit = row.unitView?.unit;
+              return (
+                <tr key={`${tank.index}:${row.key}`}>
+                  <td>
+                    <span
+                      className={styles.prepBadge}
+                      title="Ship-leveling launch with no target drops; see the Horizon progression plan"
+                    >
+                      Prep
+                    </span>
+                    {unit ? titleCaseShip(unit.ship) : row.key}
+                    <br />
+                    <span className="muted">{unit ? durationTypeWithLevelLabel(unit.durationType, unit.level) : ""}</span>
+                  </td>
+                  <td>{row.unitView?.subtitle || "Ship prep"}</td>
+                  <td>{row.launches.toLocaleString()}</td>
+                  <td>{unit ? formatDurationFromHours(unit.durationSeconds / 3600) : "—"}</td>
+                  <td>
+                    <span className="muted">—</span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        );
+      })}
+      {unpackedRows.length > 0 && (
+        <tbody data-tank="none">
+          <tr className={styles.missionTankGroupRow}>
+            <th colSpan={5} scope="rowgroup">
+              <div>
+                <span>Not in a tank</span>
+                <span className="muted">see Fuel tanks for why these can&apos;t launch from this tank</span>
+              </div>
+            </th>
+          </tr>
+          {unpackedRows.map(([missionIndex, mission]) =>
+            renderMissionTableRow(mission, missionIndex, targetOverrideByIndex.get(missionIndex) || null, {
+              key: `none:${missionIndex}`,
+            })
+          )}
+        </tbody>
+      )}
+    </>
+  );
 }
 
 /** "returns in 14h", or "returns in 9h – 14h" when a grouped row lands staggered. */
@@ -1259,8 +2966,11 @@ function durationChipLabel(durationType: "SHORT" | "LONG" | "EPIC"): string {
   }
 }
 
+// Item IDs go through the canonical key: a few display IDs differ from their
+// artifact key ("gusset-2" is ornate_gusset_2, "vial-of-martian-dust-2" is
+// vial_martian_dust_2), and recipes, craft counts and ARTIFACT_DISPLAY all use the key.
 function itemIdToLabel(itemId: string): string {
-  const itemKey = itemIdToKey(itemId);
+  const itemKey = itemIdToCanonicalKey(itemId);
   const displayInfo = ARTIFACT_DISPLAY[itemKey];
   if (displayInfo && Number.isFinite(displayInfo.tierNumber)) {
     return `${displayInfo.name} (T${displayInfo.tierNumber})`;
@@ -1269,7 +2979,7 @@ function itemIdToLabel(itemId: string): string {
 }
 
 function itemIdToIconUrl(itemId: string): string | null {
-  return itemKeyToIconUrl(itemIdToKey(itemId));
+  return itemKeyToIconUrl(itemIdToCanonicalKey(itemId));
 }
 
 function targetFamilyKey(itemKey: string): string {
@@ -1293,11 +3003,6 @@ function normalizedTargetQuantity(rawValue: string): number {
   return Math.max(1, Math.min(9999, Math.round(Number(rawValue) || 1)));
 }
 
-/** Only tiers with a recipe have a craft count, so tier 1 can never be a craft goal. */
-function itemCanBeCrafted(itemId: string): boolean {
-  return Boolean((recipes as Record<string, unknown>)[itemIdToKey(itemId)]);
-}
-
 function targetRowToPlannerTarget(row: PlannerTargetRow): {
   targetItemId: string;
   quantity: number;
@@ -1307,7 +3012,7 @@ function targetRowToPlannerTarget(row: PlannerTargetRow): {
     targetItemId: row.itemId,
     quantity: normalizedTargetQuantity(row.quantityInput),
   };
-  if (row.craftGoal && itemCanBeCrafted(row.itemId)) {
+  if (row.craftGoal && itemIdTakesCraftCountGoal(row.itemId)) {
     target.craftGoal = true;
   }
   return target;
@@ -1343,12 +3048,18 @@ function parseStoredTargetRows(raw: string | null, targetOptions: TargetOption[]
       if (!availableTargets.has(itemId)) {
         continue;
       }
-      const quantity = Math.max(1, Math.min(9999, Math.round(Number(record.quantity ?? record.quantityInput) || 1)));
+      const storedQuantity = Math.max(1, Math.min(9999, Math.round(Number(record.quantity ?? record.quantityInput) || 1)));
+      // Only artifacts take a craft-count goal. A saved goal on a stone or an
+      // ingredient loads as copies, and a seeded count drops back to one copy
+      // (as toggling the chip off does) rather than asking for hundreds.
+      const craftGoal = record.craftGoal === true && itemIdTakesCraftCountGoal(itemId);
+      const quantity =
+        record.craftGoal === true && !craftGoal && isCraftGoalSeed(storedQuantity) ? 1 : storedQuantity;
       rows.push({
         id: `target-${rows.length + 1}`,
         itemId,
         quantityInput: String(quantity),
-        craftGoal: record.craftGoal === true && itemCanBeCrafted(itemId),
+        craftGoal,
       });
     }
     return rows.length > 0 ? rows : null;
@@ -1579,7 +3290,15 @@ export default function MissionCraftPlannerPage() {
   const [quantityInput, setQuantityInput] = useState("1");
   const [targetCraftedOnly, setTargetCraftedOnly] = useState(false);
   const [priorityTimePct, setPriorityTimePct] = useState(50);
-  const [virtuePriorityTimePct, setVirtuePriorityTimePct] = useState(50);
+  const [virtueShiftCap, setVirtueShiftCap] = useState(DEFAULT_VIRTUE_SHIFT_CAP);
+  /** Set with a new shift cap to build as soon as the cap is in state (the banner's "Plan with S shifts"). */
+  const [buildQueued, setBuildQueued] = useState(false);
+  /** The shift cap the last "Plan with S shifts" built at, until the next build: the status region says so. */
+  const [fasterOptionPlanned, setFasterOptionPlanned] = useState<number | null>(null);
+  const [virtueStartTank, setVirtueStartTank] = useState<VirtueTankStartMode>("current");
+  // The virtue tank card shows the tank before any plan is built, so it keeps
+  // its own copy of the latest fetched tank for the EID in the field.
+  const [virtueTankPreview, setVirtueTankPreview] = useState<VirtueTankPreview | null>(null);
   const [inventorySource, setInventorySource] = useState<InventorySource>("main");
   const [includeSlotted, setIncludeSlotted] = useState(false);
   const [includeInventoryRare, setIncludeInventoryRare] = useState(false);
@@ -1622,6 +3341,9 @@ export default function MissionCraftPlannerPage() {
   const highs = useHighsWorker();
   const highsRef = useRef(highs);
   highsRef.current = highs;
+  const responseRef = useRef<PlanResponse | null>(null);
+  responseRef.current = response;
+  const shiftCapSliderRef = useRef<HTMLInputElement | null>(null);
   const trimmedEid = eid.trim();
   const isDemoMode = trimmedEid.length === 0;
   const showDemoNotice = isDemoMode && !demoNoticeDismissed;
@@ -1637,8 +3359,32 @@ export default function MissionCraftPlannerPage() {
     includeDropLegendary,
     includeDropFragments,
   };
-  const activePriorityTimePct = inventorySource === "virtue" ? virtuePriorityTimePct : priorityTimePct;
-  const setActivePriorityTimePct = inventorySource === "virtue" ? setVirtuePriorityTimePct : setPriorityTimePct;
+  // Virtue mode plans for time under the shift cap, so the Balance slider only drives main-farm plans.
+  const solvePriorityTime = inventorySource === "virtue" ? 1 : priorityTimePct / 100;
+  const demoVirtueTank = useMemo(() => createDemoProfile("virtue").virtueTank ?? null, []);
+  // The tank the virtue card reads: the demo tank without an EID, else the
+  // latest one fetched for this EID, else the one saved with the current plan.
+  const virtueTankForCard = useMemo((): VirtueTankPreview => {
+    if (isDemoMode) {
+      return { eid: "", status: "ready", virtueTank: demoVirtueTank, error: null };
+    }
+    if (virtueTankPreview && virtueTankPreview.eid === trimmedEid) {
+      if (virtueTankPreview.virtueTank || virtueTankPreview.status !== "loading") {
+        return virtueTankPreview;
+      }
+    }
+    if (profileSnapshot?.eid === trimmedEid && profileSnapshot.virtueTank) {
+      return { eid: trimmedEid, status: "ready", virtueTank: profileSnapshot.virtueTank, error: null };
+    }
+    if (virtueTankPreview && virtueTankPreview.eid === trimmedEid) {
+      return virtueTankPreview;
+    }
+    return { eid: trimmedEid, status: "pending", virtueTank: null, error: null };
+  }, [demoVirtueTank, isDemoMode, profileSnapshot, trimmedEid, virtueTankPreview]);
+  // Without tank data the Initial Tank can only be the ideal mix.
+  const virtueTankMissing = virtueTankForCard.status === "ready" && !virtueTankForCard.virtueTank;
+  const effectiveVirtueStartTank: VirtueTankStartMode = virtueTankMissing ? "ideal" : virtueStartTank;
+  const virtueShiftCapIndex = Math.max(0, VIRTUE_SHIFT_CAP_DETENTS.indexOf(nearestVirtueShiftCapDetent(virtueShiftCap)));
 
   const buildCurrentSourcePreferences = (): PlannerSourcePreferences => ({
     targetRows: targetRows.map(targetRowToPlannerTarget),
@@ -1808,7 +3554,7 @@ export default function MissionCraftPlannerPage() {
         .flatMap((family) => family.tiers)
         .filter((tier) => tier.hasYield)
         .map((tier) => tier.itemId)
-        .sort((a, b) => itemIdToKey(a).localeCompare(itemIdToKey(b))),
+        .sort((a, b) => itemIdToCanonicalKey(a).localeCompare(itemIdToCanonicalKey(b))),
     [consumptionFamilies]
   );
   const activeTargetRow = useMemo(
@@ -1835,16 +3581,34 @@ export default function MissionCraftPlannerPage() {
     return targetOptions.filter((option) => terms.every((term) => option.searchText.includes(term)));
   }, [targetFilter, targetOptions, targetPickerOpen]);
 
-  const missionTimeline = useMemo(() => (response ? buildMissionTimeline(response.plan) : null), [response]);
-  const virtueFuelCharts = useMemo(
-    () => (response && inventorySource === "virtue" ? buildVirtueFuelCharts(response.plan) : null),
-    [inventorySource, response]
+  // Tank mode schedules launches tank by tank (the packer's schedule), so its
+  // timeline replaces the heuristic one below.
+  const virtueTankView = useMemo(
+    () => (response ? buildVirtueTankPlanView(response.plan, profileSnapshot?.virtueTank) : null),
+    [profileSnapshot, response]
   );
+  const missionTimeline = useMemo(
+    () => (response && !response.plan.virtueTanks ? buildMissionTimeline(response.plan) : null),
+    [response]
+  );
+  // Virtue plans from before tank mode (restored sessions) keep the old fuel chart.
+  const virtueFuelCharts = useMemo(
+    () =>
+      response && response.plan.objectiveMode === "virtueFuel" && !response.plan.virtueTanks
+        ? buildVirtueFuelCharts(response.plan)
+        : null,
+    [response]
+  );
+  const timelineTotalSeconds = virtueTankView
+    ? virtueTankView.pack.schedule.makespanSeconds
+    : missionTimeline
+      ? missionTimeline.totalSeconds
+      : null;
   // Taken from the timeline makespan so the headline number always agrees with
   // the chart below it and genuinely includes in-air ships holding their slots;
   // plan.expectedHours only covers the launches still to be made.
-  const expectedMissionHours = missionTimeline
-    ? missionTimeline.totalSeconds / 3600
+  const expectedMissionHours = timelineTotalSeconds != null
+    ? timelineTotalSeconds / 3600
     : response?.plan.expectedHours ?? 0;
   const inFlightSummary = response?.plan.inFlight;
   const planSchedule = response?.plan.schedule;
@@ -1852,14 +3616,14 @@ export default function MissionCraftPlannerPage() {
   // timeline makespan so the date always agrees with the chart below it: in-air
   // ships hold their slots first, then prep and the plan's own launches.
   const projectedCompletion = useMemo(() => {
-    if (!missionTimeline || planReceivedAtMs == null || missionTimeline.totalSeconds <= 0) {
+    if (timelineTotalSeconds == null || planReceivedAtMs == null || timelineTotalSeconds <= 0) {
       return null;
     }
     return {
-      totalSeconds: missionTimeline.totalSeconds,
-      at: new Date(planReceivedAtMs + missionTimeline.totalSeconds * 1000),
+      totalSeconds: timelineTotalSeconds,
+      at: new Date(planReceivedAtMs + timelineTotalSeconds * 1000),
     };
-  }, [missionTimeline, planReceivedAtMs]);
+  }, [timelineTotalSeconds, planReceivedAtMs]);
   const craftPlanDetailRows = useMemo(() => {
     if (!response) {
       return [] as CraftPlanDetailRow[];
@@ -1867,7 +3631,7 @@ export default function MissionCraftPlannerPage() {
 
     const recipeMap = recipes as Record<string, { ingredients: Record<string, number> } | null>;
     const requiredByItemKey: Record<string, number> = {};
-    const targetKey = itemIdToKey(response.plan.targetItemId);
+    const targetKey = itemIdToCanonicalKey(response.plan.targetItemId);
     const planTargets = response.plan.targets?.length
       ? response.plan.targets
       : [{ targetItemId: response.plan.targetItemId, quantity: response.plan.quantity }];
@@ -1878,18 +3642,18 @@ export default function MissionCraftPlannerPage() {
     const craftGoalTotalByItemKey = new Map<string, number>();
     for (const target of planTargets) {
       if (target.craftGoal) {
-        const key = itemIdToKey(target.targetItemId);
+        const key = itemIdToCanonicalKey(target.targetItemId);
         craftGoalTotalByItemKey.set(key, Math.max(craftGoalTotalByItemKey.get(key) || 0, target.quantity));
       }
     }
-    const targetKeys = new Set(demandTargets.map((target) => itemIdToKey(target.targetItemId)));
+    const targetKeys = new Set(demandTargets.map((target) => itemIdToCanonicalKey(target.targetItemId)));
     const planTargetCraftedOnly = Boolean(lastSolveRequest?.targetCraftedOnly);
     for (const target of demandTargets) {
-      const key = itemIdToKey(target.targetItemId);
+      const key = itemIdToCanonicalKey(target.targetItemId);
       requiredByItemKey[key] = (requiredByItemKey[key] || 0) + target.quantity;
     }
     for (const craft of response.plan.crafts) {
-      const craftKey = itemIdToKey(craft.itemId);
+      const craftKey = itemIdToCanonicalKey(craft.itemId);
       const recipe = recipeMap[craftKey];
       if (!recipe) {
         continue;
@@ -1950,10 +3714,10 @@ export default function MissionCraftPlannerPage() {
       neededUsesByItemKey.set(itemKey, usage);
     };
     for (const target of demandTargets) {
-      addNeededUse(itemIdToKey(target.targetItemId), "__plan_target__", target.quantity);
+      addNeededUse(itemIdToCanonicalKey(target.targetItemId), "__plan_target__", target.quantity);
     }
     for (const craft of response.plan.crafts) {
-      const craftKey = itemIdToKey(craft.itemId);
+      const craftKey = itemIdToCanonicalKey(craft.itemId);
       const recipe = recipeMap[craftKey];
       if (!recipe) {
         continue;
@@ -1971,10 +3735,10 @@ export default function MissionCraftPlannerPage() {
     const rowItemKeys = new Set<string>([
       ...Object.keys(requiredByItemKey),
       ...craftGoalTotalByItemKey.keys(),
-      ...response.plan.crafts.map((craft) => itemIdToKey(craft.itemId)),
+      ...response.plan.crafts.map((craft) => itemIdToCanonicalKey(craft.itemId)),
       ...(response.plan.consumptions || []).flatMap((consumption) => [
-        itemIdToKey(consumption.itemId),
-        ...consumption.yields.map((yieldRow) => itemIdToKey(yieldRow.itemId)),
+        itemIdToCanonicalKey(consumption.itemId),
+        ...consumption.yields.map((yieldRow) => itemIdToCanonicalKey(yieldRow.itemId)),
       ]),
     ]);
 
@@ -2111,8 +3875,8 @@ export default function MissionCraftPlannerPage() {
       .filter((row): row is CraftPlanDetailRow => row !== null);
 
     rows.sort((a, b) => {
-      const aItemKey = itemIdToKey(a.itemId);
-      const bItemKey = itemIdToKey(b.itemId);
+      const aItemKey = itemIdToCanonicalKey(a.itemId);
+      const bItemKey = itemIdToCanonicalKey(b.itemId);
       const familyCompare = targetFamilyKey(aItemKey).localeCompare(targetFamilyKey(bItemKey));
       if (familyCompare !== 0) {
         return familyCompare;
@@ -2293,9 +4057,14 @@ export default function MissionCraftPlannerPage() {
       if (savedPriority != null) {
         setPriorityTimePct(savedPriority);
       }
-      const savedVirtuePriority = readStoredInteger([LOCAL_PREF_KEYS.plannerVirtuePriorityTimePct], 0, 100);
-      if (savedVirtuePriority != null) {
-        setVirtuePriorityTimePct(savedVirtuePriority);
+      // The schema accepts any cap 0..15; the slider only stops on detents.
+      const savedVirtueShiftCap = readStoredInteger([LOCAL_PREF_KEYS.plannerVirtueShiftCap], 0, 15);
+      if (savedVirtueShiftCap != null) {
+        setVirtueShiftCap(nearestVirtueShiftCapDetent(savedVirtueShiftCap));
+      }
+      const savedVirtueStartTank = readFirstStoredString([LOCAL_PREF_KEYS.plannerVirtueStartTank]);
+      if (savedVirtueStartTank === "current" || savedVirtueStartTank === "ideal") {
+        setVirtueStartTank(savedVirtueStartTank);
       }
       const savedFastMode = readStoredBoolean([LOCAL_PREF_KEYS.plannerFastMode]);
       if (savedFastMode != null) {
@@ -2538,11 +4307,64 @@ export default function MissionCraftPlannerPage() {
       return;
     }
     try {
-      writeStoredString([LOCAL_PREF_KEYS.plannerVirtuePriorityTimePct], String(virtuePriorityTimePct));
+      writeStoredString([LOCAL_PREF_KEYS.plannerVirtueShiftCap], String(virtueShiftCap));
     } catch {
       // Ignore localStorage persistence errors.
     }
-  }, [virtuePriorityTimePct, prefsLoaded]);
+  }, [virtueShiftCap, prefsLoaded]);
+
+  useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
+    try {
+      writeStoredString([LOCAL_PREF_KEYS.plannerVirtueStartTank], virtueStartTank);
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [virtueStartTank, prefsLoaded]);
+
+  // The virtue tank card needs the tank before the first plan: fetch the
+  // profile when switching to Path of Virtue and whenever the EID settles.
+  useEffect(() => {
+    if (!prefsLoaded || inventorySource !== "virtue" || isDemoMode || !VIRTUE_EID_PATTERN.test(trimmedEid)) {
+      return;
+    }
+    let cancelled = false;
+    const filters: PlannerSourceFilters = { ...sourceFilters, inventorySource: "virtue" };
+    const timer = window.setTimeout(() => {
+      setVirtueTankPreview((current) => ({
+        eid: trimmedEid,
+        status: "loading",
+        virtueTank: current?.eid === trimmedEid ? current.virtueTank : null,
+        error: null,
+      }));
+      fetchProfileSnapshot(trimmedEid, filters)
+        .then((profile) => {
+          if (cancelled) {
+            return;
+          }
+          setVirtueTankPreview({ eid: trimmedEid, status: "ready", virtueTank: profile.virtueTank ?? null, error: null });
+          // Before any plan this also fills in craft counts and ship stars; a
+          // built plan keeps the profile it was solved with.
+          if (!responseRef.current) {
+            setProfileSnapshot(profile);
+          }
+        })
+        .catch((caught) => {
+          if (cancelled) {
+            return;
+          }
+          const message = caught instanceof Error && caught.message ? caught.message : "profile fetch failed";
+          setVirtueTankPreview({ eid: trimmedEid, status: "error", virtueTank: null, error: message });
+        });
+    }, 600);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // sourceFilters is rebuilt every render; the tank does not depend on it.
+  }, [inventorySource, isDemoMode, prefsLoaded, trimmedEid]);
 
   useEffect(() => {
     if (!prefsLoaded) {
@@ -2707,21 +4529,26 @@ export default function MissionCraftPlannerPage() {
     quantity: currentPrimaryTarget.quantity,
     targets: currentNormalizedTargets,
     targetCraftedOnly,
-    priorityTime: activePriorityTimePct / 100,
+    priorityTime: solvePriorityTime,
     fastMode,
     allowedShipDurations: currentAllowedShipDurations,
     selectedConsumptionItemIds,
+    // Left undefined in main mode so JSON.stringify drops them and main-farm
+    // requests compare the same as before.
+    virtueShiftCap: inventorySource === "virtue" ? virtueShiftCap : undefined,
+    virtueStartTank: inventorySource === "virtue" ? virtueStartTank : undefined,
     sourceFilters: { ...sourceFilters },
   };
   const planInputsChanged =
     !response || !lastSolveRequest || JSON.stringify(currentSolveRequest) !== JSON.stringify(lastSolveRequest);
   const plannerReady = highs.ready && lootData !== null;
 
-  async function runBuildPlan() {
+  async function runBuildPlan(options: { fasterOption?: boolean } = {}) {
     if (!plannerReady) {
       setError("The local planner is still loading. Try again in a moment.");
       return;
     }
+    setFasterOptionPlanned(null);
     const snapshotRequest = currentSolveRequest;
     const normalizedTargets = snapshotRequest.targets || [
       { targetItemId: snapshotRequest.targetItemId, quantity: snapshotRequest.quantity },
@@ -2731,7 +4558,9 @@ export default function MissionCraftPlannerPage() {
     const allowedShipDurationsForSolve = shipSelectorSummary.allSelected
       ? undefined
       : shipSelectorSummary.allowed.map((entry) => ({ ...entry }));
-    const baselineProfile = profileSnapshot;
+    // Only a profile a plan was built from is a replan baseline; the virtue
+    // tank card can load one before the first plan.
+    const baselineProfile = response ? profileSnapshot : null;
     setTargetItemId(primaryTarget.targetItemId);
     setQuantity(normalizedQuantity);
     setQuantityInput(String(normalizedQuantity));
@@ -2759,7 +4588,8 @@ export default function MissionCraftPlannerPage() {
       writeStoredString([LOCAL_PREF_KEYS.plannerQuantity], String(normalizedQuantity));
       writeStoredBoolean([LOCAL_PREF_KEYS.plannerTargetCraftedOnly], targetCraftedOnly);
       writeStoredString([LOCAL_PREF_KEYS.plannerPriorityTimePct], String(priorityTimePct));
-      writeStoredString([LOCAL_PREF_KEYS.plannerVirtuePriorityTimePct], String(virtuePriorityTimePct));
+      writeStoredString([LOCAL_PREF_KEYS.plannerVirtueShiftCap], String(virtueShiftCap));
+      writeStoredString([LOCAL_PREF_KEYS.plannerVirtueStartTank], virtueStartTank);
       writePlannerSourcePreferences(inventorySource, buildCurrentSourcePreferences());
       writeStoredBoolean([LOCAL_PREF_KEYS.plannerFastMode], fastMode);
       writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeInventoryRare], includeInventoryRare);
@@ -2806,9 +4636,13 @@ export default function MissionCraftPlannerPage() {
           profile as Parameters<typeof planForTarget>[0],
           primaryTarget.targetItemId,
           normalizedQuantity,
-          activePriorityTimePct / 100,
+          snapshotRequest.priorityTime,
           {
             objectiveMode: inventorySource === "virtue" ? "virtueFuel" : "ge",
+            virtueTank:
+              inventorySource === "virtue"
+                ? buildVirtueTankPlannerOptions(profile.virtueTank, virtueShiftCap, virtueStartTank)
+                : undefined,
             fastMode,
             missionDropRarities: {
               rare: includeDropRare,
@@ -2853,6 +4687,12 @@ export default function MissionCraftPlannerPage() {
         setPlanReceivedAtMs(Date.now());
         setProfileSnapshot(profile);
         setLastSolveRequest(snapshotRequest);
+        if (options.fasterOption && snapshotRequest.virtueShiftCap != null) {
+          setFasterOptionPlanned(snapshotRequest.virtueShiftCap);
+        }
+        if (inventorySource === "virtue" && !isDemoMode) {
+          setVirtueTankPreview({ eid: trimmedEid, status: "ready", virtueTank: profile.virtueTank ?? null, error: null });
+        }
         writePersistedPlannerSession(planResponse, profile, snapshotRequest);
         if (baselineProfile && baselineProfile.eid === profile.eid) {
           const deltas = buildReplanDeltas(baselineProfile, profile);
@@ -2879,6 +4719,16 @@ export default function MissionCraftPlannerPage() {
     }
   }
 
+  // Runs after the render that applied the queued cap, so runBuildPlan reads it.
+  useEffect(() => {
+    if (!buildQueued) {
+      return;
+    }
+    setBuildQueued(false);
+    void runBuildPlan({ fasterOption: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buildQueued]);
+
   function openTargetPicker(rowId?: string): void {
     if (rowId && targetPickerOpen && rowId === activeTargetRowId) {
       closeTargetPicker();
@@ -2899,13 +4749,27 @@ export default function MissionCraftPlannerPage() {
   function selectTargetOption(option: TargetOption): void {
     setTargetRows((rows) => {
       const activeId = activeTargetRow?.id || rows[0]?.id || "target-1";
-      const next = rows.map((row) =>
-        row.id === activeId
-          ? { ...row, itemId: option.itemId, craftGoal: row.craftGoal && itemCanBeCrafted(option.itemId) }
-          : row
-      );
+      const next = rows.map((row) => {
+        if (row.id !== activeId) {
+          return row;
+        }
+        const craftGoal = row.craftGoal && itemIdTakesCraftCountGoal(option.itemId);
+        // A seeded craft count drops back to one copy when the new item can't
+        // take a craft-count goal (a stone, an ingredient or a tier-1 artifact),
+        // as toggling the chip off does. A number the player typed stays.
+        const quantityInput =
+          row.craftGoal && !craftGoal && isCraftGoalSeed(normalizedTargetQuantity(row.quantityInput))
+            ? "1"
+            : row.quantityInput;
+        return { ...row, itemId: option.itemId, craftGoal, quantityInput };
+      });
       if (next[0]) {
         setTargetItemId(next[0].itemId);
+        if (next[0].id === activeId) {
+          const primaryQuantity = normalizedTargetQuantity(next[0].quantityInput);
+          setQuantity(primaryQuantity);
+          setQuantityInput(String(primaryQuantity));
+        }
       }
       return next.length > 0 ? next : [{ id: activeId, itemId: option.itemId, quantityInput: "1", craftGoal: false }];
     });
@@ -2931,19 +4795,20 @@ export default function MissionCraftPlannerPage() {
   function toggleTargetCraftGoal(rowId: string): void {
     setTargetRows((rows) => {
       const next = rows.map((row) => {
-        if (row.id !== rowId || !itemCanBeCrafted(row.itemId)) {
+        if (row.id !== rowId || !itemIdTakesCraftCountGoal(row.itemId)) {
           return row;
         }
         const nextCraftGoal = !row.craftGoal;
         const quantity = normalizedTargetQuantity(row.quantityInput);
         // Copies and craft counts live on very different scales, so a goal that
-        // is still the stepper default gets seeded at the max-discount 300 --
-        // and switching back drops that seed rather than asking for 300 copies.
+        // is still the stepper default gets seeded at CRAFT_GOAL_DEFAULT_COUNT,
+        // and switching back drops that seed (or the older 300 one) rather than
+        // asking for hundreds of copies.
         const quantityInput = nextCraftGoal
           ? quantity <= 1
-            ? String(MAX_CRAFT_DISCOUNT_COUNT)
+            ? String(CRAFT_GOAL_DEFAULT_COUNT)
             : row.quantityInput
-          : quantity === MAX_CRAFT_DISCOUNT_COUNT
+          : isCraftGoalSeed(quantity)
             ? "1"
             : row.quantityInput;
         return { ...row, craftGoal: nextCraftGoal, quantityInput };
@@ -3097,6 +4962,8 @@ export default function MissionCraftPlannerPage() {
         fastMode: lastSolveRequest.fastMode,
         allowedShipDurations: lastSolveRequest.allowedShipDurations,
         selectedConsumptionItemIds: lastSolveRequest.selectedConsumptionItemIds,
+        virtueShiftCap: lastSolveRequest.virtueShiftCap,
+        virtueStartTank: lastSolveRequest.virtueStartTank,
       },
       sourceFilters: lastSolveRequest.sourceFilters,
       profile: sanitizedProfile,
@@ -3225,11 +5092,73 @@ export default function MissionCraftPlannerPage() {
         next.add(itemId);
       }
       return Array.from(next).sort((a, b) => {
-        const aKey = itemIdToKey(a);
-        const bKey = itemIdToKey(b);
+        const aKey = itemIdToCanonicalKey(a);
+        const bKey = itemIdToCanonicalKey(b);
         return aKey.localeCompare(bKey);
       });
     });
+  };
+
+  const cardVirtueTank = virtueTankForCard.virtueTank;
+  const planVirtueTanks = response?.plan.virtueTanks ?? null;
+  // Shifts the last plan needs past its cap: the fewest that meet the goals
+  // when the solve went over, or what packing took when it came out above
+  // what the solve counted.
+  const planOverCapByPacking =
+    planVirtueTanks != null && !planVirtueTanks.overCap && planVirtueTanks.pack.totalShifts > planVirtueTanks.shiftCap;
+  const planNeededShifts = planVirtueTanks?.overCap
+    ? planVirtueTanks.neededShifts ?? planVirtueTanks.plannedShiftCap
+    : planOverCapByPacking
+      ? planVirtueTanks!.pack.totalShifts
+      : null;
+  // "plan needs N" sits over the slider only while the cap is still below it.
+  const shiftCapNeedIndex = (() => {
+    if (inventorySource !== "virtue" || planNeededShifts == null || planNeededShifts <= virtueShiftCap) {
+      return null;
+    }
+    const detent = shiftCapDetentFor(planNeededShifts);
+    return detent == null ? VIRTUE_SHIFT_CAP_DETENTS.length - 1 : VIRTUE_SHIFT_CAP_DETENTS.indexOf(detent);
+  })();
+  const planNeededShiftsDetent = planNeededShifts != null ? shiftCapDetentFor(planNeededShifts) : null;
+  const virtueBannerShown = Boolean(virtueTankView && planVirtueTanks && planNeededShifts != null);
+  // Over the cap, the count is a minimum only when the planner's search finished;
+  // otherwise it is the fewest it found in its time limits. Older plans don't say.
+  const planNeededShiftsProven = planVirtueTanks?.overCap ? planVirtueTanks.neededShiftsProven !== false : false;
+
+  const setShiftCapToPlanNeed = () => {
+    if (planNeededShiftsDetent == null) {
+      return;
+    }
+    setVirtueShiftCap(planNeededShiftsDetent);
+    shiftCapSliderRef.current?.focus();
+  };
+  // The planner may also offer a plan with a few more shifts that scores clearly
+  // better: over the cap, or within it when the plan it found is slow. The button
+  // plans it outright when its shift count is a slider setting; otherwise the
+  // banner only says what it gives.
+  const planFasterOption = planVirtueTanks?.fasterOption ?? null;
+  // Within the cap the offer is information, not a warning: the plan is valid
+  // and fits, it is just slow next to one with a few more shifts.
+  const virtueSlowPlanBannerShown = Boolean(
+    virtueTankView &&
+      planVirtueTanks &&
+      planNeededShifts == null &&
+      planFasterOption &&
+      planFasterOption.shifts > planVirtueTanks.shiftCap
+  );
+  const planFasterOptionCap =
+    planFasterOption != null && shiftCapDetentFor(planFasterOption.shifts) === planFasterOption.shifts
+      ? planFasterOption.shifts
+      : null;
+  const planWithFasterOption = () => {
+    if (planFasterOptionCap == null || loading || !plannerReady) {
+      return;
+    }
+    setVirtueShiftCap(planFasterOptionCap);
+    setBuildQueued(true);
+    // The button disables while the plan builds and the banner goes with the
+    // old plan, so keep keyboard focus on the cap it just set.
+    shiftCapSliderRef.current?.focus();
   };
 
   const clearShipDurations = () => {
@@ -3569,9 +5498,10 @@ export default function MissionCraftPlannerPage() {
                 {targetRows.map((row, rowIndex) => {
                   const option = targetOptions.find((candidate) => candidate.itemId === row.itemId) || null;
                   const rowActive = row.id === activeTargetRowId;
-                  const craftable = itemCanBeCrafted(row.itemId);
+                  // The copies / craft-count chip is only for artifacts that can be crafted.
+                  const takesCraftGoal = itemIdTakesCraftCountGoal(row.itemId);
                   const craftedSoFar = profileSnapshot
-                    ? Math.max(0, Math.round(profileSnapshot.craftCounts[itemIdToKey(row.itemId)] || 0))
+                    ? Math.max(0, Math.round(profileSnapshot.craftCounts[itemIdToCanonicalKey(row.itemId)] || 0))
                     : null;
                   const craftsToGo =
                     craftedSoFar == null ? null : Math.max(0, normalizedTargetQuantity(row.quantityInput) - craftedSoFar);
@@ -3684,7 +5614,7 @@ export default function MissionCraftPlannerPage() {
                         </div>
                       )}
                     </div>
-                    {craftable && (
+                    {takesCraftGoal && (
                       <div className={styles.targetRowMeta}>
                         <button
                           type="button"
@@ -3694,7 +5624,7 @@ export default function MissionCraftPlannerPage() {
                           aria-pressed={row.craftGoal}
                           title={
                             row.craftGoal
-                              ? `Aiming for an all-time craft count instead of new copies -- ${MAX_CRAFT_DISCOUNT_COUNT} maxes this artifact's crafting discount. The count comes from your save, so it is the same on every device. Mission drops do not raise it, and copies a higher tier consumes still do, so the plan crafts exactly the difference.`
+                              ? `Aiming for an all-time craft count instead of new copies: ${CRAFT_GOAL_DEFAULT_COUNT} crafts maxes this artifact's shiny luck; ${CRAFT_DISCOUNT_MAX_COUNT} already maxes its GE discount. The count comes from your save, so it is the same on every device. Mission drops do not raise it, and copies a higher tier consumes still do, so the plan crafts exactly the difference.`
                               : "Read this number as copies to add to what you already have."
                           }
                         >
@@ -3726,25 +5656,230 @@ export default function MissionCraftPlannerPage() {
               </div>
             </div>
 
+            {inventorySource === "virtue" && (
+              <section className={`${styles.controlCard} ${styles.virtueOptCard}`} aria-labelledby="virtue-tank-title">
+                <div className={styles.controlCardHeader}>
+                  <div className={styles.controlCardTitle} id="virtue-tank-title">
+                    <span className={styles.titleDot} aria-hidden="true" />
+                    Virtue tank
+                  </div>
+                  {cardVirtueTank && (
+                    <span className={styles.virtueOptMeta}>
+                      {formatBackupAge(cardVirtueTank.backupTimeSeconds, Date.now()) ?? "Demo tank"} ·{" "}
+                      {cardVirtueTank.currentEgg ? (
+                        <>
+                          on <strong>{VIRTUE_EGG_DISPLAY[cardVirtueTank.currentEgg].label}</strong>
+                        </>
+                      ) : (
+                        "on the main farm"
+                      )}
+                    </span>
+                  )}
+                </div>
+                <div className={styles.virtueOptRow}>
+                  <span className={styles.fieldLabel} aria-hidden="true">Initial Tank</span>
+                  <fieldset className={styles.virtueOptSegment}>
+                    <legend>Initial Tank</legend>
+                    <label htmlFor="virtueStartTankCurrent">
+                      <input
+                        id="virtueStartTankCurrent"
+                        type="radio"
+                        name="virtueStartTank"
+                        value="current"
+                        checked={effectiveVirtueStartTank === "current"}
+                        disabled={virtueTankMissing}
+                        onChange={() => setVirtueStartTank("current")}
+                      />
+                      Current contents
+                    </label>
+                    <label htmlFor="virtueStartTankIdeal">
+                      <input
+                        id="virtueStartTankIdeal"
+                        type="radio"
+                        name="virtueStartTank"
+                        value="ideal"
+                        checked={effectiveVirtueStartTank === "ideal"}
+                        onChange={() => setVirtueStartTank("ideal")}
+                      />
+                      Ideal mix
+                    </label>
+                  </fieldset>
+                </div>
+                <p className={styles.virtueOptHint} aria-live="polite">
+                  {effectiveVirtueStartTank === "current" ? (
+                    <>
+                      <strong>Plan from what&apos;s in the tank now.</strong> You start on Humility with these amounts;
+                      every refuel after that counts toward the shift cap.
+                    </>
+                  ) : (
+                    <>
+                      <strong>Plan as if you first fill the tank with the best mix for these goals.</strong> That first
+                      fill doesn&apos;t count toward the shift cap, but it still costs shifts in game. The Fuel tanks panel
+                      lists what to add and drain.
+                    </>
+                  )}
+                </p>
+                {cardVirtueTank?.currentEgg && cardVirtueTank.currentEgg !== "humility" && (
+                  <VirtueNotice tone="warn">
+                    You&apos;re on {VIRTUE_EGG_DISPLAY[cardVirtueTank.currentEgg].label}. Missions only launch from
+                    Humility, so shift back first: 1 shift, not in the plan&apos;s count.
+                  </VirtueNotice>
+                )}
+                {cardVirtueTank && cardVirtueTank.currentEgg === null && (
+                  <VirtueNotice tone="info">
+                    This backup is from your main farm. The plan assumes you start on your Humility farm with the tank
+                    below.
+                  </VirtueNotice>
+                )}
+                {cardVirtueTank && !cardVirtueTank.fillingEnabled && (
+                  <VirtueNotice tone="warn">
+                    Tank filling is off. Turn it on in the fuel tank before a refuel, or nothing will fill.
+                  </VirtueNotice>
+                )}
+                {virtueTankMissing && (
+                  <VirtueNotice tone="info">No tank data in this backup, so the Initial Tank uses the ideal mix.</VirtueNotice>
+                )}
+                {virtueTankForCard.status === "error" && (
+                  <VirtueNotice tone="info">
+                    Couldn&apos;t load your tank ({virtueTankForCard.error}). Building the plan fetches your profile again.
+                  </VirtueNotice>
+                )}
+                {cardVirtueTank ? (
+                  <VirtueTankReadout tank={cardVirtueTank} />
+                ) : virtueTankForCard.status === "loading" ? (
+                  <p className={styles.virtueOptHint}>Loading your tank from your latest backup…</p>
+                ) : virtueTankForCard.status === "pending" ? (
+                  <p className={styles.virtueOptHint}>
+                    Your tank loads once your full EID is in, or leave the EID blank for the demo tank.
+                  </p>
+                ) : null}
+              </section>
+            )}
+
             <div className={styles.buildCard}>
-              <div className={styles.sliderBlock}>
-                <div className={styles.sliderWrap} style={{ "--pct": `${activePriorityTimePct}%` } as CSSProperties}>
-                  <input
-                    id="priority"
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={activePriorityTimePct}
-                    onChange={(event) => setActivePriorityTimePct(Number(event.target.value))}
-                    aria-label="Optimization priority"
-                  />
+              {inventorySource === "virtue" ? (
+                <>
+                  <div className={styles.shiftCapBlock}>
+                    <div className={styles.shiftCapHead}>
+                      <label className={styles.fieldLabel} htmlFor="virtueShiftCap">Shift cap</label>
+                      <output className={styles.shiftCapValue} htmlFor="virtueShiftCap">
+                        {virtueShiftCap === 0 ? (
+                          "No refuels"
+                        ) : (
+                          <>
+                            Up to {virtueShiftCap} <span>shifts</span>
+                          </>
+                        )}
+                      </output>
+                    </div>
+                    <div
+                      className={styles.sliderWrap}
+                      data-need={shiftCapNeedIndex != null ? "1" : "0"}
+                      style={
+                        {
+                          "--pct": `${(virtueShiftCapIndex / (VIRTUE_SHIFT_CAP_DETENTS.length - 1)) * 100}%`,
+                        } as CSSProperties
+                      }
+                    >
+                      <input
+                        ref={shiftCapSliderRef}
+                        id="virtueShiftCap"
+                        type="range"
+                        min={0}
+                        max={VIRTUE_SHIFT_CAP_DETENTS.length - 1}
+                        step={1}
+                        value={virtueShiftCapIndex}
+                        onChange={(event) =>
+                          setVirtueShiftCap(VIRTUE_SHIFT_CAP_DETENTS[Number(event.target.value)] ?? DEFAULT_VIRTUE_SHIFT_CAP)
+                        }
+                        aria-valuetext={virtueShiftCap === 0 ? "No refuels" : `Up to ${virtueShiftCap} shifts`}
+                        aria-describedby="virtueShiftCapHint"
+                      />
+                      {shiftCapNeedIndex != null && planNeededShifts != null && (
+                        <div
+                          className={styles.shiftCapNeed}
+                          data-edge={shiftCapNeedIndex === VIRTUE_SHIFT_CAP_DETENTS.length - 1 ? "end" : undefined}
+                          style={{
+                            left: `calc(9px + (100% - 18px) * ${shiftCapNeedIndex / (VIRTUE_SHIFT_CAP_DETENTS.length - 1)})`,
+                          }}
+                        >
+                          <span>
+                            plan {planNeededShiftsProven ? "needs" : "takes"} {planNeededShifts}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    <div className={styles.shiftCapTicks} aria-hidden="true">
+                      {VIRTUE_SHIFT_CAP_DETENTS.map((detent, index) => (
+                        <span
+                          key={detent}
+                          className={styles.shiftCapTick}
+                          data-on={index <= virtueShiftCapIndex ? "1" : "0"}
+                          data-current={index === virtueShiftCapIndex ? "1" : "0"}
+                        >
+                          <span>{detent}</span>
+                        </span>
+                      ))}
+                    </div>
+                    <div className={styles.sliderLabels}>
+                      <span>Fewer shifts</span>
+                      <span>Save time</span>
+                    </div>
+                    <div className={styles.shiftCapHint} id="virtueShiftCapHint">
+                      {virtueShiftCap === 0 ? (
+                        <span>
+                          No refuels unless your goals need them. Then the plan uses the fewest shifts that work and says
+                          so above the results.
+                        </span>
+                      ) : (
+                        <>
+                          <span>
+                            Room for up to {pluralize(Math.floor(virtueShiftCap / 2), "refuel loop")}. A loop costs 1
+                            shift per egg refilled + 1 back to Humility, e.g.{" "}
+                            <span className={styles.shiftCapRoute}>C → R → K → H</span> = 4.
+                          </span>
+                          {cardVirtueTank && (
+                            <span>
+                              Using all {virtueShiftCap} costs about{" "}
+                              <strong>
+                                {formatSoulEggs(
+                                  virtueShiftsCostSoulEggs(cardVirtueTank.soulEggs, cardVirtueTank.shiftCount, virtueShiftCap)
+                                )}{" "}
+                                SE
+                              </strong>{" "}
+                              at your Soul Eggs and shift count.
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className={styles.cardSub}>
+                    The planner counts each shift as {VIRTUE_SHIFT_PENALTY_SECONDS / 3600} h and each launch as{" "}
+                    {VIRTUE_LAUNCH_EFFORT_SECONDS / 60} min of mission time, so it only spends a shift that saves more than
+                    that.
+                  </div>
+                </>
+              ) : (
+                <div className={styles.sliderBlock}>
+                  <div className={styles.sliderWrap} style={{ "--pct": `${priorityTimePct}%` } as CSSProperties}>
+                    <input
+                      id="priority"
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={priorityTimePct}
+                      onChange={(event) => setPriorityTimePct(Number(event.target.value))}
+                      aria-label="Optimization priority"
+                    />
+                  </div>
+                  <div className={styles.sliderLabels}>
+                    <span>Save GE</span>
+                    <b>Balance</b>
+                    <span>Save time</span>
+                  </div>
                 </div>
-                <div className={styles.sliderLabels}>
-                  <span>{inventorySource === "virtue" ? "Save fuel" : "Save GE"}</span>
-                  <b>Balance</b>
-                  <span>Save time</span>
-                </div>
-              </div>
+              )}
               <label className={styles.customCheck} htmlFor="fastMode">
                 <input
                   id="fastMode"
@@ -3821,11 +5956,113 @@ export default function MissionCraftPlannerPage() {
       )}
 
       {response && (
+        <div className={styles.resultsDivider} role="separator" aria-label="Plan output section">
+          <span>PLAN OUTPUT</span>
+        </div>
+      )}
+      {/* Mounted empty in virtue mode, before any plan, so the banner is announced when it appears. */}
+      {(inventorySource === "virtue" || virtueTankView) && (
+        <div role="status">
+          {virtueBannerShown && planVirtueTanks && planNeededShifts != null && (
+            <div className={styles.shiftCapBanner} data-tone="warn">
+              {VIRTUE_WARN_ICON}
+              <div className={styles.shiftCapBannerText}>
+                {planVirtueTanks.overCap && planNeededShiftsProven ? (
+                  <>
+                    <strong>
+                      These goals need at least {planNeededShifts} shifts; the slider allows {planVirtueTanks.shiftCap}.
+                    </strong>{" "}
+                    Planned with {planNeededShifts} shifts.
+                  </>
+                ) : planVirtueTanks.overCap ? (
+                  <>
+                    <strong>
+                      No plan {planVirtueTanks.shiftCap > 0 ? `within ${planVirtueTanks.shiftCap} shifts` : "without shifts"}{" "}
+                      was found in the time allowed.
+                    </strong>{" "}
+                    This plan takes {planNeededShifts} shifts; fewer may be possible.
+                  </>
+                ) : (
+                  <>
+                    <strong>
+                      This plan takes {planNeededShifts} shifts; the slider allows {planVirtueTanks.shiftCap}.
+                    </strong>{" "}
+                    Packing its launches into tanks took more shifts than the solve counted.
+                  </>
+                )}
+                {planFasterOption && (
+                  <>
+                    {" "}
+                    With {pluralize(planFasterOption.shifts, "shift")} it would take{" "}
+                    <b className={styles.shiftCapBannerTime}>{formatDurationFromHours(planFasterOption.expectedHours)}</b>{" "}
+                    instead of{" "}
+                    <span className={styles.shiftCapBannerTime}>{formatDurationFromHours(expectedMissionHours)}</span>.
+                  </>
+                )}
+              </div>
+              {inventorySource === "virtue" &&
+                ((planNeededShiftsDetent != null && virtueShiftCap < planNeededShiftsDetent) ||
+                  planFasterOptionCap != null) && (
+                  <div className={styles.shiftCapBannerActions}>
+                    {planFasterOptionCap != null && (
+                      <button
+                        type="button"
+                        className={styles.shiftCapBannerAction}
+                        data-primary="1"
+                        onClick={planWithFasterOption}
+                        disabled={loading || !plannerReady}
+                      >
+                        Plan with {planFasterOptionCap} shifts
+                      </button>
+                    )}
+                    {planNeededShiftsDetent != null && virtueShiftCap < planNeededShiftsDetent && (
+                      <button type="button" className={styles.shiftCapBannerAction} onClick={setShiftCapToPlanNeed}>
+                        Set cap to {planNeededShiftsDetent}
+                      </button>
+                    )}
+                  </div>
+                )}
+            </div>
+          )}
+          {virtueSlowPlanBannerShown && planVirtueTanks && planFasterOption && (
+            <div className={styles.shiftCapBanner} data-tone="info">
+              {VIRTUE_INFO_ICON}
+              <div className={styles.shiftCapBannerText}>
+                <strong>
+                  {planVirtueTanks.shiftCap > 0
+                    ? `This plan fits your ${planVirtueTanks.shiftCap}-shift cap but is slow.`
+                    : "This plan needs no shifts but is slow."}
+                </strong>{" "}
+                With {pluralize(planFasterOption.shifts, "shift")} it would take{" "}
+                <b className={styles.shiftCapBannerTime}>{formatDurationFromHours(planFasterOption.expectedHours)}</b>{" "}
+                instead of <span className={styles.shiftCapBannerTime}>{formatDurationFromHours(expectedMissionHours)}</span>.
+              </div>
+              {inventorySource === "virtue" && planFasterOptionCap != null && (
+                <div className={styles.shiftCapBannerActions}>
+                  <button
+                    type="button"
+                    className={styles.shiftCapBannerAction}
+                    data-primary="1"
+                    onClick={planWithFasterOption}
+                    disabled={loading || !plannerReady}
+                  >
+                    Plan with {planFasterOptionCap} shifts
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          {fasterOptionPlanned != null && !loading && planVirtueTanks && (
+            <p className={styles.srOnly}>
+              Planned with {pluralize(planVirtueTanks.pack.totalShifts, "shift")}. Expected mission time{" "}
+              {formatDurationFromHours(expectedMissionHours)}.
+            </p>
+          )}
+        </div>
+      )}
+      {response && (
         <>
-          <div className={styles.resultsDivider} role="separator" aria-label="Plan output section">
-            <span>PLAN OUTPUT</span>
-          </div>
-          <div className="grid" style={{ marginTop: 14 }}>
+          <div className={`grid ${styles.resultsGrid}`} style={{ marginTop: 14 }}>
           <div className="grid cards">
             <div className="card">
               <div className="muted">Expected mission time</div>
@@ -3853,6 +6090,46 @@ export default function MissionCraftPlannerPage() {
                 </div>
               </div>
             )}
+            {virtueTankView && (() => {
+              const shifts = virtueTankView.pack.totalShifts;
+              const allowed = virtueTankView.result.shiftCap;
+              const overCap = virtueTankView.result.overCap || shifts > allowed;
+              const costTitle =
+                shifts === 0
+                  ? "No shifts in this plan."
+                  : virtueTankView.planCostSoulEggs == null
+                    ? "Soul Egg prices need your Soul Eggs and shift count from a backup."
+                    : `Soul Egg price of the plan's ${pluralize(shifts, "shift")}, each priced at your shift count at the time (${virtueTankView.perShiftCostSoulEggs.map(formatSoulEggs).join(", ")}).${virtueTankView.firstFillShifts > 0 ? ` Priced after the first fill's ${pluralize(virtueTankView.firstFillShifts, "shift")}.` : ""}`;
+              return (
+                <div className={`card ${styles.kpiShiftCard}`} data-over={overCap ? "1" : "0"}>
+                  <div className="muted">
+                    Shifts
+                    {overCap && <span className={styles.kpiFlag}>Over cap</span>}
+                  </div>
+                  <div className="kpi">
+                    {shifts} <span>/ {allowed} allowed</span>
+                  </div>
+                  <div className={`muted ${styles.tooltipValue}`} title={costTitle}>
+                    {pluralize(virtueTankView.tanks.length, "tank")}
+                    {virtueTankView.planCostSoulEggs != null && shifts > 0
+                      ? ` · ≈ ${formatSoulEggs(virtueTankView.planCostSoulEggs)} SE`
+                      : ""}
+                  </div>
+                  {virtueTankView.firstFillShifts > 0 && (
+                    <span
+                      className={`${styles.kpiSub} ${styles.tooltipValue}`}
+                      title="Filling the ideal Initial Tank before you start. Not counted toward the cap."
+                    >
+                      First fill: {pluralize(virtueTankView.firstFillShifts, "shift")}
+                      {virtueTankView.firstFillCostSoulEggs != null
+                        ? ` ≈ ${formatSoulEggs(virtueTankView.firstFillCostSoulEggs)} SE`
+                        : ""}
+                      , not counted
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
             <div className="card">
               <div className="muted">Progression prep time</div>
               <div className="kpi">{formatDurationFromHours(response.plan.progression.prepHours)}</div>
@@ -4012,8 +6289,19 @@ export default function MissionCraftPlannerPage() {
             )}
           </div>
 
+          {virtueTankView && (
+            <VirtueFuelTanksPanel view={virtueTankView} planStartMs={planReceivedAtMs ?? Date.now()} />
+          )}
+
           <div className="panel">
             <h2 style={{ marginTop: 0 }}>Mission plan</h2>
+            {virtueTankView && (
+              <VirtueTankTimeline
+                view={virtueTankView}
+                plan={response.plan}
+                planStartMs={planReceivedAtMs ?? Date.now()}
+              />
+            )}
             {missionTimeline && (
               <div className={styles.timelinePanel}>
                 <p className={`muted ${styles.timelineIntro}`}>
@@ -4105,6 +6393,25 @@ export default function MissionCraftPlannerPage() {
             )}
             {response.plan.missions.length === 0 ? (
               <p className="muted" style={{ margin: 0 }}>No mission launches required by the current model.</p>
+            ) : virtueTankView ? (
+              <div className={`table-wrap ${styles.missionTableWrap}`}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">Ship / Launch</th>
+                      <th scope="col">Target</th>
+                      <th scope="col">Launches</th>
+                      <th scope="col">Duration</th>
+                      <th scope="col">Top expected yields</th>
+                    </tr>
+                  </thead>
+                  <VirtueTankMissionRows
+                    view={virtueTankView}
+                    plan={response.plan}
+                    targetOverrideByIndex={missionPrepTargetOverrideByIndex}
+                  />
+                </table>
+              </div>
             ) : (
               <div className="table-wrap">
                 <table>
@@ -4123,79 +6430,14 @@ export default function MissionCraftPlannerPage() {
                         left to send. */}
                     {Array.from(response.plan.missions.entries())
                       .sort(([, a], [, b]) => Number(Boolean(b.inAir)) - Number(Boolean(a.inAir)))
-                      .map(([missionIndex, mission]) => {
-                      const targetOverride = mission.inAir
-                        ? null
-                        : missionPrepTargetOverrideByIndex.get(missionIndex) || null;
-                      const targetLabel = targetOverride || afxIdToTargetFamilyName(mission.targetAfxId);
-                      const targetItemKey = targetOverride ? null : afxIdToItemKey(mission.targetAfxId);
-                      const targetIconUrl = targetItemKey ? itemKeyToIconUrl(targetItemKey) : null;
-                      return (
-                        <tr
-                          key={`${missionIndex}:${mission.ship}:${mission.durationType}:${mission.missionId}:${mission.targetAfxId}`}
-                          className={mission.inAir ? styles.inAirRow : undefined}
-                        >
-                          <td>
-                            {mission.inAir && (
-                              <span className={styles.inAirBadge} title="Already launched — nothing to send">
-                                In air
-                              </span>
-                            )}
-                            {titleCaseShip(mission.ship)}<br />
-                            <span className="muted">{durationTypeWithLevelLabel(mission.durationType, mission.level)}</span>
-                          </td>
-                          <td>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              {targetIconUrl && (
-                                <img
-                                  src={targetIconUrl}
-                                  alt={afxIdToDisplayName(mission.targetAfxId)}
-                                  width={24}
-                                  height={24}
-                                  loading="lazy"
-                                />
-                              )}
-                              <div>
-                                <div>{targetLabel}</div>
-                              </div>
-                            </div>
-                          </td>
-                          <td>
-                            {mission.inAir ? (
-                              <span className="muted" title="Already sent — do not launch these again">
-                                {mission.launches.toLocaleString()} sent
-                              </span>
-                            ) : (
-                              mission.launches.toLocaleString()
-                            )}
-                          </td>
-                          <td>
-                            {mission.inAir
-                              ? formatInAirReturnLabel(mission.launchSecondsRemaining, mission.secondsRemaining)
-                              : formatDurationFromHours(mission.durationSeconds / 3600)}
-                          </td>
-                          <td>
-                            {mission.expectedYields.slice(0, 3).map((yieldRow) => {
-                              const iconUrl = itemIdToIconUrl(yieldRow.itemId);
-                              return (
-                                <div key={yieldRow.itemId} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                  {iconUrl && (
-                                    <img
-                                      src={iconUrl}
-                                      alt={itemIdToLabel(yieldRow.itemId)}
-                                      width={18}
-                                      height={18}
-                                      loading="lazy"
-                                    />
-                                  )}
-                                  <span>{itemIdToLabel(yieldRow.itemId)}: {yieldRow.quantity.toFixed(2)}</span>
-                                </div>
-                              );
-                            })}
-                          </td>
-                        </tr>
-                      );
-                    })}
+                      .map(([missionIndex, mission]) =>
+                        renderMissionTableRow(
+                          mission,
+                          missionIndex,
+                          mission.inAir ? null : missionPrepTargetOverrideByIndex.get(missionIndex) || null,
+                          { key: `${missionIndex}:${mission.ship}:${mission.durationType}:${mission.missionId}:${mission.targetAfxId}` }
+                        )
+                      )}
                   </tbody>
                 </table>
               </div>
@@ -4267,7 +6509,10 @@ export default function MissionCraftPlannerPage() {
           <div className="panel">
             <h2 style={{ marginTop: 0 }}>Planner notes</h2>
             <ul style={{ margin: 0 }}>
-              {response.plan.notes.map((note, index) => (
+              {(virtueBannerShown || virtueSlowPlanBannerShown
+                ? response.plan.notes.filter((note) => !VIRTUE_BANNER_NOTE_PATTERNS.some((pattern) => pattern.test(note)))
+                : response.plan.notes
+              ).map((note, index) => (
                 <li key={`${index}:${note}`}>{note}</li>
               ))}
             </ul>
