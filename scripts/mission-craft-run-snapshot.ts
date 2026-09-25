@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { z } from "zod";
 
-import { playerProfileSchema } from "../lib/api-schemas";
+import { playerProfileSchema, virtueShiftCapSchema, virtueStartTankSchema } from "../lib/api-schemas";
 import { afxIdToDisplayName, itemIdToKey, itemKeyToDisplayName } from "../lib/item-utils";
 import {
   computeMonolithicPaths,
@@ -16,6 +16,7 @@ import {
   type PlannerProgressEvent,
   type PlannerResult,
 } from "../lib/planner";
+import { buildVirtueTankPlannerOptions } from "../lib/virtue-tank-plan";
 
 const durationTypeSchema = z.enum(["TUTORIAL", "SHORT", "LONG", "EPIC"]);
 
@@ -42,6 +43,9 @@ const solveInputSnapshotSchema = z.object({
       .array(z.object({ ship: z.string().min(1), durationType: z.enum(["SHORT", "LONG", "EPIC"]) }))
       .optional(),
     selectedConsumptionItemIds: z.array(z.string().min(1)).optional(),
+    // Path of Virtue only; unset falls back the same way the planner page does.
+    virtueShiftCap: virtueShiftCapSchema,
+    virtueStartTank: virtueStartTankSchema,
   }),
   sourceFilters: z.object({
     inventorySource: z.enum(["main", "virtue"]).optional().default("main"),
@@ -106,6 +110,8 @@ type CliOptions = {
   json: boolean;
   outPath: string | null;
   progress: boolean;
+  /** Plan on the server's mission yield index (what the /api/plan routes do) instead of the page's full action set. */
+  serverIndex: boolean;
 };
 
 type ParsedSolveStage = {
@@ -214,6 +220,8 @@ type RunDiagnostics = {
   };
   execution: {
     wallMs: number;
+    /** True with --server-index outside Path of Virtue: the plan used the mission yield index, as the /api/plan routes do. Tank plans never use it. */
+    missionYieldIndex: boolean;
     progressEventCount: number;
     progressPhaseCounts: Record<string, number>;
     progressEvents: Array<
@@ -258,7 +266,7 @@ type RunDiagnostics = {
 function usage(): string {
   return [
     "Usage:",
-    "  npm run mission-craft:run-snapshot -- <snapshot.json> [--compare] [--json] [--out <file>] [--progress|--no-progress]",
+    "  npm run mission-craft:run-snapshot -- <snapshot.json> [--compare] [--json] [--out <file>] [--progress|--no-progress] [--server-index]",
     "",
     "Flags:",
     "  --compare      Also run monolithic combo compare using snapshot combos.",
@@ -266,6 +274,7 @@ function usage(): string {
     "  --out <file>   Write full diagnostics JSON to file.",
     "  --progress     Force live progress output.",
     "  --no-progress  Disable live progress output.",
+    "  --server-index Plan on the mission yield index like the /api/plan routes (default: the page's full action set). Path of Virtue tank plans never use the index.",
   ].join("\n");
 }
 
@@ -276,6 +285,7 @@ function parseArgs(argv: string[]): CliOptions {
   let json = false;
   let outPath: string | null = null;
   let progress = Boolean(process.stdout.isTTY);
+  let serverIndex = false;
 
   while (args.length > 0) {
     const token = args.shift();
@@ -300,6 +310,10 @@ function parseArgs(argv: string[]): CliOptions {
     }
     if (token === "--no-progress") {
       progress = false;
+      continue;
+    }
+    if (token === "--server-index") {
+      serverIndex = true;
       continue;
     }
     if (token === "--out") {
@@ -330,6 +344,7 @@ function parseArgs(argv: string[]): CliOptions {
     json,
     outPath,
     progress,
+    serverIndex,
   };
 }
 
@@ -728,7 +743,7 @@ function printPlanSummary(diag: RunDiagnostics): void {
   console.log(
     `Request: ${requestTargets} | ${formatPriority(snapshot.request.priorityTime)} | fastMode=${String(
       snapshot.request.fastMode
-    )} | craftedOnly=${String(snapshot.request.targetCraftedOnly)}`
+    )} | craftedOnly=${String(snapshot.request.targetCraftedOnly)} | yieldIndex=${execution.missionYieldIndex ? "server" : "off (page)"}`
   );
   console.log(
     `Filters: inventorySource=${snapshot.sourceFilters.inventorySource} slotted=${String(
@@ -764,6 +779,17 @@ function printPlanSummary(diag: RunDiagnostics): void {
   console.log(
     `Unmet: rows=${planSummary.unmetRows.toLocaleString()} qty=${planSummary.unmetQuantity.toFixed(6)} | Notes=${planSummary.notes.length.toLocaleString()}`
   );
+  const tanks = diag.plan.virtueTanks;
+  if (tanks) {
+    const overCap = tanks.overCap
+      ? ` (over cap: needs ${String(tanks.neededShifts ?? tanks.plannedShiftCap)}${tanks.neededShiftsProven ? "" : ", fewest not proven"})`
+      : "";
+    console.log(
+      `Virtue tanks: cap=${tanks.shiftCap} planned=${tanks.plannedShiftCap}${overCap} start=${tanks.startMode} shifts=${tanks.pack.totalShifts} loops=${tanks.pack.refillLoops} exact=${String(
+        tanks.pack.exact
+      )} feasible=${String(tanks.pack.feasible)}`
+    );
+  }
 
   if (planSummary.parsedNotes.solverStages.length > 0) {
     console.log("Solver stages:");
@@ -823,6 +849,7 @@ async function run(options: CliOptions): Promise<RunDiagnostics> {
   const loaded = await loadSnapshot(options.snapshotPath);
   const progressEvents: PlannerProgressEvent[] = [];
 
+  const virtue = loaded.snapshot.sourceFilters.inventorySource === "virtue";
   const planStartedAt = Date.now();
   const plan = await planForTarget(
     loaded.snapshot.profile,
@@ -831,8 +858,18 @@ async function run(options: CliOptions): Promise<RunDiagnostics> {
     loaded.snapshot.request.priorityTime,
     {
       fastMode: loaded.snapshot.request.fastMode,
-      objectiveMode: loaded.snapshot.sourceFilters.inventorySource === "virtue" ? "virtueFuel" : "ge",
+      objectiveMode: virtue ? "virtueFuel" : "ge",
+      virtueTank: virtue
+        ? buildVirtueTankPlannerOptions(
+            loaded.snapshot.profile.virtueTank,
+            loaded.snapshot.request.virtueShiftCap,
+            loaded.snapshot.request.virtueStartTank
+          )
+        : undefined,
       missionDropRarities: snapshotMissionDropRarities(loaded.snapshot),
+      // The page passes its own loot data, which turns the mission yield index
+      // off; do the same so a snapshot replays the page's solve.
+      disableMissionYieldIndex: !options.serverIndex,
       targets: loaded.snapshot.request.targets,
       allowedShipDurations: loaded.snapshot.request.allowedShipDurations,
       selectedConsumptionItemIds: loaded.snapshot.request.selectedConsumptionItemIds,
@@ -899,6 +936,7 @@ async function run(options: CliOptions): Promise<RunDiagnostics> {
     },
     execution: {
       wallMs,
+      missionYieldIndex: options.serverIndex && !virtue,
       ...progressSummary,
     },
     planSummary: summarizePlan(plan),

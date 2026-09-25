@@ -6,7 +6,8 @@ import {
 } from "../../../../lib/api-schemas";
 import { LootDataError } from "../../../../lib/loot-data";
 import { MissionCoverageError, planForTarget } from "../../../../lib/planner";
-import { applyReplanUpdates } from "../../../../lib/replan";
+import { applyReplanUpdates, replanVirtueTankNote } from "../../../../lib/replan";
+import { buildVirtueTankPlannerOptions } from "../../../../lib/virtue-tank-plan";
 
 export const runtime = "nodejs";
 
@@ -30,10 +31,11 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   try {
-    const updatedProfile = applyReplanUpdates(parsedPayload.data.profile, {
+    const updates = {
       observedReturns: parsedPayload.data.observedReturns,
       missionLaunches: parsedPayload.data.missionLaunches,
-    });
+    };
+    const updatedProfile = applyReplanUpdates(parsedPayload.data.profile, updates);
     const validatedProfile = playerProfileSchema.safeParse(updatedProfile);
     if (!validatedProfile.success) {
       return new Response(
@@ -45,13 +47,21 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
+    const virtue = parsedPayload.data.inventorySource === "virtue";
     const result = await planForTarget(
       validatedProfile.data,
       parsedPayload.data.targetItemId,
       parsedPayload.data.quantity,
       parsedPayload.data.priorityTime,
       {
-        objectiveMode: parsedPayload.data.inventorySource === "virtue" ? "virtueFuel" : "ge",
+        objectiveMode: virtue ? "virtueFuel" : "ge",
+        virtueTank: virtue
+          ? buildVirtueTankPlannerOptions(
+              validatedProfile.data.virtueTank,
+              parsedPayload.data.virtueShiftCap,
+              parsedPayload.data.virtueStartTank
+            )
+          : undefined,
         fastMode: parsedPayload.data.fastMode,
         missionDropRarities: {
           rare: parsedPayload.data.includeDropRare,
@@ -65,6 +75,10 @@ export async function POST(request: Request): Promise<Response> {
         selectedConsumptionItemIds: parsedPayload.data.selectedConsumptionItemIds,
       }
     );
+    const tankNote = virtue ? replanVirtueTankNote(validatedProfile.data, updates) : null;
+    if (tankNote) {
+      result.notes.push(tankNote);
+    }
 
     const responsePayload = {
       profile: {
@@ -72,6 +86,7 @@ export async function POST(request: Request): Promise<Response> {
         epicResearchFTLLevel: validatedProfile.data.epicResearchFTLLevel,
         epicResearchZerogLevel: validatedProfile.data.epicResearchZerogLevel,
         shipLevels: validatedProfile.data.shipLevels,
+        virtueTank: validatedProfile.data.virtueTank,
       },
       plan: result,
     };

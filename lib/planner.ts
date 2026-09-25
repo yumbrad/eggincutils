@@ -2,7 +2,15 @@ import type { LootJson, MissionLevelLootStore, MissionTargetLootStore } from "./
 import type { HighsSolveResult } from "./highs";
 import artifactConsumptionData from "../data/artifact-consumption.json";
 import missionYieldIndexData from "../data/mission-yield-index.json";
-import { isStoneFragmentKey, isUntargetedTargetAfxId, itemIdToCanonicalKey, itemIdToKey, itemKeyToDisplayName, itemKeyToId } from "./item-utils";
+import {
+  artifactDisplayMap,
+  isStoneFragmentKey,
+  isUntargetedTargetAfxId,
+  itemIdToCanonicalKey,
+  itemIdToKey,
+  itemKeyToDisplayName,
+  itemKeyToId,
+} from "./item-utils";
 import { getRecipe, recipes } from "./recipes";
 import {
   buildMissionOptions,
@@ -21,7 +29,25 @@ import {
   type InFlightProjection,
 } from "./in-flight";
 import type { Inventory, PlayerProfile } from "./profile";
-import { getVirtueFuelPerLaunch } from "./virtue-fuel";
+import { getVirtueFuelConfig, getVirtueFuelPerLaunch, TRILLION, type VirtueFuelKey } from "./virtue-fuel";
+import {
+  packVirtueTanks,
+  scheduleVirtueLaunches,
+  VIRTUE_REFILL_ROUTE_ORDER,
+  VIRTUE_SHIFT_CAP_DETENTS,
+  VIRTUE_SHIFT_PENALTY_SECONDS,
+  type VirtueFuelVector,
+  type VirtueTankStartMode,
+} from "./virtue-tanks";
+import {
+  VIRTUE_FASTER_OPTION_EXTRA_SHIFTS,
+  VIRTUE_LAUNCH_EFFORT_SECONDS,
+  virtueFasterOptionQualifies,
+  virtueTankPlanScoreSeconds,
+  type VirtueTankPlannerOptions,
+  type VirtueTankPlannerResult,
+  type VirtueTankPlanUnit,
+} from "./virtue-tank-plan";
 
 async function getDefaultSolverFn(): Promise<SolverFunction> {
   const { solveWithHighs } = await import("./highs");
@@ -71,6 +97,8 @@ type PlanMissionRow = {
   secondsRemaining?: number;
   /** Only set on in-air rows: the wait for each launch, longest first. */
   launchSecondsRemaining?: number[];
+  /** Stable row id; virtue tank units point back at rows through it. */
+  rowKey?: string;
 };
 
 type PlanCraftRow = {
@@ -182,6 +210,8 @@ export type PlannerResult = {
   };
   notes: string[];
   availableCombos: AvailableCombo[];
+  /** Path of Virtue tank mode only: the plan split into fuel tanks and refuel loops. */
+  virtueTanks?: VirtueTankPlannerResult;
 };
 
 /** What the solver produces: the launches still to be made, before the
@@ -198,6 +228,8 @@ export type SolverFunction = (
 export type PlannerOptions = {
   targets?: PlannerTarget[];
   objectiveMode?: MissionObjectiveMode;
+  /** Path of Virtue tank mode: plan within a shift cap and pack launches into fuel tanks. */
+  virtueTank?: VirtueTankPlannerOptions;
   minimumTimePriority?: number;
   fastMode?: boolean;
   targetCraftedOnly?: boolean;
@@ -279,6 +311,84 @@ const LP_SCREENING_MILP_RESOLVES = 2;
 const NORMAL_GE_POLISH_TIME_LIMIT_SECONDS = 20;
 const VIRTUE_FUEL_MIN_TIME_PRIORITY = 0.15;
 const VIRTUE_GE_TIEBREAKER_WEIGHT = 1e-9;
+/** Tank mode fuel tie-break: seconds of mission time per trillion eggs burned. */
+const VIRTUE_TANK_FUEL_TIEBREAK_SECONDS_PER_TRILLION = 0.1;
+/** Per-loop whole-launch cuts only pay off when a few launches fill a tank. */
+const VIRTUE_TANK_ATOMIC_CUT_MAX_LAUNCHES = 20;
+/** Binding shift caps make the integer solves much harder; see the tank-mode status check. */
+const VIRTUE_TANK_SOLVE_TIME_LIMIT_SECONDS = 30;
+/** Normalized objective weight per shift in the fewest-shifts search (demand is hard there). */
+const VIRTUE_TANK_MIN_SHIFT_WEIGHT = 1000;
+const VIRTUE_TANK_PACK_TIME_LIMIT_SECONDS = 1.5;
+/** Re-solves with a lower loop budget when packing needs more shifts than the solve counted. */
+const VIRTUE_TANK_MAX_PACK_RETRIES = 2;
+/**
+ * Refuel loops a tank solve models one by one, so fuel can carry from one to
+ * the next; loops past them are loop types that refill every egg they burn.
+ * Two cover the usual carry (a loop tops up an egg so the next can skip it).
+ * Each one costs the solve a handful of binaries, and a third already doubled
+ * solve times on large goals.
+ */
+const VIRTUE_TANK_INDIVIDUAL_LOOPS = 2;
+/** Caps above the slider's that are tried in turn before the fewest-shifts search. */
+const VIRTUE_TANK_CAP_SCAN_STEPS = 3;
+/**
+ * Tank mode times a plan by a makespan bound, which counts the rounds three
+ * slots fly for each mission duration this long or longer. Shorter rounds
+ * move it by at most a couple of shifts' worth, and each duration costs the
+ * solve an integer.
+ */
+const VIRTUE_TANK_MAKESPAN_ROUND_MIN_SECONDS = 8 * 3600;
+/**
+ * Tank mode's mission time is (1 - w) x the makespan bound + w x slot time
+ * over three slots: equal to slot time over three whenever the rounds do not
+ * bind, while slot time still breaks ties between plans of equal makespan.
+ */
+const VIRTUE_TANK_SLOT_TIME_WEIGHT = 0.1;
+/**
+ * The mission-rounds re-solve only refines a plan the candidate already has,
+ * and on large goals it can run to the full tank time limit for a few percent.
+ */
+const VIRTUE_TANK_ROUNDS_TIME_LIMIT_SECONDS = 10;
+/**
+ * An over-cap search that has already run this long skips the extra pass
+ * that looks for a faster option (VirtueTankPlannerResult.fasterOption).
+ */
+const VIRTUE_TANK_FASTER_OPTION_SKIP_AFTER_SECONDS = 90;
+/**
+ * A plan within the cap is checked for a faster option (see
+ * withinCapLooksSlow in planVirtueTankLaunches) only while the search is
+ * younger than this: the pass costs about as much as the search so far.
+ */
+const VIRTUE_TANK_WITHIN_CAP_FASTER_SKIP_AFTER_SECONDS = 60;
+/**
+ * A plan within the cap with more launches than this looks slow: a low cap
+ * leaves only ships that burn little fuel, and those fly many short, poor
+ * launches where a few more shifts would refuel for far better ones.
+ */
+const VIRTUE_TANK_WITHIN_CAP_SLOW_LAUNCHES = 100;
+/**
+ * A plan within the cap found this quickly is checked against the best plan
+ * with one shift fewer. The solve times a plan as if every launch could fly
+ * as soon as a slot frees up, but a later tank's launches wait for its
+ * refuel, so a plan with more refuel loops can pack slower than one with
+ * fewer, which the cap allows too.
+ */
+const VIRTUE_TANK_FEWER_SHIFTS_CHECK_MAX_ELAPSED_SECONDS = 5;
+/**
+ * Mission/target pairs tank mode keeps per item and ranking
+ * (pruneVirtueTankActions).
+ */
+const VIRTUE_TANK_ACTION_TOP_PER_ITEM = 4;
+/**
+ * A pruned tank solve (pruneVirtueTankActions) that finishes within this
+ * many seconds is checked by one more solve over every candidate action,
+ * which has to beat it by the plan tie tolerance within
+ * VIRTUE_TANK_FULL_CHECK_TIME_LIMIT_SECONDS. A slower pruned solve means
+ * the full one would only run into its time limit.
+ */
+const VIRTUE_TANK_FULL_CHECK_MAX_PRUNED_SECONDS = 5;
+const VIRTUE_TANK_FULL_CHECK_TIME_LIMIT_SECONDS = 10;
 const FAST_QUANTITY_ACCELERATION_MIN_QUANTITY = 5;
 const FAST_QUANTITY_ACCELERATION_MAX_BLOCK_QUANTITY = 5;
 const NORMAL_SCALED_INCUMBENT_MAX_MILP_RESOLVES = 2;
@@ -1236,6 +1346,132 @@ function missionYieldIndexEnabled(disabledByOption?: boolean, injectedLootData?:
   return MISSION_YIELD_INDEX.schemaVersion === 1;
 }
 
+/**
+ * An item's name with its tier number, as the planner page labels it
+ * ("Distegguished gusset (T3)"); the display name's tier word repeats what
+ * the name already says.
+ */
+function itemKeyToTierLabel(itemKey: string): string {
+  const entry = artifactDisplayMap[itemKey];
+  return entry && Number.isFinite(entry.tierNumber) ? `${entry.name} (T${entry.tierNumber})` : itemKeyToDisplayName(itemKey);
+}
+
+/**
+ * Tank mode (which never uses the mission yield index): candidate mission
+ * actions are cut down to the mission/target pairs worth considering, measured
+ * on the loot data the plan runs on.
+ * Hundreds of actions leave the tank solves to their time limits, and the
+ * incumbents they stop on can be thousands of launches of whatever flies free.
+ *
+ * Per item the plan needs (anything the actions drop is in the goals'
+ * closure), a pair is kept when it ranks in the top `topPerItem` by
+ *  - time per unit: a launch's slot time over three slots plus its launch
+ *    effort (VIRTUE_LAUNCH_EFFORT_SECONDS), per unit dropped;
+ *  - C/I/K/R fuel per unit, where ships that burn none rank best;
+ *  - each egg's fuel per unit, ties (above all the ships that burn none of
+ *    that egg) going to the faster pair: the fastest way to get the item
+ *    without Resilience, say, when the tank has none.
+ * A pair counts every level it is offered at (phased leveling fills lower
+ * levels first), rated by its best level. Every item that drops keeps at
+ * least its best pairs, so an only source is never dropped, and the actions
+ * of options that prep launches must fly are kept whole. A phased-leveling
+ * chain (`phaseChains`) whose later level keeps an action also keeps every
+ * action of each earlier level it has to fill first that would otherwise keep
+ * none: those levels can offer only other targets, and with no action left
+ * the chain could never reach the level kept. A launch that drops
+ * a useful mix of items can lose every ranking and still be the one that
+ * fills out a plan best; when the pruned solve is quick, the candidate solve
+ * checks it against every action (VIRTUE_TANK_FULL_CHECK_MAX_PRUNED_SECONDS).
+ */
+function pruneVirtueTankActions(
+  actions: MissionAction[],
+  options: { topPerItem: number; keepOptionKeys: Set<string>; phaseChains?: PhasedChainConstraint[] }
+): MissionAction[] {
+  const topPerItem = Math.max(1, Math.round(options.topPerItem));
+  const pairKey = (action: MissionAction) => `${action.missionId}|${action.targetAfxId}`;
+  type PairRate = { time: number; fuel: number; eggs: Record<VirtueFuelKey, number> };
+  const ratesByItem = new Map<string, Map<string, PairRate>>();
+  for (const action of actions) {
+    const config = getVirtueFuelConfig(action.ship, action.durationType);
+    const eggFuel = (egg: VirtueFuelKey) => Math.max(0, config[egg] || 0);
+    const launchSeconds = action.durationSeconds / 3 + VIRTUE_LAUNCH_EFFORT_SECONDS;
+    const totalFuel = getVirtueFuelPerLaunch(action.ship, action.durationType);
+    const key = pairKey(action);
+    for (const [itemKey, perLaunch] of Object.entries(action.yields)) {
+      if (!(perLaunch > SCORE_EPS)) {
+        continue;
+      }
+      let rates = ratesByItem.get(itemKey);
+      if (!rates) {
+        rates = new Map();
+        ratesByItem.set(itemKey, rates);
+      }
+      const rate: PairRate = {
+        time: launchSeconds / perLaunch,
+        fuel: totalFuel / perLaunch,
+        eggs: {
+          curiosity: eggFuel("curiosity") / perLaunch,
+          integrity: eggFuel("integrity") / perLaunch,
+          kindness: eggFuel("kindness") / perLaunch,
+          resilience: eggFuel("resilience") / perLaunch,
+        },
+      };
+      const existing = rates.get(key);
+      if (!existing) {
+        rates.set(key, rate);
+        continue;
+      }
+      existing.time = Math.min(existing.time, rate.time);
+      existing.fuel = Math.min(existing.fuel, rate.fuel);
+      for (const egg of VIRTUE_REFILL_ROUTE_ORDER) {
+        existing.eggs[egg] = Math.min(existing.eggs[egg], rate.eggs[egg]);
+      }
+    }
+  }
+
+  const keptPairs = new Set<string>();
+  const byCost = (cost: (rate: PairRate) => number) => (a: [string, PairRate], b: [string, PairRate]) =>
+    cost(a[1]) - cost(b[1]) || a[1].time - b[1].time || a[0].localeCompare(b[0]);
+  const rankings: Array<(rate: PairRate) => number> = [
+    (rate) => rate.time,
+    (rate) => rate.fuel,
+    ...VIRTUE_REFILL_ROUTE_ORDER.map((egg) => (rate: PairRate) => rate.eggs[egg]),
+  ];
+  for (const rates of ratesByItem.values()) {
+    const entries = Array.from(rates.entries());
+    for (const cost of rankings) {
+      for (const [key] of entries.sort(byCost(cost)).slice(0, topPerItem)) {
+        keptPairs.add(key);
+      }
+    }
+  }
+  const keptOptionKeys = new Set(options.keepOptionKeys);
+  const optionsWithKeptActions = new Set(
+    actions.filter((action) => keptPairs.has(pairKey(action))).map((action) => action.optionKey)
+  );
+  for (const optionKey of keptOptionKeys) {
+    optionsWithKeptActions.add(optionKey);
+  }
+  // The planner's phased-chain rows make each later level wait until every
+  // earlier level with launches left (a cap above 0) is full, counting that
+  // level's launches over its kept actions.
+  for (const { chain, caps } of options.phaseChains || []) {
+    let lastKept = -1;
+    for (let phase = chain.length - 1; phase > 0; phase -= 1) {
+      if (optionsWithKeptActions.has(chain[phase])) {
+        lastKept = phase;
+        break;
+      }
+    }
+    for (let phase = 0; phase < lastKept; phase += 1) {
+      if (Math.round(caps[phase] || 0) > 0 && !optionsWithKeptActions.has(chain[phase])) {
+        keptOptionKeys.add(chain[phase]);
+      }
+    }
+  }
+  return actions.filter((action) => keptPairs.has(pairKey(action)) || keptOptionKeys.has(action.optionKey));
+}
+
 function bestTimePerUnit(itemKey: string, actions: MissionAction[]): number {
   let best = Number.POSITIVE_INFINITY;
   for (const action of actions) {
@@ -1587,6 +1823,10 @@ type UnifiedPlan = {
   geCost: number;
   totalSlotSeconds: number;
   notes: string[];
+  /** Tank mode only: shifts the solve's refuel loops take, Σ (eggs + 1) per loop. */
+  virtueShifts?: number;
+  /** Tank mode only: the solve's objective value, for a cutoff another solve must beat. */
+  objectiveValue?: number;
 };
 
 type UnifiedSolveMetrics = {
@@ -1755,6 +1995,178 @@ function buildCraftModelSkeleton(options: {
   return { itemKeys, craftModels, craftModelByItem, unmetVarByItem, demandByItem, craftFloorByItem: effectiveCraftFloorByItem };
 }
 
+/** What the unified solve needs to model Path of Virtue fuel tanks. */
+type VirtueTankSolveOptions = {
+  capacity: number;
+  startMode: VirtueTankStartMode;
+  /** C/I/K/R in the tank now: the first tank in "current" mode. */
+  currentContents: VirtueFuelVector;
+  /** Most shifts the refuel loops may take; null leaves it open (the fewest-shifts search). */
+  shiftCap: number | null;
+  /**
+   * "budget": mission time plus VIRTUE_SHIFT_PENALTY_SECONDS per shift and
+   * VIRTUE_LAUNCH_EFFORT_SECONDS per launch.
+   * "minShift": fewest shifts, then mission time and launch effort.
+   * Either way every goal must be met (unmet demand is fixed at 0): a plan
+   * that cannot meet them within the cap is infeasible, not partial.
+   */
+  objective: "budget" | "minShift";
+  /** Launches with no mission variable that still burn tank fuel and hold slots: prep steps with no useful drops. */
+  fixedLaunches?: Array<{ ship: string; durationType: string; durationSeconds: number; launches: number }>;
+  /** Let goals go unmet (at the usual penalty) instead of failing: only to name the ones no plan can meet. */
+  softDemand?: boolean;
+  /**
+   * Proven least shifts for this candidate (from its screening solve). The
+   * fewest-shifts search passes it so the bound starts there and the solve
+   * stops once it finds a plan with that many.
+   */
+  shiftFloor?: number;
+  /** Objective another candidate already reached: the solve fails fast unless it can beat it. */
+  objectiveCutoff?: number;
+  /**
+   * Time the "budget" objective by the makespan bound (virtueTankMakespanBound)
+   * instead of slot time over three slots. It costs the solve an integer per
+   * long duration, so candidates get it only when slot time misjudged their plan.
+   */
+  makespanRounds?: boolean;
+};
+
+type VirtueTankFuelGroup = {
+  /** Fuel per launch by egg, in percent of the tank capacity. */
+  fuelPct: Partial<Record<VirtueFuelKey, number>>;
+  totalPct: number;
+  eggs: VirtueFuelKey[];
+  actionIndexes: number[];
+  fixedLaunches: number;
+};
+
+type VirtueTankLoopType = {
+  key: string;
+  eggs: VirtueFuelKey[];
+  /** One shift per egg refilled plus the shift back to Humility. */
+  shifts: number;
+  groupIndexes: number[];
+};
+
+type VirtueTankModel = {
+  groups: VirtueTankFuelGroup[];
+  /** Refuel loops that refill every egg their launches burn. */
+  loops: VirtueTankLoopType[];
+  /** Eggs some launch burns, in route order: the first refuel loop picks which of them to refill. */
+  eggs: VirtueFuelKey[];
+};
+
+/**
+ * Groups launches by ship and duration (fuel is per launch, not per level or
+ * target) and lists the refuel loop types worth modeling: a loop must only
+ * refill eggs some group burns, hold at least one group, and not be beaten by
+ * a loop with fewer eggs that holds the same groups. Humility is live-fueled
+ * on its farm and never takes tank room, so it is not modeled.
+ */
+function buildVirtueTankModel(actions: MissionAction[], tank: VirtueTankSolveOptions): VirtueTankModel {
+  const capacity = Math.max(1, tank.capacity);
+  const groupByKey = new Map<string, VirtueTankFuelGroup>();
+  const groups: VirtueTankFuelGroup[] = [];
+  const groupFor = (ship: string, durationType: string): VirtueTankFuelGroup | null => {
+    const key = `${ship}|${durationType}`;
+    const existing = groupByKey.get(key);
+    if (existing) {
+      return existing;
+    }
+    const config = getVirtueFuelConfig(ship, durationType);
+    const fuelPct: Partial<Record<VirtueFuelKey, number>> = {};
+    const eggs: VirtueFuelKey[] = [];
+    let totalPct = 0;
+    for (const egg of VIRTUE_REFILL_ROUTE_ORDER) {
+      const amount = Math.max(0, config[egg] || 0);
+      if (amount > 0) {
+        fuelPct[egg] = (amount / capacity) * 100;
+        eggs.push(egg);
+        totalPct += fuelPct[egg]!;
+      }
+    }
+    if (totalPct <= 0) {
+      return null;
+    }
+    const group: VirtueTankFuelGroup = { fuelPct, totalPct, eggs, actionIndexes: [], fixedLaunches: 0 };
+    groupByKey.set(key, group);
+    groups.push(group);
+    return group;
+  };
+  for (let index = 0; index < actions.length; index += 1) {
+    groupFor(actions[index].ship, actions[index].durationType)?.actionIndexes.push(index);
+  }
+  for (const fixed of tank.fixedLaunches || []) {
+    const launches = Math.max(0, Math.round(fixed.launches));
+    const group = launches > 0 ? groupFor(fixed.ship, fixed.durationType) : null;
+    if (group) {
+      group.fixedLaunches += launches;
+    }
+  }
+
+  const burned = new Set(groups.flatMap((group) => group.eggs));
+  const candidates: VirtueTankLoopType[] = [];
+  for (let mask = 1; mask < 1 << VIRTUE_REFILL_ROUTE_ORDER.length; mask += 1) {
+    const eggs = VIRTUE_REFILL_ROUTE_ORDER.filter((_, eggIndex) => (mask & (1 << eggIndex)) !== 0);
+    if (!eggs.every((egg) => burned.has(egg))) {
+      continue;
+    }
+    const groupIndexes = groups
+      .map((group, groupIndex) => (group.eggs.every((egg) => eggs.includes(egg)) ? groupIndex : -1))
+      .filter((groupIndex) => groupIndex >= 0);
+    if (groupIndexes.length > 0) {
+      candidates.push({ key: eggs.map((egg) => egg[0].toUpperCase()).join(""), eggs, shifts: eggs.length + 1, groupIndexes });
+    }
+  }
+  const loops = candidates.filter(
+    (candidate) =>
+      !candidates.some(
+        (other) =>
+          other.eggs.length < candidate.eggs.length &&
+          candidate.groupIndexes.every((groupIndex) => other.groupIndexes.includes(groupIndex))
+      )
+  );
+  return { groups, loops, eggs: VIRTUE_REFILL_ROUTE_ORDER.filter((egg) => burned.has(egg)) };
+}
+
+/**
+ * How a tank solve models its refuel loops: up to VIRTUE_TANK_INDIVIDUAL_LOOPS
+ * one by one, and loop types past them while the cap leaves room for more
+ * (every loop takes at least two shifts). `exact` says the loops modeled one
+ * by one cover every loop the cap allows.
+ */
+function virtueTankLoopLayout(shiftCap: number | null): { individual: number; tail: boolean; exact: boolean } {
+  const maxLoops = shiftCap === null ? Number.POSITIVE_INFINITY : Math.floor(Math.max(0, shiftCap) / 2);
+  const individual = Math.min(maxLoops, VIRTUE_TANK_INDIVIDUAL_LOOPS);
+  return { individual, tail: maxLoops > individual, exact: maxLoops <= individual };
+}
+
+/**
+ * Tank mode's lower bound on how long launches take on three mission slots:
+ * the slot time spread evenly, or the rounds each long duration needs (n
+ * missions of one duration fly in ceil(n / 3) rounds), whichever is longer.
+ * Slot time over three alone reads one 38h mission as 13h.
+ */
+function virtueTankMakespanBound(launches: Array<{ durationSeconds: number; launches: number }>): number {
+  let slotSeconds = 0;
+  const launchesByDuration = new Map<number, number>();
+  for (const entry of launches) {
+    const count = Math.max(0, entry.launches);
+    if (count <= 0) {
+      continue;
+    }
+    slotSeconds += count * entry.durationSeconds;
+    if (entry.durationSeconds >= VIRTUE_TANK_MAKESPAN_ROUND_MIN_SECONDS) {
+      launchesByDuration.set(entry.durationSeconds, (launchesByDuration.get(entry.durationSeconds) || 0) + count);
+    }
+  }
+  let bound = slotSeconds / 3;
+  for (const [durationSeconds, count] of launchesByDuration.entries()) {
+    bound = Math.max(bound, durationSeconds * Math.ceil(count / 3 - SCORE_EPS));
+  }
+  return bound;
+}
+
 async function solveUnifiedCraftMissionPlan(options: {
   profile: PlayerProfile;
   targetKey: string;
@@ -1780,6 +2192,8 @@ async function solveUnifiedCraftMissionPlan(options: {
   targetCraftedOnlyKeys?: Set<string>;
   consumptionOptions?: ConsumptionOption[];
   craftSkeleton?: CraftModelSkeleton;
+  /** Path of Virtue tank mode (virtue objective only): fuel tank, refuel loop and shift cap rows. */
+  virtueTank?: VirtueTankSolveOptions;
   onSolveMetrics?: (metrics: UnifiedSolveMetrics) => void;
   solverFn?: SolverFunction;
 }): Promise<UnifiedPlan> {
@@ -1808,6 +2222,7 @@ async function solveUnifiedCraftMissionPlan(options: {
     targetCraftedOnlyKeys,
     consumptionOptions = [],
     craftSkeleton,
+    virtueTank,
     onSolveMetrics,
     solverFn: solverFnOption,
   } = options;
@@ -1827,6 +2242,7 @@ async function solveUnifiedCraftMissionPlan(options: {
   const normalizedFuelRef = Math.max(1, fuelRef);
   const normalizedTimeRef = Math.max(1, timeRef);
   const objectiveContext = normalizeObjectiveContext(objectiveMode, priorityTime, minimumTimePriority);
+  const tankModel = virtueTank && objectiveContext.mode === "virtueFuel" ? buildVirtueTankModel(actions, virtueTank) : null;
 
   const lines: string[] = [];
   lines.push("Minimize");
@@ -1870,16 +2286,31 @@ async function solveUnifiedCraftMissionPlan(options: {
   }
 
   const missionObjectiveWeight = strictGeObjective ? 0 : Math.max(objectiveContext.timeWeight, MIN_MISSION_TIME_OBJECTIVE_WEIGHT);
+  // Tank mode with makespanRounds: mission time is the makespan bound vmk
+  // blended with a little slot time (VIRTUE_TANK_SLOT_TIME_WEIGHT).
+  const tankMakespan = tankModel !== null && virtueTank!.objective === "budget" && Boolean(virtueTank!.makespanRounds) && !lpRelaxation;
+  const slotTimeWeight = tankMakespan ? VIRTUE_TANK_SLOT_TIME_WEIGHT : 1;
   if (missionObjectiveWeight > 0) {
-    const missionLaunchTiebreakCoeff = (missionObjectiveWeight * MISSION_LAUNCH_TIEBREAKER_SECONDS) / normalizedTimeRef;
+    // Tank mode charges each launch the player's effort
+    // (VIRTUE_LAUNCH_EFFORT_SECONDS), which plan comparisons count too, in
+    // place of the usual launch tie-break.
+    const missionLaunchTiebreakCoeff =
+      (missionObjectiveWeight * (tankModel ? VIRTUE_LAUNCH_EFFORT_SECONDS : MISSION_LAUNCH_TIEBREAKER_SECONDS)) / normalizedTimeRef;
     const targetedTiebreakCoeff = (missionObjectiveWeight * TARGETED_MISSION_TIEBREAKER_SECONDS) / normalizedTimeRef;
     for (let index = 0; index < actions.length; index += 1) {
-      const fuelCoeff = objectiveContext.mode === "virtueFuel"
-        ? (objectiveContext.resourceWeight * getVirtueFuelPerLaunch(actions[index].ship, actions[index].durationType)) / normalizedFuelRef
-        : 0;
+      // Tank mode prices fuel through the shifts it forces, so fuel itself is
+      // only a tie-break there.
+      const fuelCoeff = tankModel
+        ? (missionObjectiveWeight *
+            VIRTUE_TANK_FUEL_TIEBREAK_SECONDS_PER_TRILLION *
+            (getVirtueFuelPerLaunch(actions[index].ship, actions[index].durationType) / TRILLION)) /
+          normalizedTimeRef
+        : objectiveContext.mode === "virtueFuel"
+          ? (objectiveContext.resourceWeight * getVirtueFuelPerLaunch(actions[index].ship, actions[index].durationType)) / normalizedFuelRef
+          : 0;
       const coefficient =
         fuelCoeff +
-        (missionObjectiveWeight * (actions[index].durationSeconds / 3)) / normalizedTimeRef +
+        (slotTimeWeight * missionObjectiveWeight * (actions[index].durationSeconds / 3)) / normalizedTimeRef +
         missionLaunchTiebreakCoeff +
         (isUntargetedTargetAfxId(actions[index].targetAfxId) ? 0 : targetedTiebreakCoeff);
       objectiveTerms.push({
@@ -1896,6 +2327,43 @@ async function solveUnifiedCraftMissionPlan(options: {
       coefficient: unmetPenaltyCoeff,
       variable: unmetVarByItem.get(itemKey)!,
     });
+  }
+  // Tank mode: the first refuel loops are modeled one by one (see
+  // virtueTankLoopLayout), so a loop can top up an egg for the next one. Each
+  // costs a shift back to Humility (vw_j) plus one per egg it refills
+  // (vz_j_e). Loops past them, while the cap leaves room, are loop types that
+  // refill every egg their launches burn (vk_tau of each). Shift terms stay
+  // out of maxObjectiveCoeff so the unmet penalty keeps its usual scale.
+  const tankEggs = tankModel?.eggs || [];
+  const loopLayout = virtueTankLoopLayout(virtueTank?.shiftCap ?? null);
+  const individualLoops =
+    tankModel && tankEggs.length > 0 ? Array.from({ length: loopLayout.individual }, (_, index) => index + 1) : [];
+  const tailLoops = tankModel && tankEggs.length > 0 && loopLayout.tail ? tankModel.loops : [];
+  const loopUsedVar = (loop: number) => `vw_${loop}`;
+  const refillVar = (loop: number, egg: VirtueFuelKey) => `vz_${loop}_${egg[0]}`;
+  const loopContentVar = (loop: number, egg: VirtueFuelKey) => `vb_${loop}_${egg[0]}`;
+  const tailCountVars = tailLoops.map((loop) => `vk_${loop.key}`);
+  const shiftTerms: Array<{ coefficient: number; variable: string }> = [
+    ...individualLoops.flatMap((loop) => [
+      { coefficient: 1, variable: loopUsedVar(loop) },
+      ...tankEggs.map((egg) => ({ coefficient: 1, variable: refillVar(loop, egg) })),
+    ]),
+    ...tailLoops.map((loop, tailIndex) => ({ coefficient: loop.shifts, variable: tailCountVars[tailIndex] })),
+  ];
+  if (tankModel) {
+    const shiftCoeff = virtueTank!.objective === "minShift"
+      ? VIRTUE_TANK_MIN_SHIFT_WEIGHT
+      : (Math.max(missionObjectiveWeight, MIN_MISSION_TIME_OBJECTIVE_WEIGHT) * VIRTUE_SHIFT_PENALTY_SECONDS) / normalizedTimeRef;
+    for (const term of shiftTerms) {
+      objectiveTerms.push({ coefficient: shiftCoeff * term.coefficient, variable: term.variable });
+    }
+    if (tankMakespan) {
+      objectiveTerms.push({
+        coefficient:
+          ((1 - VIRTUE_TANK_SLOT_TIME_WEIGHT) * Math.max(missionObjectiveWeight, MIN_MISSION_TIME_OBJECTIVE_WEIGHT)) / normalizedTimeRef,
+        variable: "vmk",
+      });
+    }
   }
   lines.push(`  obj: ${formatLinearExpression(objectiveTerms)}`);
 
@@ -2115,6 +2583,235 @@ async function solveUnifiedCraftMissionPlan(options: {
     }
   }
 
+  // Tank model, fuel in percent of the tank. Each fuel group's launches are
+  // split between the first tank (vn_g_0), the refuel loops (vq_g_j) and,
+  // past them, tail loop types (vn_g_tau). Per egg, loop j starts with
+  // vb_j_e: what the tank before it left, or anything up to a full tank when
+  // the loop refills the egg. Drains are free, so only the eggs a loop starts
+  // with take room, and they fit one tank. Loop capacity is the whole tank:
+  // packing afterwards models the limit sliders exactly and is the source of
+  // truth for the shifts.
+  const tankShareBounds: Array<{ variable: string; upper?: number }> = [];
+  const tankScreeningIntegerVars: string[] = [...tailCountVars];
+  const tankLaunchIntegerVars: string[] = [];
+  const tankBinaryVars: string[] = [
+    ...individualLoops.flatMap((loop) => [loopUsedVar(loop), ...tankEggs.map((egg) => refillVar(loop, egg))]),
+  ];
+  const tankContentVars: string[] = [];
+  let tankConstraintCount = 0;
+  if (tankModel) {
+    const tank = virtueTank!;
+    const { groups } = tankModel;
+    const initialVars = groups.map((_, groupIndex) => `vn_${groupIndex}_0`);
+    const loopShareVar = (groupIndex: number, loop: number) => `vq_${groupIndex}_${loop}`;
+    const tailShareVar = (groupIndex: number, loop: VirtueTankLoopType) => `vn_${groupIndex}_${loop.key}`;
+    // A launch draws its fuel atomically, so a tank fits only whole launches.
+    const launchesPerTank = (group: VirtueTankFuelGroup) => Math.floor(100 / group.totalPct + SCORE_EPS);
+    const atomicUpper = (group: VirtueTankFuelGroup) => {
+      const perTank = launchesPerTank(group);
+      return perTank <= VIRTUE_TANK_ATOMIC_CUT_MAX_LAUNCHES ? perTank : undefined;
+    };
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+      const group = groups[groupIndex];
+      const terms: Array<{ coefficient: number; variable: string }> = group.actionIndexes.map((actionIndex) => ({
+        coefficient: 1,
+        variable: missionVars[actionIndex],
+      }));
+      terms.push({ coefficient: -1, variable: initialVars[groupIndex] });
+      tankShareBounds.push({ variable: initialVars[groupIndex], upper: atomicUpper(group) });
+      for (const loop of individualLoops) {
+        terms.push({ coefficient: -1, variable: loopShareVar(groupIndex, loop) });
+        tankShareBounds.push({ variable: loopShareVar(groupIndex, loop), upper: atomicUpper(group) });
+        tankLaunchIntegerVars.push(loopShareVar(groupIndex, loop));
+      }
+      for (const loop of tailLoops) {
+        if (loop.groupIndexes.includes(groupIndex)) {
+          terms.push({ coefficient: -1, variable: tailShareVar(groupIndex, loop) });
+          tankShareBounds.push({ variable: tailShareVar(groupIndex, loop) });
+        }
+      }
+      lines.push(`  vy_${groupIndex}: ${formatLinearExpression(terms)} = ${formatLpNumber(-group.fixedLaunches)}`);
+      tankConstraintCount += 1;
+    }
+    // Integer first-tank shares: continuous ones let a fraction of a launch
+    // use up exactly what is left in the tank, which undercounts the loops.
+    // Loop shares are integer for the same reason, except in screening.
+    tankScreeningIntegerVars.push(...initialVars);
+
+    const burnTerms = (egg: VirtueFuelKey, shareVar: (groupIndex: number) => string) =>
+      groups.flatMap((group, groupIndex) => {
+        const fuelPct = group.fuelPct[egg] || 0;
+        return fuelPct > 0 ? [{ coefficient: fuelPct, variable: shareVar(groupIndex) }] : [];
+      });
+    // The first tank is the current contents as-is, or an ideal fill (vi_e)
+    // of at most one tank.
+    const idealFillVars: string[] = [];
+    for (const egg of tankEggs) {
+      const initialBurn = burnTerms(egg, (groupIndex) => initialVars[groupIndex]);
+      const idealFillVar = `vi_${egg[0]}`;
+      // Tank readings carry float noise, so allow one egg of slack.
+      const availablePct = ((Math.max(0, tank.currentContents[egg] || 0) + 1) / Math.max(1, tank.capacity)) * 100;
+      if (tank.startMode === "ideal") {
+        idealFillVars.push(idealFillVar);
+        tankShareBounds.push({ variable: idealFillVar });
+        lines.push(`  vt_${egg[0]}: ${formatLinearExpression([...initialBurn, { coefficient: -1, variable: idealFillVar }])} <= 0`);
+      } else {
+        lines.push(`  vt_${egg[0]}: ${formatLinearExpression(initialBurn)} <= ${formatLpNumber(availablePct)}`);
+      }
+      tankConstraintCount += 1;
+      for (const loop of individualLoops) {
+        const contentVar = loopContentVar(loop, egg);
+        tankContentVars.push(contentVar);
+        // The loop's launches burn only what it starts with...
+        const loopBurn = burnTerms(egg, (groupIndex) => loopShareVar(groupIndex, loop));
+        lines.push(`  vu_${loop}_${egg[0]}: ${formatLinearExpression([...loopBurn, { coefficient: -1, variable: contentVar }])} <= 0`);
+        // ...which, unless it refills the egg, is what the tank before it left.
+        const carryTerms: Array<{ coefficient: number; variable: string }> = [
+          { coefficient: 1, variable: contentVar },
+          { coefficient: -100, variable: refillVar(loop, egg) },
+        ];
+        let carryRhs = 0;
+        if (loop === 1) {
+          carryTerms.push(...initialBurn);
+          if (tank.startMode === "ideal") {
+            carryTerms.push({ coefficient: -1, variable: idealFillVar });
+          } else {
+            carryRhs = availablePct;
+          }
+        } else {
+          carryTerms.push(...burnTerms(egg, (groupIndex) => loopShareVar(groupIndex, loop - 1)));
+          carryTerms.push({ coefficient: -1, variable: loopContentVar(loop - 1, egg) });
+        }
+        lines.push(`  vr_${loop}_${egg[0]}: ${formatLinearExpression(carryTerms)} <= ${formatLpNumber(carryRhs)}`);
+        // A refill is part of the loop.
+        lines.push(`  ve_${loop}_${egg[0]}: ${refillVar(loop, egg)} - ${loopUsedVar(loop)} <= 0`);
+        tankConstraintCount += 3;
+      }
+    }
+    if (idealFillVars.length > 0) {
+      lines.push(`  vt_0: ${formatLinearExpression(idealFillVars.map((variable) => ({ coefficient: 1, variable })))} <= 100`);
+      tankConstraintCount += 1;
+    }
+    for (const loop of individualLoops) {
+      const usedVar = loopUsedVar(loop);
+      // What the loop starts with fits one tank; an unused loop holds nothing.
+      lines.push(
+        `  vc_${loop}: ${formatLinearExpression([
+          ...tankEggs.map((egg) => ({ coefficient: 1, variable: loopContentVar(loop, egg) })),
+          { coefficient: -100, variable: usedVar },
+        ])} <= 0`
+      );
+      // A loop refills at least one egg (one that refills nothing would only
+      // split a tank for a shift), and loops are used in order.
+      lines.push(
+        `  vh_${loop}: ${formatLinearExpression([
+          { coefficient: 1, variable: usedVar },
+          ...tankEggs.map((egg) => ({ coefficient: -1, variable: refillVar(loop, egg) })),
+        ])} <= 0`
+      );
+      tankConstraintCount += 2;
+      if (loop > 1) {
+        lines.push(`  vo_${loop}: ${usedVar} - ${loopUsedVar(loop - 1)} <= 0`);
+        tankConstraintCount += 1;
+      }
+      for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+        const perLoop = atomicUpper(groups[groupIndex]);
+        if (perLoop !== undefined) {
+          lines.push(`  vd_${groupIndex}_${loop}: ${loopShareVar(groupIndex, loop)} - ${formatLpNumber(perLoop)} ${usedVar} <= 0`);
+          tankConstraintCount += 1;
+        }
+      }
+    }
+    for (let tailIndex = 0; tailIndex < tailLoops.length; tailIndex += 1) {
+      const loop = tailLoops[tailIndex];
+      const countVar = tailCountVars[tailIndex];
+      const terms: Array<{ coefficient: number; variable: string }> = loop.groupIndexes.map((groupIndex) => ({
+        coefficient: groups[groupIndex].totalPct,
+        variable: tailShareVar(groupIndex, loop),
+      }));
+      terms.push({ coefficient: -100, variable: countVar });
+      lines.push(`  vl_${loop.key}: ${formatLinearExpression(terms)} <= 0`);
+      tankConstraintCount += 1;
+      for (const groupIndex of loop.groupIndexes) {
+        const perLoop = atomicUpper(groups[groupIndex]);
+        if (perLoop !== undefined) {
+          lines.push(
+            `  va_${groupIndex}_${loop.key}: ${formatLinearExpression([
+              { coefficient: 1, variable: tailShareVar(groupIndex, loop) },
+              { coefficient: -perLoop, variable: countVar },
+            ])} <= 0`
+          );
+          tankConstraintCount += 1;
+        }
+      }
+    }
+    if (tank.shiftFloor !== undefined && tank.shiftFloor > 0 && shiftTerms.length > 0) {
+      lines.push(`  vm_0: ${formatLinearExpression(shiftTerms)} >= ${formatLpNumber(Math.round(tank.shiftFloor))}`);
+      tankConstraintCount += 1;
+    }
+    if (tank.shiftCap !== null && shiftTerms.length > 0) {
+      const safeShiftCap = Math.max(0, Math.floor(tank.shiftCap + SCORE_EPS));
+      lines.push(`  vs_0: ${formatLinearExpression(shiftTerms)} <= ${formatLpNumber(safeShiftCap)}`);
+      tankConstraintCount += 1;
+      // Tail loops only follow the last loop modeled one by one; this cuts
+      // the copies of every plan that differ only in which kind a loop is.
+      if (tailLoops.length > 0 && individualLoops.length > 0) {
+        const tailRoom = Math.floor(safeShiftCap / 2) - individualLoops.length;
+        lines.push(
+          `  vg_0: ${formatLinearExpression([
+            ...tailCountVars.map((variable) => ({ coefficient: 1, variable })),
+            { coefficient: -tailRoom, variable: loopUsedVar(individualLoops[individualLoops.length - 1]) },
+          ])} <= 0`
+        );
+        tankConstraintCount += 1;
+      }
+    }
+  }
+  // The makespan bound: slot time over three slots, and each long duration's
+  // rounds (vrd_k), counting the fixed prep launches too.
+  const makespanRoundVars: string[] = [];
+  if (tankMakespan) {
+    const fixedLaunches = (virtueTank!.fixedLaunches || []).filter(
+      (fixed) => fixed.launches > 0 && Number.isFinite(fixed.durationSeconds) && fixed.durationSeconds > 0
+    );
+    const fixedSlotSeconds = fixedLaunches.reduce((sum, fixed) => sum + Math.round(fixed.launches) * fixed.durationSeconds, 0);
+    const slotTerms = actions.map((action, index) => ({ coefficient: -action.durationSeconds, variable: missionVars[index] }));
+    lines.push(`  vmk_s: ${formatLinearExpression([{ coefficient: 3, variable: "vmk" }, ...slotTerms])} >= ${formatLpNumber(fixedSlotSeconds)}`);
+    tankConstraintCount += 1;
+    const rounds = new Map<number, { missionIndexes: number[]; fixedLaunches: number }>();
+    const roundsFor = (durationSeconds: number) => {
+      const existing = rounds.get(durationSeconds);
+      if (existing) {
+        return existing;
+      }
+      const entry = { missionIndexes: [] as number[], fixedLaunches: 0 };
+      rounds.set(durationSeconds, entry);
+      return entry;
+    };
+    actions.forEach((action, index) => {
+      if (action.durationSeconds >= VIRTUE_TANK_MAKESPAN_ROUND_MIN_SECONDS) {
+        roundsFor(action.durationSeconds).missionIndexes.push(index);
+      }
+    });
+    for (const fixed of fixedLaunches) {
+      if (fixed.durationSeconds >= VIRTUE_TANK_MAKESPAN_ROUND_MIN_SECONDS) {
+        roundsFor(fixed.durationSeconds).fixedLaunches += Math.round(fixed.launches);
+      }
+    }
+    for (const [durationSeconds, entry] of rounds.entries()) {
+      const roundVar = `vrd_${makespanRoundVars.length}`;
+      const launchTerms = entry.missionIndexes.map((index) => ({ coefficient: -1, variable: missionVars[index] }));
+      lines.push(`  ${roundVar}: ${formatLinearExpression([{ coefficient: 3, variable: roundVar }, ...launchTerms])} >= ${formatLpNumber(entry.fixedLaunches)}`);
+      lines.push(`  vmk_${makespanRoundVars.length}: vmk - ${formatLpNumber(durationSeconds)} ${roundVar} >= 0`);
+      makespanRoundVars.push(roundVar);
+      tankConstraintCount += 2;
+    }
+  }
+  // Tank solves never trade goals away: a cap too low for them should fail
+  // (and trigger the fewest-shifts search), and without the do-nothing
+  // incumbent a binding cap finds real plans far sooner.
+  const hardDemand = tankModel !== null && !virtueTank!.softDemand;
+
   lines.push("Bounds");
   for (const model of craftModels) {
     lines.push(`  ${formatLpNumber(model.craftFloor)} <= ${model.craftVar} <= ${formatLpNumber(model.craftBound)}`);
@@ -2132,29 +2829,55 @@ async function solveUnifiedCraftMissionPlan(options: {
     lines.push(`  ${variable} >= 0`);
   }
   for (const variable of unmetVarByItem.values()) {
-    lines.push(`  ${variable} >= 0`);
+    lines.push(hardDemand ? `  0 <= ${variable} <= 0` : `  ${variable} >= 0`);
   }
   for (const zVar of phasedBinaryVars) {
     lines.push(`  0 <= ${zVar} <= 1`);
   }
+  for (const { variable, upper } of tankShareBounds) {
+    lines.push(upper !== undefined ? `  0 <= ${variable} <= ${formatLpNumber(upper)}` : `  ${variable} >= 0`);
+  }
+  for (const variable of tailCountVars) {
+    lines.push(`  ${variable} >= 0`);
+  }
+  for (const variable of tankBinaryVars) {
+    lines.push(`  0 <= ${variable} <= 1`);
+  }
+  for (const variable of tankContentVars) {
+    lines.push(`  ${variable} >= 0`);
+  }
+  if (tankMakespan) {
+    lines.push("  vmk >= 0");
+  }
+  for (const variable of makespanRoundVars) {
+    lines.push(`  ${variable} >= 0`);
+  }
 
+  // The loop switches and counts and the first-tank shares stay integer even
+  // in the relaxed screening solve (a small MILP): a relaxed loop count of
+  // fuel / capacity cannot tell candidates apart once whole loops are what
+  // cost shifts.
   const integerVars = lpRelaxation
-    ? []
+    ? [...tankScreeningIntegerVars, ...tankBinaryVars]
     : [
         ...craftModels.map((model) => model.craftVar),
         ...craftModels.flatMap((model) => model.preDiscountStepVars),
         ...craftModels.flatMap((model) => (model.tailVar ? [model.tailVar] : [])),
         ...consumptionVars,
         ...missionVars,
+        ...tankScreeningIntegerVars,
+        ...tankBinaryVars,
+        ...tankLaunchIntegerVars,
+        ...makespanRoundVars,
       ];
-  if (!lpRelaxation) {
-    if (integerVars.length > 0) {
-      lines.push("General");
-      const chunkSize = 24;
-      for (let index = 0; index < integerVars.length; index += chunkSize) {
-        lines.push(`  ${integerVars.slice(index, index + chunkSize).join(" ")}`);
-      }
+  if (integerVars.length > 0) {
+    lines.push("General");
+    const chunkSize = 24;
+    for (let index = 0; index < integerVars.length; index += chunkSize) {
+      lines.push(`  ${integerVars.slice(index, index + chunkSize).join(" ")}`);
     }
+  }
+  if (!lpRelaxation) {
     if (phasedBinaryVars.length > 0) {
       lines.push("Binary");
       const chunkSize = 24;
@@ -2191,14 +2914,27 @@ async function solveUnifiedCraftMissionPlan(options: {
     phasedConstraintIndex +
     craftLinkConstraintCount +
     geConstraintCount +
-    slotSecondsConstraintCount;
+    slotSecondsConstraintCount +
+    tankConstraintCount;
 
   const solveStartedAtMs = Date.now();
   const useExactMipGap = !lpRelaxation && (strictGeObjective || hasGeCostUpperBound);
+  const effectiveTimeLimitSeconds = timeLimitSeconds ?? (tankModel ? VIRTUE_TANK_SOLVE_TIME_LIMIT_SECONDS : undefined);
+  // The fewest-shifts search only needs the shift count proven: stop once the
+  // bound rules out one shift fewer, rather than closing 1% of a shift-sized
+  // objective, which can take minutes. Mission time is re-optimized at N.
+  const minShiftGap: Record<string, number> =
+    tankModel && virtueTank!.objective === "minShift" ? { mip_abs_gap: VIRTUE_TANK_MIN_SHIFT_WEIGHT * 0.9 } : {};
+  // Pruning against another candidate's objective turns a long losing solve
+  // into a quick "Infeasible".
+  const objectiveCutoff: Record<string, number> =
+    tankModel && virtueTank!.objectiveCutoff !== undefined && Number.isFinite(virtueTank!.objectiveCutoff)
+      ? { objective_bound: virtueTank!.objectiveCutoff }
+      : {};
   const solution = await solve(lines.join("\n"), {
-    ...(lpRelaxation ? {} : { mip_rel_gap: useExactMipGap ? 0 : 0.01 }),
-    ...(timeLimitSeconds !== undefined && Number.isFinite(timeLimitSeconds) && timeLimitSeconds > 0
-      ? { time_limit: timeLimitSeconds }
+    ...(lpRelaxation && integerVars.length === 0 ? {} : { mip_rel_gap: useExactMipGap ? 0 : 0.01, ...minShiftGap, ...objectiveCutoff }),
+    ...(effectiveTimeLimitSeconds !== undefined && Number.isFinite(effectiveTimeLimitSeconds) && effectiveTimeLimitSeconds > 0
+      ? { time_limit: effectiveTimeLimitSeconds }
       : {}),
   });
   const elapsedMs = Math.max(0, Date.now() - solveStartedAtMs);
@@ -2216,7 +2952,16 @@ async function solveUnifiedCraftMissionPlan(options: {
     integerVarCount: integerVars.length,
     constraintCount,
   });
-  if (status !== "Optimal") {
+  // Binding shift caps can make a tank solve run for minutes, and its early
+  // incumbents are often the do-nothing plan. A timed-out tank solve is kept
+  // only if it has an incumbent that meets every goal (checked below).
+  const acceptTankTimeLimit =
+    tankModel !== null &&
+    status === "Time limit reached" &&
+    Number.isFinite(solution.ObjectiveValue as number) &&
+    Math.abs(solution.ObjectiveValue as number) < 1e20 &&
+    Object.keys(solution.Columns || {}).length > 0;
+  if (status !== "Optimal" && !acceptTankTimeLimit) {
     throw new Error(`unified HiGHS solve status '${status}'`);
   }
 
@@ -2278,6 +3023,14 @@ async function solveUnifiedCraftMissionPlan(options: {
     const rawValue = solution.Columns?.[unmetVarByItem.get(itemKey)!]?.Primal || 0;
     remainingDemand[itemKey] = Math.max(0, rawValue);
   }
+  if (acceptTankTimeLimit && Object.values(remainingDemand).some((qty) => qty > 1e-6)) {
+    throw new Error(`unified HiGHS solve status '${status}' before meeting every goal`);
+  }
+  let virtueShifts: number | undefined;
+  if (tankModel) {
+    const loopCount = (variable: string) => Math.max(0, Math.round(solution.Columns?.[variable]?.Primal || 0));
+    virtueShifts = shiftTerms.reduce((sum, term) => sum + term.coefficient * loopCount(term.variable), 0);
+  }
 
   const geCost = craftModels.reduce((sum, model) => {
     const craftedCount = crafts[model.itemKey] || 0;
@@ -2296,6 +3049,8 @@ async function solveUnifiedCraftMissionPlan(options: {
     geCost,
     totalSlotSeconds,
     notes,
+    ...(virtueShifts !== undefined ? { virtueShifts } : {}),
+    ...(tankModel && Number.isFinite(solution.ObjectiveValue as number) ? { objectiveValue: solution.ObjectiveValue as number } : {}),
   };
 }
 
@@ -2645,9 +3400,31 @@ function buildAvailableCombosFromActions(
   return availableCombos;
 }
 
-function buildMissionRows(actions: MissionAction[], missionCounts: Record<string, number>): PlanMissionRow[] {
+/** Claims `base` as a row key, suffixing it if another row already has it. */
+function claimUniqueRowKey(base: string, used: Set<string>): string {
+  let key = base;
+  for (let suffix = 2; used.has(key); suffix += 1) {
+    key = `${base}#${suffix}`;
+  }
+  used.add(key);
+  return key;
+}
+
+function missionRowKeyBase(row: { missionId: string; level: number; targetAfxId: number }): string {
+  return `${row.missionId}|${row.level}|${row.targetAfxId}`;
+}
+
+/**
+ * One row per launched action, each with a stable `rowKey`. Pass
+ * `actionKeyByRowKey` to learn which action each row came from.
+ */
+function buildMissionRows(
+  actions: MissionAction[],
+  missionCounts: Record<string, number>,
+  actionKeyByRowKey?: Map<string, string>
+): PlanMissionRow[] {
   const actionByKey = new Map(actions.map((action) => [action.key, action]));
-  return Object.entries(missionCounts)
+  const rows = Object.entries(missionCounts)
     .map(([key, launches]) => {
       const action = actionByKey.get(key);
       if (!action) {
@@ -2658,7 +3435,7 @@ function buildMissionRows(actions: MissionAction[], missionCounts: Record<string
         .filter((entry) => entry.quantity > 0)
         .sort((a, b) => b.quantity - a.quantity);
 
-      return {
+      const row: PlanMissionRow = {
         missionId: action.missionId,
         ship: action.ship,
         durationType: action.durationType,
@@ -2668,9 +3445,10 @@ function buildMissionRows(actions: MissionAction[], missionCounts: Record<string
         durationSeconds: action.durationSeconds,
         expectedYields,
       };
+      return { row, actionKey: key };
     })
-    .filter((row): row is PlanMissionRow => row !== null)
-    .sort((a, b) => {
+    .filter((entry): entry is { row: PlanMissionRow; actionKey: string } => entry !== null)
+    .sort(({ row: a }, { row: b }) => {
       const shipDiff = a.ship.localeCompare(b.ship);
       if (shipDiff !== 0) {
         return shipDiff;
@@ -2689,6 +3467,91 @@ function buildMissionRows(actions: MissionAction[], missionCounts: Record<string
       }
       return b.launches - a.launches;
     });
+  const usedRowKeys = new Set<string>();
+  return rows.map(({ row, actionKey }) => {
+    row.rowKey = claimUniqueRowKey(missionRowKeyBase(row), usedRowKeys);
+    actionKeyByRowKey?.set(row.rowKey, actionKey);
+    return row;
+  });
+}
+
+/**
+ * The plan's launches as tank-packing units: one per mission row, with the
+ * prep launches a row carries (forced by a prep step) split out ahead of it,
+ * plus one per prep step with no useful drops, which has no row but still
+ * burns fuel. Prep units carry their step's dependency order.
+ */
+function buildVirtueTankUnits(options: {
+  actions: MissionAction[];
+  missionRows: PlanMissionRow[];
+  actionKeyByRowKey: Map<string, string>;
+  prepSteps: PrepProgressionStep[];
+}): VirtueTankPlanUnit[] {
+  const { actions, missionRows, actionKeyByRowKey, prepSteps } = options;
+  const actionByKey = new Map(actions.map((action) => [action.key, action]));
+  const actionOptionKeys = new Set(actions.map((action) => action.optionKey));
+  const prepOrderByOption = new Map<string, number>();
+  prepSteps.forEach((step, index) => {
+    const optionKey = missionOptionKey(step.option);
+    if (!prepOrderByOption.has(optionKey)) {
+      prepOrderByOption.set(optionKey, index);
+    }
+  });
+  const prepRequirements = aggregatePrepOptionRequirements(prepSteps);
+  const prepLaunchesLeft = new Map(
+    Array.from(prepRequirements.entries()).map(([optionKey, requirement]) => [optionKey, requirement.launches])
+  );
+
+  const prepUnits: VirtueTankPlanUnit[] = [];
+  const missionUnits: VirtueTankPlanUnit[] = [];
+  for (const row of missionRows) {
+    if (row.inAir || !row.rowKey || row.launches <= 0) {
+      continue;
+    }
+    const unitBase = {
+      ship: row.ship,
+      durationType: row.durationType,
+      level: row.level,
+      durationSeconds: row.durationSeconds,
+      missionRowKey: row.rowKey,
+      targetAfxId: row.targetAfxId,
+    };
+    const optionKey = actionByKey.get(actionKeyByRowKey.get(row.rowKey) || "")?.optionKey;
+    const prepLaunches = optionKey ? Math.min(row.launches, prepLaunchesLeft.get(optionKey) || 0) : 0;
+    if (optionKey && prepLaunches > 0) {
+      prepLaunchesLeft.set(optionKey, (prepLaunchesLeft.get(optionKey) || 0) - prepLaunches);
+      prepUnits.push({
+        ...unitBase,
+        id: `${row.rowKey}|prep`,
+        launches: prepLaunches,
+        isPrep: true,
+        prepOrder: prepOrderByOption.get(optionKey) ?? 0,
+      });
+    }
+    if (row.launches > prepLaunches) {
+      missionUnits.push({ ...unitBase, id: row.rowKey, launches: row.launches - prepLaunches });
+    }
+  }
+
+  const usedIds = new Set([...prepUnits, ...missionUnits].map((unit) => unit.id));
+  for (const [optionKey, requirement] of prepRequirements.entries()) {
+    if (actionOptionKeys.has(optionKey) || requirement.launches <= 0) {
+      continue;
+    }
+    const { option } = requirement;
+    prepUnits.push({
+      id: claimUniqueRowKey(`prep|${option.missionId}|${option.level}`, usedIds),
+      ship: option.ship,
+      durationType: option.durationType,
+      level: option.level,
+      durationSeconds: option.durationSeconds,
+      launches: requirement.launches,
+      isPrep: true,
+      prepOrder: prepOrderByOption.get(optionKey) ?? 0,
+    });
+  }
+  prepUnits.sort((a, b) => (a.prepOrder ?? 0) - (b.prepOrder ?? 0));
+  return [...prepUnits, ...missionUnits];
 }
 
 function buildCraftRows(crafts: Record<string, number>): PlanCraftRow[] {
@@ -4715,15 +5578,514 @@ export async function planForTarget(
       ? { ...profile, inventory: mergeInventory(profile.inventory, inFlight.yields) }
       : profile;
 
-  const result = await planForNewLaunches(
-    planningProfile,
-    targetItemId,
-    quantity,
-    priorityTimeRaw,
-    plannerOptions
-  );
+  const virtueTank = plannerOptions.objectiveMode === "virtueFuel" ? plannerOptions.virtueTank : undefined;
+  const result = virtueTank
+    ? await planVirtueTankLaunches(
+        planningProfile,
+        targetItemId,
+        quantity,
+        priorityTimeRaw,
+        plannerOptions,
+        virtueTank,
+        inAirLaneLoads(inFlight.rows)
+      )
+    : await planForNewLaunches(
+        planningProfile,
+        targetItemId,
+        quantity,
+        priorityTimeRaw,
+        plannerOptions
+      );
 
   return withInFlightSchedule(result, inFlight);
+}
+
+/**
+ * One tank-mode pass of planForNewLaunches. planVirtueTankLaunches runs a few:
+ * at the shift cap, with fewer refuel loops when packing overshoots the cap,
+ * at the next few caps and a fewest-shifts search when the cap cannot meet the
+ * goals, and a re-plan at the shifts that search found.
+ */
+type VirtueTankRun = {
+  capacity: number;
+  startMode: VirtueTankStartMode;
+  currentContents: VirtueFuelVector;
+  currentHumility: number;
+  /** Cap the player asked for. */
+  shiftCap: number;
+  /** Cap this pass's plan is reported against. */
+  plannedShiftCap: number;
+  /** Cap on the solve's refuel loops: below plannedShiftCap on a packing retry, null for the fewest-shifts search. */
+  solveShiftCap: number | null;
+  objective: "budget" | "minShift";
+  /** Let goals go unmet instead of failing (see VirtueTankSolveOptions.softDemand). */
+  softDemand?: boolean;
+  /** Seconds until each mission slot held by an in-air virtue mission frees up. */
+  inAirLaneFreeSeconds: number[];
+  /** Start of the whole tank-mode search, for progress timing. */
+  startedAtMs: number;
+  /** Filled in by the pass. */
+  report: VirtueTankPassReport;
+};
+
+/** What a tank-mode pass tells planVirtueTankLaunches besides its plan. */
+type VirtueTankPassReport = {
+  /**
+   * A tank solve stopped short of a proof (a time limit), or candidates that
+   * passed screening were never solved in full. A failed pass then does not
+   * rule its cap out, and a fewest-shifts count is not proven the fewest.
+   */
+  inconclusive: boolean;
+  /** Shifts the solve counted for the pass's plan; packing can take more or fewer. */
+  solveShifts?: number;
+};
+
+/**
+ * Path of Virtue tank mode: the fastest plan, charging
+ * VIRTUE_SHIFT_PENALTY_SECONDS of mission time per shift and
+ * VIRTUE_LAUNCH_EFFORT_SECONDS per launch, whose launches pack
+ * into fuel tanks within the shift cap. Packing is the source of truth for
+ * shifts: when it needs more than the solve counted, the plan is re-solved with
+ * fewer refuel loops. When the cap cannot meet the goals, the plan is built at
+ * the fewest shifts that can, and flagged as over the cap. Either way, a few
+ * more shifts can be offered beside the plan when they are clearly faster
+ * (VirtueTankPlannerResult.fasterOption).
+ */
+async function planVirtueTankLaunches(
+  profile: PlayerProfile,
+  targetItemId: string,
+  quantity: number,
+  priorityTimeRaw: number,
+  plannerOptions: PlannerOptions,
+  tank: VirtueTankPlannerOptions,
+  inAirLaneFreeSeconds: number[]
+): Promise<PlannedLaunches> {
+  const startedAtMs = Date.now();
+  const capacity = Number(tank.capacity);
+  if (!Number.isFinite(capacity) || capacity <= 0) {
+    throw new Error("Path of Virtue tank planning needs the fuel tank's capacity.");
+  }
+  const shiftCap = Number.isFinite(tank.shiftCap) ? Math.max(0, Math.floor(tank.shiftCap)) : 0;
+  const startMode: VirtueTankStartMode = tank.startMode === "ideal" ? "ideal" : "current";
+  const currentContents: VirtueFuelVector = {};
+  for (const egg of VIRTUE_REFILL_ROUTE_ORDER) {
+    const amount = Number(tank.currentContents?.[egg] || 0);
+    if (Number.isFinite(amount) && amount > 0) {
+      currentContents[egg] = amount;
+    }
+  }
+  const currentHumility = Math.max(0, Number.isFinite(tank.currentHumility) ? (tank.currentHumility as number) : 0);
+  const reportProgress = (phase: PlannerProgressEvent["phase"], message: string) => {
+    try {
+      plannerOptions.onProgress?.({ phase, message, elapsedMs: Date.now() - startedAtMs });
+    } catch {
+      // Ignore progress callback errors.
+    }
+  };
+  // One benchmark sample for the whole search rather than one per pass.
+  const passOptions: PlannerOptions = { ...plannerOptions, onBenchmarkSample: undefined };
+  const solveShiftsByPlan = new Map<PlannedLaunches, number>();
+  const runPass = async (
+    objective: VirtueTankRun["objective"],
+    plannedShiftCap: number,
+    solveShiftCap: number | null,
+    softDemand = false
+  ): Promise<{ plan: PlannedLaunches | null; report: VirtueTankPassReport; error?: unknown }> => {
+    const report: VirtueTankPassReport = { inconclusive: false };
+    try {
+      const plan = await planForNewLaunches(profile, targetItemId, quantity, priorityTimeRaw, passOptions, {
+        capacity,
+        startMode,
+        currentContents,
+        currentHumility,
+        shiftCap,
+        plannedShiftCap,
+        solveShiftCap,
+        objective,
+        softDemand,
+        inAirLaneFreeSeconds,
+        startedAtMs,
+        report,
+      });
+      // Tank solves hold every goal as hard demand, so a cap too low for the
+      // goals fails the solve; a plan with anything unmet counts the same way.
+      if (!softDemand && plan.unmetItems.length > 0) {
+        return { plan: null, report: { ...report, inconclusive: true } };
+      }
+      if (report.solveShifts !== undefined) {
+        solveShiftsByPlan.set(plan, report.solveShifts);
+      }
+      return { plan, report };
+    } catch (error) {
+      // Nothing drops some goal: no shift count changes that.
+      if (error instanceof MissionCoverageError) {
+        throw error;
+      }
+      return { plan: null, report, error };
+    }
+  };
+  const packedShifts = (plan: PlannedLaunches) => plan.virtueTanks?.pack.totalShifts ?? 0;
+  const planLaunches = (plan: PlannedLaunches) =>
+    (plan.virtueTanks?.units || []).reduce((sum, unit) => sum + Math.max(0, unit.launches), 0);
+  // The trade the slider makes: mission hours plus a penalty per shift and
+  // the effort of every launch.
+  const tankScore = (plan: PlannedLaunches) =>
+    virtueTankPlanScoreSeconds({ expectedHours: plan.expectedHours, shifts: packedShifts(plan), launches: planLaunches(plan) });
+
+  type CapAttempt = {
+    /** Within the cap when `fits`; otherwise the plan packing closest to it, if any. */
+    plan: PlannedLaunches | null;
+    fits: boolean;
+    /** No plan fits, and that is not proven. */
+    inconclusive: boolean;
+    error?: unknown;
+  };
+  // The fastest plan whose launches pack within `cap`. The first solve's
+  // loops are capped at `solveShiftCap` (the cap itself unless the caller
+  // knows the solve counts higher); when packing overshoots, the plan is
+  // re-solved with fewer refuel loops.
+  const planWithinCap = async (cap: number, solveShiftCap = cap): Promise<CapAttempt> => {
+    const first = await runPass("budget", cap, solveShiftCap);
+    if (!first.plan) {
+      return { plan: null, fits: false, inconclusive: first.report.inconclusive, error: first.error };
+    }
+    if (packedShifts(first.plan) <= cap) {
+      return { plan: first.plan, fits: true, inconclusive: false };
+    }
+    const tried = [first.plan];
+    let last = { plan: first.plan, report: first.report, solveShiftCap };
+    for (let retry = 0; retry < VIRTUE_TANK_MAX_PACK_RETRIES; retry += 1) {
+      const nextSolveShiftCap =
+        Math.min(last.solveShiftCap, last.report.solveShifts ?? last.solveShiftCap) - (packedShifts(last.plan) - cap);
+      if (nextSolveShiftCap < 0) {
+        break;
+      }
+      reportProgress("refinement", "Packing needs more shifts than the solve counted; re-solving with fewer refuel loops…");
+      const next = await runPass("budget", cap, nextSolveShiftCap);
+      if (!next.plan) {
+        break;
+      }
+      if (packedShifts(next.plan) <= cap) {
+        return { plan: next.plan, fits: true, inconclusive: false };
+      }
+      tried.push(next.plan);
+      last = { plan: next.plan, report: next.report, solveShiftCap: nextSolveShiftCap };
+    }
+    const closest = tried.reduce((best, plan) =>
+      packedShifts(plan) < packedShifts(best) || (packedShifts(plan) === packedShifts(best) && tankScore(plan) < tankScore(best))
+        ? plan
+        : best
+    );
+    return { plan: closest, fits: false, inconclusive: true };
+  };
+
+  type TankOutcome = {
+    neededShifts?: number;
+    proven?: boolean;
+    note?: string;
+    /** A plan with a few more shifts that scores clearly better (VirtueTankPlannerResult.fasterOption). */
+    faster?: PlannedLaunches;
+  };
+  const finish = (plan: PlannedLaunches, outcome: TankOutcome = {}): PlannedLaunches => {
+    const tanks = plan.virtueTanks!;
+    const neededShifts = outcome.neededShifts;
+    const notes = [...plan.notes];
+    const tankNotes = [...tanks.notes];
+    if (startMode === "current" && !tank.currentContents) {
+      tankNotes.push("No fuel tank reading came with the profile, so the plan starts from an empty tank.");
+    }
+    if (outcome.note) {
+      notes.unshift(outcome.note);
+      tankNotes.push(outcome.note);
+    }
+    if (neededShifts !== undefined) {
+      // Only a finished search proves the count; otherwise it is only the
+      // fewest the search found.
+      const overCapNote = outcome.proven
+        ? `These goals need at least ${neededShifts} shifts; the slider allows ${shiftCap}. Planned with ${neededShifts} shifts.`
+        : `No plan ${shiftCap > 0 ? `within ${shiftCap} shifts` : "without shifts"} was found; this plan takes ${neededShifts} shifts, and fewer may be possible.`;
+      notes.unshift(overCapNote);
+      if (!outcome.proven) {
+        tankNotes.push(overCapNote);
+      }
+    }
+    const faster = outcome.faster
+      ? { shifts: packedShifts(outcome.faster), expectedHours: outcome.faster.expectedHours }
+      : undefined;
+    if (faster) {
+      // Right after the over-cap line, or first within the cap.
+      notes.splice(
+        neededShifts !== undefined ? 1 : 0,
+        0,
+        `With ${faster.shifts} shifts the goals take about ${missionDurationLabel(
+          faster.expectedHours * 3600
+        )} instead of ${missionDurationLabel(plan.expectedHours * 3600)}.`
+      );
+    }
+    const result: PlannedLaunches = {
+      ...plan,
+      notes,
+      virtueTanks: {
+        ...tanks,
+        shiftCap,
+        plannedShiftCap: neededShifts ?? shiftCap,
+        overCap: neededShifts !== undefined,
+        ...(neededShifts !== undefined ? { neededShifts, neededShiftsProven: Boolean(outcome.proven) } : {}),
+        ...(faster ? { fasterOption: faster } : {}),
+        notes: tankNotes,
+      },
+    };
+    try {
+      plannerOptions.onBenchmarkSample?.({
+        targetItemId,
+        quantity: result.quantity,
+        priorityTime: result.priorityTime,
+        fastMode: Boolean(plannerOptions.fastMode),
+        wallMs: Math.max(0, Date.now() - startedAtMs),
+        expectedHours: result.expectedHours,
+        geCost: result.geCost,
+        path: "primary",
+      });
+    } catch {
+      // Ignore benchmark callback errors.
+    }
+    return result;
+  };
+  const fastestOf = (plans: PlannedLaunches[]) =>
+    plans.reduce<PlannedLaunches | undefined>(
+      (best, plan) => (!best || tankScore(plan) < tankScore(best) ? plan : best),
+      undefined
+    );
+  const fewestOf = (plans: PlannedLaunches[]) =>
+    plans.reduce((best, plan) =>
+      packedShifts(plan) < packedShifts(best) || (packedShifts(plan) === packedShifts(best) && tankScore(plan) < tankScore(best))
+        ? plan
+        : best
+    );
+  // A few more shifts than the plan's (the fewest over the cap, the cap
+  // within it) can be far faster: one more pass with the cap
+  // VIRTUE_FASTER_OPTION_EXTRA_SHIFTS above them (at most the slider's top
+  // detent) finds the best plan there.
+  // - Over the cap, the solve may count one past the pass's cap: its shift
+  //   count can run one above what packing takes (a plan the solve counts at
+  //   15 shifts can pack into 14), and packing still holds the plan to the
+  //   cap. The pass is skipped once the search has run
+  //   VIRTUE_TANK_FASTER_OPTION_SKIP_AFTER_SECONDS.
+  // - Within the cap, the pass makes the same solve as planning with the
+  //   slider at the pass's cap, so moving the slider there gives the offer
+  //   back (the offer nearly always packs into the pass's cap). The pass is
+  //   skipped once the search has run
+  //   VIRTUE_TANK_WITHIN_CAP_FASTER_SKIP_AFTER_SECONDS.
+  const fasterCapFor = (shifts: number) =>
+    Math.min(shifts + VIRTUE_FASTER_OPTION_EXTRA_SHIFTS, VIRTUE_SHIFT_CAP_DETENTS[VIRTUE_SHIFT_CAP_DETENTS.length - 1]);
+  const fasterPass = async (shifts: number, withinCap: boolean): Promise<PlannedLaunches | undefined> => {
+    const fasterCap = fasterCapFor(shifts);
+    if (fasterCap <= shifts) {
+      return undefined;
+    }
+    const elapsedMs = Date.now() - startedAtMs;
+    const maxSolveMs = Math.max(0, plannerOptions.maxSolveMs || 0);
+    const skipAfterSeconds = withinCap
+      ? VIRTUE_TANK_WITHIN_CAP_FASTER_SKIP_AFTER_SECONDS
+      : VIRTUE_TANK_FASTER_OPTION_SKIP_AFTER_SECONDS;
+    if (elapsedMs >= skipAfterSeconds * 1000 || (maxSolveMs > 0 && elapsedMs >= maxSolveMs)) {
+      return undefined;
+    }
+    reportProgress("refinement", `Checking whether up to ${fasterCap} shifts is much faster…`);
+    const attempt = await planWithinCap(fasterCap, withinCap ? fasterCap : fasterCap + 1);
+    return attempt.fits && attempt.plan ? attempt.plan : undefined;
+  };
+  // Within the cap, the faster pass is worth its time only on a plan that
+  // looks slow for its cap. A faster option packs into more shifts than the
+  // cap (and never exactly one), which puts a floor under its score; a plan
+  // that could not beat that floor by virtueFasterOptionQualifies is never
+  // checked. Past the floor, a plan looks slow when it flies more than
+  // VIRTUE_TANK_WITHIN_CAP_SLOW_LAUNCHES launches.
+  const withinCapLooksSlow = (plan: PlannedLaunches) => {
+    const floorSeconds = Math.max(2, shiftCap + 1) * VIRTUE_SHIFT_PENALTY_SECONDS;
+    if (!virtueFasterOptionQualifies(tankScore(plan), floorSeconds, true)) {
+      return false;
+    }
+    return planLaunches(plan) > VIRTUE_TANK_WITHIN_CAP_SLOW_LAUNCHES;
+  };
+  // A plan within the cap: when it looks slow and the search is young, the
+  // faster pass runs above the cap. What it finds within the cap replaces
+  // the plan when it scores better (a pass with more room can land on a
+  // better plan the cap allows too); past the cap it is offered as the
+  // faster option when virtueFasterOptionQualifies, as are plans the search
+  // already found there (`known`).
+  const finishWithinCap = async (
+    plan: PlannedLaunches,
+    known: PlannedLaunches[] = [],
+    noteFor?: (plan: PlannedLaunches) => string | undefined
+  ): Promise<PlannedLaunches> => {
+    const fasterCap = fasterCapFor(shiftCap);
+    const past = known.filter((entry) => packedShifts(entry) > shiftCap && packedShifts(entry) <= fasterCap);
+    let best = plan;
+    if (fasterCap > shiftCap && withinCapLooksSlow(plan)) {
+      let extra: PlannedLaunches | undefined;
+      try {
+        extra = await fasterPass(shiftCap, true);
+      } catch {
+        // The plan stands.
+      }
+      if (extra && packedShifts(extra) <= shiftCap) {
+        best = tankScore(extra) < tankScore(best) ? extra : best;
+      } else if (extra) {
+        past.push(extra);
+      }
+    }
+    const fastest = fastestOf(past);
+    const faster = fastest && virtueFasterOptionQualifies(tankScore(best), tankScore(fastest), true) ? fastest : undefined;
+    return finish(best, { note: noteFor?.(best), faster });
+  };
+  // The best of the plans found: the fastest within the cap (finishWithinCap),
+  // else the one with the fewest shifts, flagged over the cap. The faster
+  // pass runs then, and what it finds counts like the rest: a plan at (or
+  // under) the fewest shifts that scores better replaces it (solves at the
+  // minimum can stop on plans the model rates alike), one within the cap
+  // (after a search that did not finish) is the plan, and one with a few more
+  // shifts is offered as the faster option when virtueFasterOptionQualifies,
+  // counting its extra shifts and launches. `isProvenFewest` says the search
+  // ruled out every smaller shift count.
+  const settle = async (
+    plans: PlannedLaunches[],
+    isProvenFewest: (shifts: number) => boolean,
+    noteFor?: (plan: PlannedLaunches) => string | undefined
+  ): Promise<PlannedLaunches> => {
+    const withinCap = (all: PlannedLaunches[]) => fastestOf(all.filter((plan) => packedShifts(plan) <= shiftCap));
+    const fastestWithin = withinCap(plans);
+    if (fastestWithin) {
+      return finishWithinCap(fastestWithin, plans, noteFor);
+    }
+    const extra = await fasterPass(packedShifts(fewestOf(plans)), false);
+    const all = extra ? [...plans, extra] : plans;
+    const passWithin = withinCap(all);
+    if (passWithin) {
+      return finish(passWithin, { note: noteFor?.(passWithin) });
+    }
+    const fewest = fewestOf(all);
+    const neededShifts = packedShifts(fewest);
+    const fasterCap = fasterCapFor(neededShifts);
+    const best = fastestOf(all.filter((plan) => packedShifts(plan) > neededShifts && packedShifts(plan) <= fasterCap));
+    const faster = best && virtueFasterOptionQualifies(tankScore(fewest), tankScore(best), false) ? best : undefined;
+    return finish(fewest, { neededShifts, proven: isProvenFewest(neededShifts), note: noteFor?.(fewest), faster });
+  };
+
+  const atCap = await planWithinCap(shiftCap);
+  if (atCap.fits && atCap.plan) {
+    const atCapShifts = packedShifts(atCap.plan);
+    if (atCapShifts >= 2 && Date.now() - startedAtMs < VIRTUE_TANK_FEWER_SHIFTS_CHECK_MAX_ELAPSED_SECONDS * 1000) {
+      reportProgress("refinement", `Checking whether fewer than ${atCapShifts} shifts is faster…`);
+      try {
+        const fewer = await planWithinCap(atCapShifts - 1);
+        if (fewer.fits && fewer.plan && tankScore(fewer.plan) < tankScore(atCap.plan)) {
+          return finishWithinCap(fewer.plan);
+        }
+      } catch {
+        // The at-cap plan stands.
+      }
+    }
+    return finishWithinCap(atCap.plan);
+  }
+  // Plans that meet the goals but pack above the cap. The at-cap one only
+  // lands here when packing overshot every re-solve.
+  const found: PlannedLaunches[] = [];
+  if (atCap.plan) {
+    found.push(atCap.plan);
+  }
+  const noteFor = (plan: PlannedLaunches): string | undefined => {
+    if (plan === atCap.plan) {
+      return `Packing these launches into tanks takes ${packedShifts(plan)} shifts, more than the cap of ${shiftCap}; no re-solve with fewer refuel loops fit it.`;
+    }
+    if (atCap.inconclusive && packedShifts(plan) <= shiftCap) {
+      return `Planning with up to ${shiftCap} shifts did not finish, so this plan is built around the fewest shifts that reach the goals (${packedShifts(plan)}).`;
+    }
+    return undefined;
+  };
+
+  // Shift counts ruled out so far: every count up to this one failed a solve
+  // that models all its loops one by one, so a plan one shift above it takes
+  // the fewest shifts. Proof needs a failed cap, not a timed-out one. No plan
+  // takes exactly one shift (a loop takes two), so ruling out 0 rules out 1.
+  let ruledOutThrough =
+    !atCap.inconclusive && !atCap.plan && virtueTankLoopLayout(shiftCap).exact ? Math.max(1, shiftCap) : -1;
+  // Once the cap fails, goals just past it are cheapest to find by trying the
+  // next caps in turn: a cap too low fails in screening, and a cap that fits
+  // yields the fastest plan there. A loop takes at least two shifts, so a cap
+  // of 1 is the same as 0. Caps the solve can still rule out with proof are
+  // always tried; past them, only a few.
+  if (!atCap.inconclusive && !atCap.plan) {
+    let cap = Math.max(2, shiftCap + 1);
+    for (
+      let step = 0;
+      step < VIRTUE_TANK_CAP_SCAN_STEPS || (ruledOutThrough === cap - 1 && virtueTankLoopLayout(cap).exact);
+      step += 1, cap += 1
+    ) {
+      reportProgress("refinement", `Trying ${cap} shifts…`);
+      const attempt = await planWithinCap(cap);
+      if (attempt.fits && attempt.plan) {
+        return settle([...found, attempt.plan], (shifts) => shifts === ruledOutThrough + 1, noteFor);
+      }
+      if (attempt.plan) {
+        found.push(attempt.plan);
+      }
+      if (attempt.inconclusive || attempt.plan) {
+        break;
+      }
+      if (ruledOutThrough === cap - 1 && virtueTankLoopLayout(cap).exact) {
+        ruledOutThrough = cap;
+      }
+    }
+  }
+
+  // Fewest shifts that meet every goal: demand is hard and each shift
+  // outweighs any mission time, so the count comes out lexicographically
+  // minimal. It is proven when every solve finished, packing agrees with it,
+  // and it is small enough that loops past the ones modeled one by one could
+  // not do better.
+  reportProgress("refinement", "Finding the fewest shifts that reach the goals…");
+  const search = await runPass("minShift", shiftCap, null);
+  let fewest = search.plan;
+  let fewestProven =
+    fewest !== null &&
+    !search.report.inconclusive &&
+    search.report.solveShifts === packedShifts(fewest) &&
+    packedShifts(fewest) < 2 * (VIRTUE_TANK_INDIVIDUAL_LOOPS + 1);
+  if (!fewest) {
+    // Either no shift count meets the goals (something has no drop source) or
+    // the search ran out of time. An open-cap pass that may leave goals unmet
+    // tells the two apart, and names what cannot be met.
+    const open = await runPass("budget", shiftCap, null, true);
+    if (!open.plan) {
+      throw atCap.error ?? search.error ?? open.error ?? new Error("Path of Virtue tank planning found no plan that meets the goals.");
+    }
+    if (open.plan.unmetItems.length > 0) {
+      throw new MissionCoverageError(open.plan.unmetItems.map((item) => itemIdToCanonicalKey(item.itemId)));
+    }
+    fewest = open.plan;
+    fewestProven = false;
+  }
+  found.push(fewest);
+
+  // The fewest-shifts search stops as soon as its count is proven, so its
+  // mission time is whatever its first plan had: re-plan with the time
+  // objective at the shifts that plan takes (or the solve counted for it),
+  // keeping the result if it packs within the cap, or within that count when
+  // the cap is too low.
+  const fewestShifts = Math.max(packedShifts(fewest), solveShiftsByPlan.get(fewest) ?? 0);
+  const target = Math.max(shiftCap, packedShifts(fewest));
+  reportProgress("refinement", `Planning the fastest route within ${Math.min(target, fewestShifts)} shifts…`);
+  const replan = await planWithinCap(target, fewestShifts);
+  if (replan.fits && replan.plan) {
+    found.push(replan.plan);
+  }
+  const fewestPacked = packedShifts(fewest);
+  return settle(
+    found,
+    (shifts) => shifts === ruledOutThrough + 1 || (fewestProven && shifts === fewestPacked),
+    noteFor
+  );
 }
 
 function mergeInventory(inventory: Inventory, extra: Record<string, number>): Inventory {
@@ -4746,6 +6108,9 @@ function inAirLaneLoads(rows: InFlightMissionRow[]): number[] {
 }
 
 function withInFlightSchedule(result: PlannedLaunches, inFlight: InFlightProjection): PlannerResult {
+  if (result.virtueTanks) {
+    return withVirtueTankSchedule(result, inFlight);
+  }
   const missionSeconds = Math.max(0, Math.round(result.expectedHours * 3600));
   if (inFlight.missionCount === 0) {
     return {
@@ -4769,22 +6134,7 @@ function withInFlightSchedule(result: PlannedLaunches, inFlight: InFlightProject
 
   return {
     ...result,
-    missions: [
-      ...result.missions,
-      ...inFlight.rows.map((row) => ({
-        missionId: row.missionId,
-        ship: row.ship,
-        durationType: row.durationType,
-        level: row.level,
-        targetAfxId: row.targetAfxId,
-        launches: row.launches,
-        durationSeconds: row.durationSeconds,
-        expectedYields: row.expectedYields,
-        inAir: true,
-        secondsRemaining: row.secondsRemaining,
-        launchSecondsRemaining: row.launchSecondsRemaining,
-      })),
-    ],
+    missions: [...result.missions, ...inAirMissionRows(result.missions, inFlight)],
     inFlight: {
       missionCount: inFlight.missionCount,
       secondsRemaining: inFlight.secondsRemaining,
@@ -4797,18 +6147,66 @@ function withInFlightSchedule(result: PlannedLaunches, inFlight: InFlightProject
   };
 }
 
+function inAirMissionRows(plannedRows: PlanMissionRow[], inFlight: InFlightProjection): PlanMissionRow[] {
+  const usedRowKeys = new Set(plannedRows.flatMap((row) => (row.rowKey ? [row.rowKey] : [])));
+  return inFlight.rows.map((row) => ({
+    missionId: row.missionId,
+    ship: row.ship,
+    durationType: row.durationType,
+    level: row.level,
+    targetAfxId: row.targetAfxId,
+    launches: row.launches,
+    durationSeconds: row.durationSeconds,
+    expectedYields: row.expectedYields,
+    inAir: true,
+    secondsRemaining: row.secondsRemaining,
+    launchSecondsRemaining: row.launchSecondsRemaining,
+    rowKey: claimUniqueRowKey(`${missionRowKeyBase(row)}|air`, usedRowKeys),
+  }));
+}
+
+/**
+ * Tank mode: the packed schedule already seeds the lanes with the in-air
+ * ships, so `expectedHours` runs from now; `missionSeconds` replays the same
+ * launch order on empty lanes.
+ */
+function withVirtueTankSchedule(result: PlannedLaunches, inFlight: InFlightProjection): PlannerResult {
+  const { units, pack } = result.virtueTanks!;
+  const durations: Record<string, number> = {};
+  for (const unit of units) {
+    durations[unit.id] = unit.durationSeconds;
+  }
+  const missionSeconds = Math.round(scheduleVirtueLaunches(pack.launchOrder, { durations }).makespanSeconds);
+  return {
+    ...result,
+    missions: [...result.missions, ...inAirMissionRows(result.missions, inFlight)],
+    inFlight: {
+      missionCount: inFlight.missionCount,
+      secondsRemaining: inFlight.secondsRemaining,
+    },
+    schedule: {
+      missionSeconds,
+      inAirSeconds: inFlight.secondsRemaining,
+      totalSeconds: Math.round(Math.max(pack.schedule.makespanSeconds, inFlight.secondsRemaining)),
+    },
+  };
+}
+
 async function planForNewLaunches(
   profile: PlayerProfile,
   targetItemId: string,
   quantity: number,
   priorityTimeRaw: number,
-  plannerOptions: PlannerOptions = {}
+  plannerOptions: PlannerOptions = {},
+  tankRun?: VirtueTankRun
 ): Promise<PlannedLaunches> {
   const normalizedTargets = normalizePlannerTargets(targetItemId, quantity, plannerOptions.targets, profile.craftCounts);
   const craftFloorByItem = normalizedTargets.craftFloorByItem;
   const hasCraftGoals = normalizedTargets.craftGoalTotals.size > 0;
   const targetKey = normalizedTargets.primaryTargetKey;
-  const priorityTime = Math.max(0, Math.min(1, priorityTimeRaw));
+  // Tank mode swaps the fuel/time slider for the shift cap: mission time is the
+  // whole objective, and fuel only counts through the shifts it forces.
+  const priorityTime = tankRun ? 1 : Math.max(0, Math.min(1, priorityTimeRaw));
   const objectiveContext = normalizeObjectiveContext(
     plannerOptions.objectiveMode,
     priorityTime,
@@ -4823,9 +6221,11 @@ async function planForNewLaunches(
   const selectedConsumptionItemKeys = normalizeConsumptionItemKeys(plannerOptions.selectedConsumptionItemIds);
   const multiTargetScaleFactor = multiTarget ? targetDemandGcd(normalizedTargets.targetDemandByItem) : 1;
   // Both accelerations solve a scaled-down block and multiply the result back
-  // up; a craft-count floor does not scale with the block, so skip them.
+  // up; a craft-count floor does not scale with the block, and neither do
+  // tank loops, so skip them for both.
   const singleTargetFastQuantityAcceleration =
     fastMode &&
+    !tankRun &&
     !multiTarget &&
     !hasCraftGoals &&
     normalizedTargets.demandTargets.length === 1 &&
@@ -4833,6 +6233,7 @@ async function planForNewLaunches(
     quantityInt >= FAST_QUANTITY_ACCELERATION_MIN_QUANTITY;
   const multiTargetFastQuantityAcceleration =
     fastMode &&
+    !tankRun &&
     multiTarget &&
     !hasCraftGoals &&
     !plannerOptions.disableFastQuantityAcceleration &&
@@ -4883,6 +6284,7 @@ async function planForNewLaunches(
   };
   const maxSolveMs = Math.max(0, Math.round(plannerOptions.maxSolveMs || 0));
   const startedAtMs = Date.now();
+  const progressStartedAtMs = tankRun?.startedAtMs ?? startedAtMs;
   const reportProgress = (
     event: Omit<PlannerProgressEvent, "elapsedMs"> & { elapsedMs?: number }
   ) => {
@@ -4892,7 +6294,7 @@ async function planForNewLaunches(
     try {
       plannerOptions.onProgress({
         ...event,
-        elapsedMs: event.elapsedMs ?? Date.now() - startedAtMs,
+        elapsedMs: event.elapsedMs ?? Date.now() - progressStartedAtMs,
       });
     } catch {
       // Ignore progress callback errors.
@@ -4908,8 +6310,10 @@ async function planForNewLaunches(
   };
 
   let fastIncumbentResult: PlannedLaunches | null = null;
+  // The fast incumbent plans without the tank, so tank mode never adopts it.
   if (
     !fastMode &&
+    !tankRun &&
     ENABLE_NORMAL_FAST_INCUMBENT_COMPARISON &&
     !plannerOptions.disableNormalFastIncumbent &&
     quantityInt >= FAST_QUANTITY_ACCELERATION_MIN_QUANTITY
@@ -5005,7 +6409,14 @@ async function planForNewLaunches(
         (fastMode ? MISSION_YIELD_INDEX_TOP_PER_ITEM_FAST : MISSION_YIELD_INDEX_TOP_PER_ITEM_NORMAL)
     )
   );
-  const missionActionFilter = missionYieldIndexEnabled(plannerOptions.disableMissionYieldIndex, injectedLootData)
+  // Tank mode never uses the yield index: tank solves count an infeasible cap
+  // as proof that the goals need more shifts, and the index's top pairs per
+  // item (ranked on time alone) can drop the fuel-light launches a low cap
+  // needs, so /api/plan claimed minimums the page beat. It prunes its actions
+  // for fuel as well as time instead (pruneVirtueTankActions), the same on
+  // every path.
+  const missionActionFilter =
+    !tankRun && missionYieldIndexEnabled(plannerOptions.disableMissionYieldIndex, injectedLootData)
     ? buildMissionActionFilterFromYieldIndex({
         relevantItems: closure,
         missionDropRarities,
@@ -5041,6 +6452,18 @@ async function planForNewLaunches(
     `mode:${objectiveMode}:${priorityTime <= SCORE_EPS ? "ge" : "mix"}:${objectiveContext.minimumTimePriority}`,
     `fast:${fastMode ? 1 : 0}`,
     `filter:${missionActionFilter?.key || "none"}`,
+    `tank:${
+      tankRun
+        ? [
+            tankRun.objective,
+            tankRun.softDemand ? "soft" : "hard",
+            tankRun.solveShiftCap ?? "open",
+            tankRun.startMode,
+            tankRun.capacity,
+            ...VIRTUE_REFILL_ROUTE_ORDER.map((egg) => Math.round(tankRun.currentContents[egg] || 0)),
+          ].join(":")
+        : "none"
+    }`,
   ].join("::");
   const preferredCandidateFingerprint = bestCandidateFingerprintCache.get(candidateReuseKey);
   if (preferredCandidateFingerprint) {
@@ -5161,6 +6584,10 @@ async function planForNewLaunches(
     let completedCandidateCount = 0;
     let timeBudgetExceeded = false;
     let indexFilteredActionCount = baseActionsEntry.indexFilteredCount;
+    // Tank mode, which never uses the yield index to narrow the actions.
+    const virtueTankActionPruning = Boolean(tankRun) && !missionActionFilter;
+    const virtueTankActionCounts = { before: 0, after: 0, fullChecksWon: 0 };
+    const prunedActionCache = new Map<string, MissionAction[]>();
     let indexCoverageRepairActionCount = baseActionsEntry.coverageRepairCount;
     const candidateLoopStartedAtMs = Date.now();
     const estimateCandidateEtaMs = (): number | null => {
@@ -5209,6 +6636,14 @@ async function planForNewLaunches(
       /** Prep launches excluded from the solve's missionCounts; counted back into
        *  totalLaunches so uncredited prep can't win a launch-count tiebreak. */
       prepNoYieldLaunches: number;
+      /** The same launches by option: tank mode still has to fuel them. */
+      prepNoYieldOptions: Array<{ option: MissionOption; launches: number }>;
+      /**
+       * Tank mode without the yield index: the pruned subset of
+       * `candidateActions` the solves start from (pruneVirtueTankActions).
+       * Plans still read their launches against `candidateActions`.
+       */
+      solveActions?: MissionAction[];
     };
     type MilpSolveProgressContext = {
       prefix: string;
@@ -5273,6 +6708,7 @@ async function planForNewLaunches(
       const requiredMissionLaunches: Record<string, RequiredMissionLaunchConstraint> = {};
       let prepNoYieldSlotSeconds = 0;
       let prepNoYieldLaunches = 0;
+      const prepNoYieldOptions: CandidateEvalInput["prepNoYieldOptions"] = [];
       for (const [optionKey, requirement] of prepRequirements.entries()) {
         if (requirement.launches <= 0) {
           continue;
@@ -5280,6 +6716,7 @@ async function planForNewLaunches(
         if (!actionOptionKeys.has(optionKey)) {
           prepNoYieldSlotSeconds += requirement.launches * requirement.option.durationSeconds;
           prepNoYieldLaunches += requirement.launches;
+          prepNoYieldOptions.push({ option: requirement.option, launches: requirement.launches });
           continue;
         }
         addRequiredLaunchConstraint(
@@ -5289,7 +6726,7 @@ async function planForNewLaunches(
           !finalOptionKeys.has(optionKey)
         );
       }
-      return {
+      const input: CandidateEvalInput = {
         candidate,
         candidateActions,
         requiredMissionLaunches,
@@ -5297,13 +6734,119 @@ async function planForNewLaunches(
         phasedChainConstraints: phased.phaseChains,
         prepNoYieldSlotSeconds,
         prepNoYieldLaunches,
+        prepNoYieldOptions,
       };
+      if (!virtueTankActionPruning) {
+        return input;
+      }
+      // Pruning keeps every action of the prep options, so which prep
+      // launches have drops (worked out above) is unchanged.
+      let pruned = prunedActionCache.get(candidateKey);
+      if (!pruned) {
+        pruned = pruneVirtueTankActions(candidateActions, {
+          topPerItem: VIRTUE_TANK_ACTION_TOP_PER_ITEM,
+          keepOptionKeys: new Set(prepRequirements.keys()),
+          phaseChains: phased.phaseChains,
+        });
+        virtueTankActionCounts.before += candidateActions.length;
+        virtueTankActionCounts.after += pruned.length;
+        prunedActionCache.set(candidateKey, pruned);
+      }
+      return pruned.length < candidateActions.length ? { ...input, solveActions: pruned } : input;
+    };
+
+    // What a candidate's no-yield prep adds to its tank score, which its
+    // solve objective leaves out: that share of the prep's slot time over
+    // three slots, plus its launch effort.
+    const tankPrepObjective = (input: CandidateEvalInput, slotTimeWeight: number): number =>
+      ((slotTimeWeight * input.prepNoYieldSlotSeconds) / 3 + VIRTUE_LAUNCH_EFFORT_SECONDS * input.prepNoYieldLaunches) /
+      Math.max(1, timeRef);
+    type TankSolveHints = Pick<VirtueTankSolveOptions, "shiftFloor" | "objectiveCutoff">;
+    const tankSolveOptions = (input: CandidateEvalInput, hints: TankSolveHints = {}): VirtueTankSolveOptions | undefined =>
+      tankRun
+        ? {
+            capacity: tankRun.capacity,
+            startMode: tankRun.startMode,
+            currentContents: tankRun.currentContents,
+            shiftCap: tankRun.solveShiftCap,
+            objective: tankRun.objective,
+            softDemand: tankRun.softDemand,
+            fixedLaunches: input.prepNoYieldOptions.map(({ option, launches }) => ({
+              ship: option.ship,
+              durationType: option.durationType,
+              durationSeconds: option.durationSeconds,
+              launches,
+            })),
+            ...hints,
+          }
+        : undefined;
+    // In the fewest-shifts search a screening solve that reached optimality
+    // proves its shift count is the least the candidate can do: its loop
+    // counts are integer and only the launches are relaxed.
+    // Once a candidate has an integer plan, later ones only need to beat its
+    // objective (within the tie tolerance the comparison uses anyway). Plans
+    // are compared with their no-yield prep time, which the solve objective
+    // leaves out, so the cutoff moves by the difference in it.
+    const tankSolveHintsFor = (screened: {
+      input: CandidateEvalInput;
+      unified: UnifiedPlan;
+      solveMetrics: UnifiedSolveMetrics | null;
+    }): TankSolveHints => {
+      if (!tankRun) {
+        return {};
+      }
+      const hints: TankSolveHints = {};
+      if (tankRun.objective === "minShift" && screened.solveMetrics?.status === "Optimal") {
+        hints.shiftFloor = screened.unified.virtueShifts;
+      }
+      if (best && Number.isFinite(best.weightedScore)) {
+        // A plan's score is at least its solve objective (slot time over
+        // three slots, launch effort and shifts) plus the no-yield prep time
+        // and launch effort the solve leaves out.
+        hints.objectiveCutoff =
+          best.weightedScore * (1 + PLAN_SCORE_TIE_TOLERANCE_FRACTION) -
+          tankPrepObjective(screened.input, 1) +
+          SCORE_EPS;
+      }
+      return hints;
+    };
+    const tankMakespanSeconds = (input: CandidateEvalInput, unified: UnifiedPlan): number =>
+      virtueTankMakespanBound([
+        ...input.candidateActions.map((action) => ({
+          durationSeconds: action.durationSeconds,
+          launches: unified.missionCounts[action.key] || 0,
+        })),
+        ...input.prepNoYieldOptions.map(({ option, launches }) => ({ durationSeconds: option.durationSeconds, launches })),
+      ]);
+    // Tank mode scores a plan as mission time plus its shifts and launches:
+    // VIRTUE_SHIFT_PENALTY_SECONDS per shift and VIRTUE_LAUNCH_EFFORT_SECONDS
+    // per launch (prep included), with mission time the makespan bound
+    // blended with slot time over three slots (VIRTUE_TANK_SLOT_TIME_WEIGHT);
+    // or slot time, launch effort and an overwhelming weight per shift in the
+    // fewest-shifts search. Either way it is at least the solve objective's
+    // slot time and launch effort.
+    const virtueTankScore = (input: CandidateEvalInput, unified: UnifiedPlan, totalSlotSeconds: number): number => {
+      const shifts = Math.max(0, unified.virtueShifts || 0);
+      const launches =
+        Object.values(unified.missionCounts).reduce((sum, count) => sum + Math.max(0, Math.round(count)), 0) +
+        input.prepNoYieldLaunches;
+      const launchEffortSeconds = VIRTUE_LAUNCH_EFFORT_SECONDS * launches;
+      if (tankRun?.objective === "minShift") {
+        return (
+          (totalSlotSeconds / 3 + launchEffortSeconds + VIRTUE_TANK_MIN_SHIFT_WEIGHT * Math.max(1, timeRef) * shifts) /
+          Math.max(1, timeRef)
+        );
+      }
+      const missionSeconds =
+        (1 - VIRTUE_TANK_SLOT_TIME_WEIGHT) * tankMakespanSeconds(input, unified) + (VIRTUE_TANK_SLOT_TIME_WEIGHT * totalSlotSeconds) / 3;
+      return (missionSeconds + launchEffortSeconds + VIRTUE_SHIFT_PENALTY_SECONDS * shifts) / Math.max(1, timeRef);
     };
 
     const solveCandidateInput = async (
       input: CandidateEvalInput,
       lpRelaxation: boolean,
-      milpProgressContext?: MilpSolveProgressContext
+      milpProgressContext?: MilpSolveProgressContext,
+      tankHints?: TankSolveHints
     ) => {
       const geOnlyCandidateMilp = objectiveMode === "ge" && !lpRelaxation && priorityTime <= SCORE_EPS;
       if (!lpRelaxation) {
@@ -5313,7 +6856,19 @@ async function planForNewLaunches(
         );
       }
       let baselineSolveMetrics: UnifiedSolveMetrics | null = null;
-      const baselineUnified = await solveUnifiedCraftMissionPlan({
+      // Tank mode without the yield index solves over the pruned actions (all
+      // of them when the check below wins); plans read their launches
+      // against input.candidateActions, which holds them all.
+      let solveActions = input.solveActions ?? input.candidateActions;
+      // An optional solve (one that only tries to improve on a plan in hand)
+      // neither replaces the baseline's metrics nor, stopping short, makes a
+      // tank pass inconclusive.
+      const solveBaseline = (
+        virtueTank: VirtueTankSolveOptions | undefined,
+        timeLimitSeconds?: number,
+        actions: MissionAction[] = solveActions,
+        optional = false
+      ) => solveUnifiedCraftMissionPlan({
         profile: representativeBlockProfile,
         targetKey,
         quantity: solveQuantity,
@@ -5321,7 +6876,7 @@ async function planForNewLaunches(
         objectiveMode,
         minimumTimePriority: objectiveContext.minimumTimePriority,
         closure,
-        actions: input.candidateActions,
+        actions,
         geRef,
         fuelRef,
         timeRef,
@@ -5329,23 +6884,103 @@ async function planForNewLaunches(
         maxMissionLaunchesByOption: input.maxMissionLaunchesByOption,
         phasedChainConstraints: input.phasedChainConstraints,
         lpRelaxation,
+        timeLimitSeconds,
         strictGeObjective: geOnlyCandidateMilp,
         targetCraftedOnly,
         targetCraftedOnlyKeys: targetCraftedOnly ? normalizedTargets.targetCraftedOnlyKeys : undefined,
         consumptionOptions,
         craftSkeleton,
+        virtueTank,
         solverFn,
         onSolveMetrics: (metrics) => {
-          baselineSolveMetrics = metrics;
+          if (!optional) {
+            baselineSolveMetrics = metrics;
+          }
           if (lpRelaxation) {
             recordSolveMetrics(lpSolveStats, metrics);
           } else {
             recordSolveMetrics(milpSolveStats, metrics);
           }
+          // Infeasible is a proof too; anything else short of Optimal is not.
+          if (tankRun && !optional && metrics.status !== "Optimal" && metrics.status !== "Infeasible") {
+            tankRun.report.inconclusive = true;
+          }
         },
       });
+      let baselineUnified = await solveBaseline(tankSolveOptions(input, tankHints));
+      // Pruning ranks targets one item at a time, so it can drop the target
+      // whose mix of drops fills out a plan best (a short launch that tops
+      // up what the long ones leave, say). A pruned solve that finished
+      // quickly is checked against one over every action, which has to beat
+      // it; a slow one keeps its plan, as the full solve would only run into
+      // its time limit.
+      const prunedMetrics = baselineSolveMetrics as UnifiedSolveMetrics | null;
+      const prunedObjective = baselineUnified.objectiveValue;
+      if (
+        tankRun?.objective === "budget" &&
+        !lpRelaxation &&
+        input.solveActions &&
+        prunedMetrics?.status === "Optimal" &&
+        prunedMetrics.elapsedMs <= VIRTUE_TANK_FULL_CHECK_MAX_PRUNED_SECONDS * 1000 &&
+        prunedObjective !== undefined &&
+        prunedObjective > 0
+      ) {
+        await emitMilpStageProgress(milpProgressContext, "Integer-constrained solve (every mission)");
+        try {
+          const full = await solveBaseline(
+            {
+              ...tankSolveOptions(input, { shiftFloor: tankHints?.shiftFloor })!,
+              objectiveCutoff: prunedObjective * (1 - PLAN_SCORE_TIE_TOLERANCE_FRACTION),
+            },
+            VIRTUE_TANK_FULL_CHECK_TIME_LIMIT_SECONDS,
+            input.candidateActions,
+            true
+          );
+          if (
+            virtueTankScore(input, full, input.prepNoYieldSlotSeconds + full.totalSlotSeconds) <
+            virtueTankScore(input, baselineUnified, input.prepNoYieldSlotSeconds + baselineUnified.totalSlotSeconds)
+          ) {
+            baselineUnified = full;
+            solveActions = input.candidateActions;
+            virtueTankActionCounts.fullChecksWon += 1;
+          }
+        } catch {
+          // Nothing beats the pruned plan.
+        }
+      }
       let unified = baselineUnified;
       let solveMetrics = baselineSolveMetrics;
+      // Tank mode: slot time over three slots misjudges a plan of a few long
+      // missions (one 38h mission reads as 13h). When this plan's rounds say
+      // it did, re-solve with them in the objective. When they do not, the
+      // plan is the fastest by the rounds too, since slot time never exceeds them.
+      if (tankRun?.objective === "budget" && !lpRelaxation) {
+        const baselineSlotSeconds = input.prepNoYieldSlotSeconds + baselineUnified.totalSlotSeconds;
+        if (tankMakespanSeconds(input, baselineUnified) > (baselineSlotSeconds / 3) * (1 + PLAN_SCORE_TIE_TOLERANCE_FRACTION) + 1) {
+          const baselineScore = virtueTankScore(input, baselineUnified, baselineSlotSeconds);
+          const scoreLimit = Math.min(baselineScore, best ? best.weightedScore : Number.POSITIVE_INFINITY);
+          // The rounds count the prep launches; their slot time and launch
+          // effort are left out.
+          const prepObjective = tankPrepObjective(input, VIRTUE_TANK_SLOT_TIME_WEIGHT);
+          await emitMilpStageProgress(milpProgressContext, "Integer-constrained solve (mission rounds)");
+          try {
+            const rounded = await solveBaseline(
+              {
+                ...tankSolveOptions(input, { shiftFloor: tankHints?.shiftFloor })!,
+                makespanRounds: true,
+                objectiveCutoff: scoreLimit * (1 + PLAN_SCORE_TIE_TOLERANCE_FRACTION) - prepObjective + SCORE_EPS,
+              },
+              VIRTUE_TANK_ROUNDS_TIME_LIMIT_SECONDS
+            );
+            if (virtueTankScore(input, rounded, input.prepNoYieldSlotSeconds + rounded.totalSlotSeconds) < baselineScore) {
+              unified = rounded;
+              solveMetrics = baselineSolveMetrics;
+            }
+          } catch {
+            // Nothing beats the slot-time plan on its rounds.
+          }
+        }
+      }
       if (geOnlyCandidateMilp) {
         await emitMilpStageProgress(milpProgressContext, "Time tie-break solve (within lowest GE)");
         let tieBreakSolveMetrics: UnifiedSolveMetrics | null = null;
@@ -5385,13 +7020,15 @@ async function planForNewLaunches(
       }
       const totalSlotSeconds = input.prepNoYieldSlotSeconds + unified.totalSlotSeconds;
       const fuelCost = missionFuelCost(input.candidateActions, unified.missionCounts);
-      const weightedScore = normalizedObjectiveScore(
-        objectiveResourceCost(objectiveContext, unified.geCost, fuelCost),
-        totalSlotSeconds / 3,
-        objectiveContext,
-        objectiveMode === "virtueFuel" ? fuelRef : geRef,
-        timeRef
-      );
+      const weightedScore = tankRun
+        ? virtueTankScore(input, unified, totalSlotSeconds)
+        : normalizedObjectiveScore(
+            objectiveResourceCost(objectiveContext, unified.geCost, fuelCost),
+            totalSlotSeconds / 3,
+            objectiveContext,
+            objectiveMode === "virtueFuel" ? fuelRef : geRef,
+            timeRef
+          );
       const unmetTotal = Object.values(unified.remainingDemand).reduce((sum, qty) => sum + Math.max(0, qty), 0);
       const totalLaunches =
         Object.values(unified.missionCounts).reduce(
@@ -5427,6 +7064,19 @@ async function planForNewLaunches(
       const unmetDiff = a.unmetTotal - b.unmetTotal;
       if (Math.abs(unmetDiff) > 1e-6) {
         return unmetDiff;
+      }
+
+      if (tankRun) {
+        // weightedScore already folds the shifts and launch effort into mission time.
+        const tankScoreDiff = a.weightedScore - b.weightedScore;
+        const tankScoreScale = Math.max(SCORE_EPS, Math.min(Math.abs(a.weightedScore), Math.abs(b.weightedScore)));
+        if (Math.abs(tankScoreDiff) > Math.max(SCORE_EPS, tankScoreScale * PLAN_SCORE_TIE_TOLERANCE_FRACTION)) {
+          return tankScoreDiff;
+        }
+        if (Math.abs(a.totalSlotSeconds - b.totalSlotSeconds) > SCORE_EPS) {
+          return a.totalSlotSeconds - b.totalSlotSeconds;
+        }
+        return a.totalLaunches - b.totalLaunches;
       }
 
       const resourceA = objectiveResourceCost(objectiveContext, a.geCost, a.fuelCost);
@@ -5755,6 +7405,10 @@ async function planForNewLaunches(
 
     const tryScaledQuantityIncumbent = async (): Promise<void> => {
       if (fastMode || geOnlyMode || quantityInt < FAST_QUANTITY_ACCELERATION_MIN_QUANTITY) {
+        return;
+      }
+      // Scaling a block multiplies its launches but not its tank loops.
+      if (tankRun) {
         return;
       }
       // The block screen solves a scaled-down slice with no closure inventory;
@@ -6128,13 +7782,18 @@ async function planForNewLaunches(
 
           const { input } = fastMilpCandidates[resolveIndex];
           try {
-            const result = await solveCandidateInput(input, false, {
-              prefix: "Fast mode: ",
-              candidateIndex: resolveIndex + 1,
-              candidateTotal: fastMilpCandidates.length,
-              completed: fastMilpCompleted,
-              etaMs: estimateBatchEtaMs(fastMilpStartedAtMs, fastMilpCompleted, fastMilpCandidates.length),
-            });
+            const result = await solveCandidateInput(
+              input,
+              false,
+              {
+                prefix: "Fast mode: ",
+                candidateIndex: resolveIndex + 1,
+                candidateTotal: fastMilpCandidates.length,
+                completed: fastMilpCompleted,
+                etaMs: estimateBatchEtaMs(fastMilpStartedAtMs, fastMilpCompleted, fastMilpCandidates.length),
+              },
+              tankSolveHintsFor(fastMilpCandidates[resolveIndex])
+            );
             if (shouldReplaceBest(best, result)) {
               best = {
                 candidate: input.candidate,
@@ -6166,7 +7825,9 @@ async function planForNewLaunches(
           await yieldForProgressFlush();
         }
       }
-      if (!best) {
+      // A rounded relaxed plan knows nothing about whole tanks and loops, so
+      // tank mode never falls back to one.
+      if (!best && !tankRun) {
         const bestLp = lpScreened[0];
         if (bestLp) {
           best = {
@@ -6213,13 +7874,18 @@ async function planForNewLaunches(
 
         const { input } = milpCandidates[resolveIndex];
         try {
-          const result = await solveCandidateInput(input, false, {
-            prefix: "",
-            candidateIndex: resolveIndex + 1,
-            candidateTotal: milpCandidates.length,
-            completed: milpCompleted,
-            etaMs: estimateBatchEtaMs(milpStartedAtMs, milpCompleted, milpCandidates.length),
-          });
+          const result = await solveCandidateInput(
+            input,
+            false,
+            {
+              prefix: "",
+              candidateIndex: resolveIndex + 1,
+              candidateTotal: milpCandidates.length,
+              completed: milpCompleted,
+              etaMs: estimateBatchEtaMs(milpStartedAtMs, milpCompleted, milpCandidates.length),
+            },
+            tankSolveHintsFor(milpCandidates[resolveIndex])
+          );
           if (shouldReplaceBest(best, result)) {
             best = {
               candidate: input.candidate,
@@ -6253,6 +7919,14 @@ async function planForNewLaunches(
     }
 
     if (!best) {
+      // Candidates the screening kept but no integer solve reached could
+      // still have a plan, so this failure proves nothing about the cap.
+      if (
+        tankRun &&
+        (timeBudgetExceeded || prunedCandidateCount > 0 || lpScreened.length > (fastMode ? 1 : LP_SCREENING_MILP_RESOLVES))
+      ) {
+        tankRun.report.inconclusive = true;
+      }
       const details = solverErrors.length > 0 ? solverErrors[0] : "no feasible horizon candidate";
       throw new Error(`unified HiGHS solve failed across all horizon candidates (${details})`);
     }
@@ -6260,7 +7934,10 @@ async function planForNewLaunches(
     // A prep candidate can win on near-tie noise while its plan never touches the
     // ship states the prep paid for. In that case the no-prep state is at least as
     // good by construction, so prefer it unless the solver says it's strictly worse.
+    // The fewest-shifts search skips this: its plan is only a shift count to
+    // re-plan at.
     if (
+      tankRun?.objective !== "minShift" &&
       best.candidate.prepSteps.length > 0 &&
       !planUsesPrepProgression({
         candidate: best.candidate,
@@ -6280,7 +7957,12 @@ async function planForNewLaunches(
         try {
           const noPrepInput = await prepareCandidateInput(noPrepCandidate);
           if (noPrepInput) {
-            const noPrepResult = await solveCandidateInput(noPrepInput, false);
+            const noPrepResult = await solveCandidateInput(
+              noPrepInput,
+              false,
+              undefined,
+              tankSolveHintsFor({ input: noPrepInput, unified: best.unified, solveMetrics: null })
+            );
             if (comparePlanQuality(noPrepResult, best) <= 0) {
               best = {
                 candidate: noPrepInput.candidate,
@@ -6551,7 +8233,9 @@ async function planForNewLaunches(
     }
 
     const comparisonAvailableActions = outputActions;
-    if (outputUnmetTotal <= 1e-6) {
+    // Tank mode skips the monolithic incumbents: they solve without the tank
+    // rows, and in benchmarks never beat a tank-mode plan.
+    if (outputUnmetTotal <= 1e-6 && !tankRun) {
       const monolithicCombos = chosenCombosForPlan(outputActions, outputUnified.missionCounts);
       if (monolithicCombos.length > 0) {
         const fullQuantityCraftSkeleton = getCraftSkeletonCached({
@@ -6652,7 +8336,8 @@ async function planForNewLaunches(
       }
     }
 
-    const missionRows = buildMissionRows(outputActions, outputUnified.missionCounts);
+    const actionKeyByRowKey = new Map<string, string>();
+    const missionRows = buildMissionRows(outputActions, outputUnified.missionCounts, actionKeyByRowKey);
     const craftRows = buildCraftRows(outputUnified.crafts);
     const consumptionRows = buildConsumptionRows(outputUnified.consumptions, consumptionOptions);
     const targetBreakdowns = buildTargetBreakdowns({
@@ -6718,7 +8403,7 @@ async function planForNewLaunches(
     for (const [itemKey, goalTotal] of normalizedTargets.craftGoalTotals.entries()) {
       const craftedBefore = Math.max(0, Math.round(profile.craftCounts[itemKey] || 0));
       const owed = craftFloorByItem.get(itemKey) || 0;
-      const label = itemKeyToDisplayName(itemKey);
+      const label = itemKeyToTierLabel(itemKey);
       notes.push(
         owed > 0
           ? `Craft-count goal: ${label} at ${craftedBefore.toLocaleString()} of ${goalTotal.toLocaleString()} crafts, so the plan crafts at least ${owed.toLocaleString()} more (copies consumed by higher tiers count toward it).`
@@ -6738,7 +8423,17 @@ async function planForNewLaunches(
     if (geOnlyMode) {
       notes.push("GE-priority uses lexicographic integer solves per candidate: lowest GE first, then lowest mission time within that GE cost.");
     }
-    if (objectiveMode === "virtueFuel") {
+    if (tankRun) {
+      notes.push(
+        `Path of Virtue tank mode: the fastest plan, counting each shift as ${Math.round(
+          VIRTUE_SHIFT_PENALTY_SECONDS / 3600
+        )} h of mission time and each launch as ${Math.round(
+          VIRTUE_LAUNCH_EFFORT_SECONDS / 60
+        )} min, within the shift cap unless the goals need more shifts, packed into fuel tanks from ${
+          tankRun.startMode === "ideal" ? "an ideal first fill (not counted toward the cap)" : "what is in the tank now"
+        }. Humility is fueled live on its farm and never counted.`
+      );
+    } else if (objectiveMode === "virtueFuel") {
       notes.push(
         `Path of Virtue objective optimizes non-Humility fuel versus mission time; the fuel end keeps at least ${Math.round(
           objectiveContext.minimumTimePriority * 100
@@ -6816,6 +8511,15 @@ async function planForNewLaunches(
           .join(", ")}.`
       );
     }
+    if (virtueTankActionPruning && virtueTankActionCounts.after < virtueTankActionCounts.before) {
+      notes.push(
+        `Tank mode kept ${virtueTankActionCounts.after.toLocaleString()} of ${virtueTankActionCounts.before.toLocaleString()} candidate mission actions: the top ${VIRTUE_TANK_ACTION_TOP_PER_ITEM} mission/target pairs per required item by time, by fuel and by each egg's fuel.${
+          virtueTankActionCounts.fullChecksWon > 0
+            ? ` ${virtueTankActionCounts.fullChecksWon.toLocaleString()} solve${virtueTankActionCounts.fullChecksWon === 1 ? "" : "s"} over every action found a better plan.`
+            : ""
+        }`
+      );
+    }
     if (missionActionFilter && indexFilteredActionCount > 0) {
       notes.push(
         `Mission yield index candidate reduction enabled: considered top ${missionActionFilter.topPerItem.toLocaleString()} ranked mission/target pairs per required item and filtered ${indexFilteredActionCount.toLocaleString()} low-ranked action entries before solving.`
@@ -6851,6 +8555,54 @@ async function planForNewLaunches(
       missionCounts: outputUnified.missionCounts,
     });
 
+    // Tank mode: packing is the source of truth for the tanks, the shifts and
+    // the schedule (it seeds the slots with the in-air ships).
+    let virtueTanks: VirtueTankPlannerResult | undefined;
+    if (tankRun) {
+      reportProgress({
+        phase: "finalize",
+        message: "Packing fuel tanks…",
+        completed: completedCandidateCount,
+        total: candidateTotal,
+        etaMs: null,
+      });
+      await yieldForProgressFlush();
+      const units = buildVirtueTankUnits({
+        actions: outputActions,
+        missionRows,
+        actionKeyByRowKey,
+        prepSteps: outputPrepSteps,
+      });
+      const pack = await packVirtueTanks({
+        units,
+        capacity: tankRun.capacity,
+        startMode: tankRun.startMode,
+        currentContents: tankRun.currentContents,
+        currentHumility: tankRun.currentHumility,
+        inAirLaneFreeSeconds: tankRun.inAirLaneFreeSeconds,
+        solverFn: solverFn ?? (await getDefaultSolverFn()),
+        timeLimitSeconds: VIRTUE_TANK_PACK_TIME_LIMIT_SECONDS,
+      });
+      virtueTanks = {
+        shiftCap: tankRun.shiftCap,
+        plannedShiftCap: tankRun.plannedShiftCap,
+        overCap: false,
+        startMode: tankRun.startMode,
+        capacity: tankRun.capacity,
+        units,
+        pack,
+        notes: [],
+      };
+      tankRun.report.solveShifts = outputUnified.virtueShifts;
+      if (outputUnified.virtueShifts !== undefined) {
+        notes.push(
+          `Tank model: the solve counted ${outputUnified.virtueShifts.toLocaleString()} shift${
+            outputUnified.virtueShifts === 1 ? "" : "s"
+          }; packing the launches into tanks takes ${pack.totalShifts.toLocaleString()}.`
+        );
+      }
+    }
+
     reportProgress({
       phase: "finalize",
       message: "Plan ready.",
@@ -6860,12 +8612,20 @@ async function planForNewLaunches(
     });
     await yieldForProgressFlush();
 
-    const expectedHours = estimateThreeSlotExpectedHours({
-      actions: outputActions,
-      missionCounts: outputUnified.missionCounts,
-      residualSlotSeconds: outputPrepNoYieldSlotSeconds,
-    });
-    const outputFuelCost = missionFuelCost(outputActions, outputUnified.missionCounts);
+    const expectedHours = virtueTanks
+      ? virtueTanks.pack.schedule.makespanSeconds / 3600
+      : estimateThreeSlotExpectedHours({
+          actions: outputActions,
+          missionCounts: outputUnified.missionCounts,
+          residualSlotSeconds: outputPrepNoYieldSlotSeconds,
+        });
+    // Tank mode also counts prep launches with no useful drops: they burn fuel too.
+    const outputFuelCost = virtueTanks
+      ? virtueTanks.units.reduce(
+          (sum, unit) => sum + unit.launches * getVirtueFuelPerLaunch(unit.ship, unit.durationType),
+          0
+        )
+      : missionFuelCost(outputActions, outputUnified.missionCounts);
 
     const availableCombos = buildAvailableCombosFromActions(comparisonAvailableActions, outputActions);
 
@@ -6893,6 +8653,7 @@ async function planForNewLaunches(
       },
       notes,
       availableCombos,
+      ...(virtueTanks ? { virtueTanks } : {}),
     };
     const finalResult = maybeAdoptFastIncumbentResult(result);
     reportBenchmark(finalResult, "primary");
@@ -6902,6 +8663,11 @@ async function planForNewLaunches(
       throw error;
     }
     const details = error instanceof Error ? error.message : String(error);
+    // The heuristic fallback is fuel-blind: it would hand back a plan that
+    // ignores the tank and the shift cap, so tank mode surfaces the failure.
+    if (tankRun) {
+      throw new Error(`Path of Virtue tank planning failed (${details}).`);
+    }
     reportProgress({
       phase: "fallback",
       message: `Primary solve path unavailable (${details}); running heuristic fallback...`,

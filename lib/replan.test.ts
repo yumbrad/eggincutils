@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { PlayerProfile } from "./profile";
-import { applyReplanUpdates } from "./replan";
+import { createDemoProfile } from "./demo-profile";
+import { applyReplanUpdates, REPLAN_VIRTUE_TANK_NOTE, replanVirtueTankNote } from "./replan";
 import { buildMissionOptions, computeShipLevelsFromLaunchCounts } from "./ship-data";
 
 function baseProfile(): PlayerProfile {
@@ -58,5 +59,19 @@ describe("applyReplanUpdates", () => {
     expect(chickenOneAfter?.launches).toBe(4);
     expect(chickenNineAfter?.unlocked).toBe(true);
     expect(updated.missionOptions.some((option) => option.ship === "CHICKEN_NINE")).toBe(true);
+  });
+
+  it("keeps the virtue tank as the backup had it, and says so when launches were logged", () => {
+    const profile = createDemoProfile("virtue");
+    const launches = { missionLaunches: [{ ship: "HENERPRISE", durationType: "EPIC" as const, launches: 2 }] };
+    const updated = applyReplanUpdates(profile, launches);
+
+    expect(updated.virtueTank).toStrictEqual(profile.virtueTank);
+    expect(replanVirtueTankNote(updated, launches)).toBe(REPLAN_VIRTUE_TANK_NOTE);
+    expect(replanVirtueTankNote(updated, { observedReturns: [{ itemId: "puzzle-cube-1", quantity: 1 }] })).toBeNull();
+    expect(
+      replanVirtueTankNote(updated, { missionLaunches: [{ ship: "HENERPRISE", durationType: "EPIC", launches: 0 }] })
+    ).toBeNull();
+    expect(replanVirtueTankNote(baseProfile(), launches)).toBeNull();
   });
 });

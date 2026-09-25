@@ -2069,7 +2069,9 @@ describe("craft-count goals", () => {
 
     expect(result.crafts).toEqual([]);
     expect(result.unmetItems).toEqual([]);
-    expect(result.notes.some((note) => note.includes("already at 311 of 300 crafts"))).toBe(true);
+    expect(result.notes).toContain(
+      "Craft-count goal: Glimmering Tau Ceti geode (T2) already at 311 of 300 crafts, so the plan adds nothing for it."
+    );
     // No demand row was invented for the goal item.
     for (const model of lpModels) {
       expect(model).not.toContain("0 <= c_0 <= 300");

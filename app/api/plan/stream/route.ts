@@ -3,6 +3,7 @@ import { createDemoProfile, isBlankEid } from "../../../../lib/demo-profile";
 import { LootDataError } from "../../../../lib/loot-data";
 import { getPlayerProfile } from "../../../../lib/profile";
 import { MissionCoverageError, planForTarget, type PlannerProgressEvent } from "../../../../lib/planner";
+import { buildVirtueTankPlannerOptions } from "../../../../lib/virtue-tank-plan";
 
 export const runtime = "nodejs";
 
@@ -141,13 +142,21 @@ export async function POST(request: Request): Promise<Response> {
             message: "Profile loaded. Starting planner solve...",
           });
           const solveElapsedOffsetMs = Date.now() - streamStartedAtMs;
+          const virtue = parsedPayload.data.inventorySource === "virtue";
           const result = await planForTarget(
             validatedProfile.data,
             parsedPayload.data.targetItemId,
             parsedPayload.data.quantity,
             parsedPayload.data.priorityTime,
             {
-              objectiveMode: parsedPayload.data.inventorySource === "virtue" ? "virtueFuel" : "ge",
+              objectiveMode: virtue ? "virtueFuel" : "ge",
+              virtueTank: virtue
+                ? buildVirtueTankPlannerOptions(
+                    validatedProfile.data.virtueTank,
+                    parsedPayload.data.virtueShiftCap,
+                    parsedPayload.data.virtueStartTank
+                  )
+                : undefined,
               fastMode: parsedPayload.data.fastMode,
               missionDropRarities: {
                 rare: parsedPayload.data.includeDropRare,
@@ -174,6 +183,7 @@ export async function POST(request: Request): Promise<Response> {
               epicResearchFTLLevel: validatedProfile.data.epicResearchFTLLevel,
               epicResearchZerogLevel: validatedProfile.data.epicResearchZerogLevel,
               shipLevels: validatedProfile.data.shipLevels,
+              virtueTank: validatedProfile.data.virtueTank,
             },
             plan: result,
           };

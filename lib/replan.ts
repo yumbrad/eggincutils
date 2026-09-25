@@ -24,6 +24,21 @@ export type ReplanProfileUpdates = {
   missionLaunches?: MissionLaunchUpdate[];
 };
 
+/**
+ * Shown on a Path of Virtue replan that logged launches. The virtue tank is
+ * kept exactly as the last backup had it: a logged launch carries no farm, so
+ * its fuel can't be taken out of the tank, and refills since the backup are
+ * unknown anyway.
+ */
+export const REPLAN_VIRTUE_TANK_NOTE =
+  "Fuel tank contents are from your last backup: launches logged since then are not taken out of the tank. Refresh your profile for exact refuel amounts.";
+
+/** REPLAN_VIRTUE_TANK_NOTE when these updates log launches against a profile with a virtue tank, else null. */
+export function replanVirtueTankNote(profile: PlayerProfile, updates: ReplanProfileUpdates): string | null {
+  const loggedLaunches = (updates.missionLaunches || []).some((update) => Math.round(update.launches) > 0);
+  return profile.virtueTank && loggedLaunches ? REPLAN_VIRTUE_TANK_NOTE : null;
+}
+
 export function applyReplanUpdates(profile: PlayerProfile, updates: ReplanProfileUpdates): PlayerProfile {
   const inventory = { ...profile.inventory };
   for (const update of updates.observedReturns || []) {
@@ -50,6 +65,7 @@ export function applyReplanUpdates(profile: PlayerProfile, updates: ReplanProfil
   const shipLevels = computeShipLevelsFromLaunchCounts(launchCounts);
   const missionOptions = buildMissionOptions(shipLevels, profile.epicResearchFTLLevel, profile.epicResearchZerogLevel);
 
+  // `virtueTank` rides along unchanged; see REPLAN_VIRTUE_TANK_NOTE.
   return {
     ...profile,
     inventory,
