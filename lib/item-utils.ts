@@ -128,6 +128,34 @@ function itemKeyToFamilyKey(itemKey: string): string {
   return match ? match[1] : itemKey;
 }
 
+// Lazy-built map from target family ID ("ornate-gusset", "soul-stone") to its
+// type: "Artifact", "Stone", "Ingredient" or "Special".
+let _familyTypeById: Map<string, string> | null = null;
+function familyTypeByIdMap(): Map<string, string> {
+  if (!_familyTypeById) {
+    _familyTypeById = new Map();
+    for (const family of Object.values(targetFamilyMap)) {
+      _familyTypeById.set(family.id, family.type);
+    }
+  }
+  return _familyTypeById;
+}
+
+/**
+ * The target family type of an item ("Artifact", "Stone", "Ingredient"), or
+ * null when the item has no family. Stone fragments are in their stone's
+ * family ("tachyon_stone_1" is a Stone).
+ */
+export function itemIdToFamilyType(itemId: string): string | null {
+  const familyId = itemKeyToFamilyKey(itemIdToCanonicalKey(itemId)).replaceAll("_", "-");
+  return familyTypeByIdMap().get(familyId) ?? null;
+}
+
+/** Whether an item is an artifact: not a stone, stone fragment or ingredient (gold meteorite, Tau Ceti geode, solar titanium). */
+export function itemIdIsArtifact(itemId: string): boolean {
+  return itemIdToFamilyType(itemId) === "Artifact";
+}
+
 function titleCaseWords(text: string): string {
   return text
     .split("_")

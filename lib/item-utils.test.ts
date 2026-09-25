@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { afxIdToDisplayName, afxIdToItemKey, afxIdToTargetFamilyName, itemIdToCanonicalKey } from "./item-utils";
+import {
+  afxIdToDisplayName,
+  afxIdToItemKey,
+  afxIdToTargetFamilyName,
+  itemIdIsArtifact,
+  itemIdToCanonicalKey,
+  itemIdToFamilyType,
+} from "./item-utils";
 
 describe("itemIdToCanonicalKey", () => {
   it("returns the canonical key for normal item IDs", () => {
@@ -52,5 +59,45 @@ describe("target family mapping", () => {
     expect(afxIdToTargetFamilyName(52)).toBe("Clarity stone fragment");
     expect(afxIdToDisplayName(52)).toBe("Clarity stone fragment");
     expect(afxIdToItemKey(52)).toBe("clarity_stone_1");
+  });
+});
+
+describe("itemIdIsArtifact", () => {
+  it("is true for artifacts, including display IDs that differ from their key", () => {
+    for (const tier of [1, 2, 3, 4]) {
+      expect(itemIdIsArtifact(`gusset-${tier}`)).toBe(true);
+      expect(itemIdIsArtifact(`ornate-gusset-${tier}`)).toBe(true);
+      expect(itemIdIsArtifact(`vial-of-martian-dust-${tier}`)).toBe(true);
+      expect(itemIdIsArtifact(`vial-martian-dust-${tier}`)).toBe(true);
+      expect(itemIdIsArtifact(`puzzle-cube-${tier}`)).toBe(true);
+    }
+    expect(itemIdIsArtifact("tachyon-deflector-3")).toBe(true);
+    expect(itemIdIsArtifact("book-of-basan-4")).toBe(true);
+    expect(itemIdToFamilyType("gusset-3")).toBe("Artifact");
+  });
+
+  it("is false for stones and stone fragments", () => {
+    for (const tier of [1, 2, 3]) {
+      expect(itemIdIsArtifact(`tachyon-stone-${tier}`)).toBe(false);
+      expect(itemIdIsArtifact(`soul-stone-${tier}`)).toBe(false);
+      expect(itemIdIsArtifact(`clarity-stone-${tier}`)).toBe(false);
+    }
+    // Tier 1 of a stone is its fragment.
+    expect(itemIdToFamilyType("tachyon-stone-1")).toBe("Stone");
+    expect(itemIdToFamilyType("dilithium-stone-1")).toBe("Stone");
+  });
+
+  it("is false for ingredients", () => {
+    for (const tier of [1, 2, 3]) {
+      expect(itemIdIsArtifact(`gold-meteorite-${tier}`)).toBe(false);
+      expect(itemIdIsArtifact(`tau-ceti-geode-${tier}`)).toBe(false);
+      expect(itemIdIsArtifact(`solar-titanium-${tier}`)).toBe(false);
+    }
+    expect(itemIdToFamilyType("gold-meteorite-2")).toBe("Ingredient");
+  });
+
+  it("is false for unknown items", () => {
+    expect(itemIdIsArtifact("no-such-item-2")).toBe(false);
+    expect(itemIdToFamilyType("no-such-item-2")).toBeNull();
   });
 });
