@@ -1,5 +1,6 @@
 import type { InFlightMission, InventorySource, PlayerProfile } from "./profile";
 import { buildMissionOptions, computeShipLevelsFromLaunchCounts, type DurationType } from "./ship-data";
+import { TRILLION, virtueTankCapacityForLevel, type VirtueTankSnapshot } from "./virtue-fuel";
 
 const DEMO_EID = "DEMO";
 const DEMO_FTL_LEVEL = 60;
@@ -19,6 +20,29 @@ const DEMO_IN_FLIGHT: Array<{
   { ship: "HENERPRISE", durationType: "EPIC", targetAfxId: QUANTUM_METRONOME_AFX_ID, secondsRemaining: 14 * 3600 },
   { ship: "VOYEGGER", durationType: "LONG", targetAfxId: TAU_CETI_GEODE_AFX_ID, secondsRemaining: 3 * 3600 },
 ];
+
+// A max-level tank part-way through a Path of Virtue run, parked on Humility
+// so missions can launch without a shift first. The limits are the usual
+// Henerprise mix (C35 R28 K35, 2% Integrity for lower ships) with Humility at
+// 0%, since Humility is fueled live on its own farm.
+const DEMO_VIRTUE_TANK_LEVEL = 7;
+const DEMO_VIRTUE_TANK: VirtueTankSnapshot = {
+  tankLevel: DEMO_VIRTUE_TANK_LEVEL,
+  capacity: virtueTankCapacityForLevel(DEMO_VIRTUE_TANK_LEVEL),
+  fuels: {
+    curiosity: 120 * TRILLION,
+    integrity: 10 * TRILLION,
+    humility: 0,
+    resilience: 60 * TRILLION,
+    kindness: 175 * TRILLION,
+  },
+  limits: { curiosity: 0.35, integrity: 0.02, humility: 0, resilience: 0.28, kindness: 0.35 },
+  fillingEnabled: true,
+  shiftCount: 20,
+  soulEggs: 1e21,
+  currentEgg: "humility",
+  backupTimeSeconds: null,
+};
 
 export function isBlankEid(eid: string): boolean {
   return eid.trim().length === 0;
@@ -71,5 +95,9 @@ export function createDemoProfile(inventorySource: InventorySource = "main"): Pl
     shipLevels,
     missionOptions,
     inFlightMissions,
+    virtueTank:
+      inventorySource === "virtue"
+        ? { ...DEMO_VIRTUE_TANK, fuels: { ...DEMO_VIRTUE_TANK.fuels }, limits: { ...DEMO_VIRTUE_TANK.limits } }
+        : undefined,
   };
 }

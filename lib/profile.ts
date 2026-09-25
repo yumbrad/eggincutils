@@ -4,6 +4,14 @@ import path from "path";
 import zlib from "zlib";
 
 import { buildMissionOptions, computeShipLevels, MissionRecord, ShipLevelInfo } from "./ship-data";
+import {
+  parseVirtueTankFuels,
+  parseVirtueTankLimits,
+  virtueTankCapacityForLevel,
+  VIRTUE_TANK_CAPACITIES,
+  type VirtueTankEggKey,
+  type VirtueTankSnapshot,
+} from "./virtue-fuel";
 
 export type Inventory = Record<string, number>;
 export type CraftCounts = Record<string, number>;
@@ -27,6 +35,8 @@ export type PlayerProfile = {
   inFlightMissions?: InFlightMission[];
   /** Rare/epic/legendary artifacts counted as ingredients under the requested rarity selection. */
   shinyIngredientCount?: number;
+  /** Path of Virtue fuel tank and shift state; absent when the player has no virtue data. */
+  virtueTank?: VirtueTankSnapshot;
 };
 
 /**
@@ -106,7 +116,35 @@ type BackupArtifactsDb = {
   missionInfos?: BackupMissionInfo[];
   virtueAfxDb?: {
     inventoryItems?: BackupInventoryItem[];
+    /** The virtue DB's own craft status list; see craftCountsForSource. */
+    artifactStatus?: BackupCraftableArtifact[];
   };
+};
+
+/**
+ * The slice of a decoded `Backup` the virtue tank is read from. Decoded with
+ * `defaults: true`, so an absent message field reads as null and an absent
+ * repeated field as [].
+ */
+type BackupVirtueTankSource = {
+  /** Unix seconds of the client's last sync. */
+  approxTime?: number | null;
+  artifacts?: {
+    /** The one tank level, shared by both farms. */
+    tankLevel?: number | null;
+  } | null;
+  virtue?: {
+    shiftCount?: number | null;
+    afx?: {
+      tankFuels?: number[] | null;
+      tankLimits?: number[] | null;
+      tankFillingEnabled?: boolean | null;
+    } | null;
+  } | null;
+  game?: {
+    soulEggsD?: number | null;
+  } | null;
+  farms?: Array<{ eggType?: string | number | null }> | null;
 };
 
 interface AuthenticatedMessagePayload {
@@ -206,10 +244,21 @@ export async function getPlayerProfile(
           approxTime?: number;
           artifacts?: {
             craftingXp?: number;
+            tankLevel?: number;
           };
+          virtue?: {
+            shiftCount?: number;
+            afx?: {
+              tankFuels?: number[];
+              tankLimits?: number[];
+              tankFillingEnabled?: boolean;
+            } | null;
+          } | null;
           game?: {
             epicResearch?: Array<{ id?: string; level?: number }>;
+            soulEggsD?: number;
           };
+          farms?: Array<{ eggType?: string }>;
           artifactsDb?: BackupArtifactsDb;
         };
       };
@@ -226,7 +275,7 @@ export async function getPlayerProfile(
         includeStoneFragments
       );
       const shinyIngredientCount = countShinyIngredients(inventoryItems, includeSlotted, includeArtifactRarities);
-      const craftCounts = parseCraftCounts(data.backup?.artifactsDb?.artifactStatus || []);
+      const craftCounts = craftCountsForSource(data.backup?.artifactsDb, inventorySource);
       const missionArchive = data.backup?.artifactsDb?.missionArchive || [];
       const missionInfos = data.backup?.artifactsDb?.missionInfos || [];
       const missions = parseMissions([...missionArchive, ...missionInfos]);
@@ -262,6 +311,7 @@ export async function getPlayerProfile(
         missionOptions,
         inFlightMissions,
         shinyIngredientCount,
+        virtueTank: parseVirtueTank(data.backup),
       };
     } catch (error) {
       lastError = error;
@@ -280,6 +330,105 @@ export function inventoryItemsForSource(
     return artifactsDb?.virtueAfxDb?.inventoryItems || [];
   }
   return artifactsDb?.inventoryItems || [];
+}
+
+/**
+ * Virtue mode adds the virtue DB's own craft counts on top of the main farm's,
+ * as carpetsage's PoV optimizer does, rather than replacing them: in real
+ * backups every virtue `artifact_status` count is 0 (and never `discovered`)
+ * even with a well-stocked virtue inventory, so reading it alone would wipe
+ * the craft discount. Main mode reads only the main counts.
+ */
+export function craftCountsForSource(
+  artifactsDb: BackupArtifactsDb | undefined,
+  inventorySource: InventorySource
+): CraftCounts {
+  const craftCounts = parseCraftCounts(artifactsDb?.artifactStatus || []);
+  if (inventorySource !== "virtue") {
+    return craftCounts;
+  }
+  for (const [name, count] of Object.entries(parseCraftCounts(artifactsDb?.virtueAfxDb?.artifactStatus || []))) {
+    craftCounts[name] = (craftCounts[name] || 0) + count;
+  }
+  return craftCounts;
+}
+
+const VIRTUE_EGG_BY_ENUM: Record<string, VirtueTankEggKey> = {
+  CURIOSITY: "curiosity",
+  INTEGRITY: "integrity",
+  HUMILITY: "humility",
+  RESILIENCE: "resilience",
+  KINDNESS: "kindness",
+};
+const VIRTUE_EGG_BY_ENUM_VALUE: Record<number, VirtueTankEggKey> = {
+  50: "curiosity",
+  51: "integrity",
+  52: "humility",
+  53: "resilience",
+  54: "kindness",
+};
+
+function virtueEggForEggType(eggType: string | number | null | undefined): VirtueTankEggKey | null {
+  if (typeof eggType === "number") {
+    return VIRTUE_EGG_BY_ENUM_VALUE[eggType] ?? null;
+  }
+  if (typeof eggType === "string") {
+    return VIRTUE_EGG_BY_ENUM[eggType.trim().toUpperCase()] ?? null;
+  }
+  return null;
+}
+
+/**
+ * The virtue egg the player is on, or null when they are on the main game.
+ * The Path of Virtue takes over the home farm (`farms[0]`) and contract farms
+ * never run a virtue egg, so the first farm with one is it. Not
+ * `game.currentFarm`: that is just the farm on screen, so a backup synced from
+ * a contract farm would lose the egg.
+ */
+function currentVirtueEgg(farms: BackupVirtueTankSource["farms"]): VirtueTankEggKey | null {
+  for (const farm of farms || []) {
+    const egg = virtueEggForEggType(farm?.eggType);
+    if (egg) {
+      return egg;
+    }
+  }
+  return null;
+}
+
+function finiteNonNegative(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+/**
+ * Path of Virtue fuel tank state, or undefined when the backup has no virtue
+ * data at all.
+ *
+ * Capacity comes from `artifacts.tankLevel`: the tank level is shared by both
+ * farms and only recorded there — `virtue.afx.tankLevel` is not set, so it
+ * decodes as 0. The virtue eggs' contents and fill caps do live in
+ * `virtue.afx`.
+ */
+export function parseVirtueTank(backup: BackupVirtueTankSource | null | undefined): VirtueTankSnapshot | undefined {
+  const virtue = backup?.virtue;
+  if (!virtue) {
+    return undefined;
+  }
+  const tankLevel = Math.min(
+    VIRTUE_TANK_CAPACITIES.length - 1,
+    Math.floor(finiteNonNegative(backup.artifacts?.tankLevel))
+  );
+  const approxTime = finiteNonNegative(backup.approxTime);
+  return {
+    tankLevel,
+    capacity: virtueTankCapacityForLevel(tankLevel),
+    fuels: parseVirtueTankFuels(virtue.afx?.tankFuels ?? undefined),
+    limits: parseVirtueTankLimits(virtue.afx?.tankLimits ?? undefined),
+    fillingEnabled: virtue.afx?.tankFillingEnabled === true,
+    shiftCount: Math.floor(finiteNonNegative(virtue.shiftCount)),
+    soulEggs: finiteNonNegative(backup.game?.soulEggsD),
+    currentEgg: currentVirtueEgg(backup.farms),
+    backupTimeSeconds: approxTime > 0 ? approxTime : null,
+  };
 }
 
 async function getProtoRoot(): Promise<protobuf.Root> {
