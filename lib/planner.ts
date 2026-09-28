@@ -48,6 +48,15 @@ import {
   type VirtueTankPlannerResult,
   type VirtueTankPlanUnit,
 } from "./virtue-tank-plan";
+import {
+  planVirtueLastTankTopUp,
+  virtueLastTankRoom,
+  VIRTUE_TOP_UP_TARGET_AFX_IDS,
+  virtueTopUpItemKeys,
+  virtueTopUpYieldOf,
+  type VirtueLastTankTopUp,
+  type VirtueTopUpCandidate,
+} from "./virtue-top-up";
 
 async function getDefaultSolverFn(): Promise<SolverFunction> {
   const { solveWithHighs } = await import("./highs");
@@ -5601,6 +5610,97 @@ export async function planForTarget(
 }
 
 /**
+ * Top-up candidates (VirtueTankPlannerResult.lastTankTopUp): the missions the
+ * plan could fly, each targeted at gold meteorite, Tau Ceti geode or solar
+ * titanium, or untargeted, with their expected ingredients. The missions are
+ * the profile's at the ship levels the plan ends on (`projectedShipLevels`,
+ * with FTL and Zero-G research), or the profile's mission options as they are
+ * when it has no ship levels; filtered to the allowed ships and durations and
+ * to ships that burn tank fuel. Drops follow the plan's rarity selection and
+ * loot data.
+ */
+export async function buildVirtueTopUpCandidates(options: {
+  profile: PlayerProfile;
+  projectedShipLevels?: Array<{ ship: string; unlocked: boolean; level: number }>;
+  allowedShipDurations?: Array<{ ship: string; durationType: string }>;
+  lootData?: LootJson;
+  missionDropRarities?: Partial<ShinyRaritySelection>;
+}): Promise<VirtueTopUpCandidate[]> {
+  const { profile } = options;
+  let missionOptions: MissionOption[] = profile.missionOptions;
+  if (profile.shipLevels.length > 0) {
+    const projected = new Map((options.projectedShipLevels || []).map((row) => [row.ship, row]));
+    const shipLevels: ShipLevelInfo[] = profile.shipLevels.map((info) => {
+      const row = projected.get(info.ship);
+      return row ? { ...info, unlocked: info.unlocked || row.unlocked, level: Math.max(info.level, row.level) } : info;
+    });
+    missionOptions = buildMissionOptions(shipLevels, profile.epicResearchFTLLevel, profile.epicResearchZerogLevel);
+  }
+  if (options.allowedShipDurations) {
+    const allowed = new Set(options.allowedShipDurations.map((sd) => `${sd.ship}|${sd.durationType}`));
+    missionOptions = missionOptions.filter((option) => allowed.has(`${option.ship}|${option.durationType}`));
+  }
+  missionOptions = missionOptions.filter((option) => getVirtueFuelPerLaunch(option.ship, option.durationType) > 0);
+  if (missionOptions.length === 0) {
+    return [];
+  }
+  const targets = new Set(VIRTUE_TOP_UP_TARGET_AFX_IDS);
+  const actions = await buildMissionActionsForOptions(
+    missionOptions,
+    new Set(virtueTopUpItemKeys()),
+    options.lootData,
+    options.missionDropRarities
+  );
+  return actions
+    .filter((action) => targets.has(action.targetAfxId))
+    .map((action) => ({
+      ship: action.ship,
+      durationType: action.durationType,
+      level: action.level,
+      durationSeconds: action.durationSeconds,
+      targetAfxId: isUntargetedTargetAfxId(action.targetAfxId) ? null : action.targetAfxId,
+      fuelPerLaunch: getVirtueFuelConfig(action.ship, action.durationType),
+      expected: virtueTopUpYieldOf(action.yields),
+    }));
+}
+
+/**
+ * VirtueTankPlannerResult.lastTankTopUp for a finished tank-mode plan
+ * (planVirtueLastTankTopUp over buildVirtueTopUpCandidates). Advisory: it
+ * never changes the plan, and any failure just leaves it out.
+ */
+async function planLastTankTopUp(
+  plan: PlannedLaunches,
+  profile: PlayerProfile,
+  plannerOptions: PlannerOptions
+): Promise<VirtueLastTankTopUp | undefined> {
+  const pack = plan.virtueTanks?.pack;
+  if (!pack || !pack.feasible || !virtueLastTankRoom(pack)) {
+    return undefined;
+  }
+  try {
+    const candidates = await buildVirtueTopUpCandidates({
+      profile,
+      projectedShipLevels: plan.progression.projectedShipLevels,
+      allowedShipDurations: plannerOptions.allowedShipDurations,
+      lootData: plannerOptions.lootData,
+      missionDropRarities: plannerOptions.missionDropRarities,
+    });
+    if (candidates.length === 0) {
+      return undefined;
+    }
+    const topUp = await planVirtueLastTankTopUp({
+      pack,
+      candidates,
+      solverFn: plannerOptions.solverFn ?? (await getDefaultSolverFn()),
+    });
+    return topUp ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * One tank-mode pass of planForNewLaunches. planVirtueTankLaunches runs a few:
  * at the shift cap, with fewer refuel loops when packing overshoots the cap,
  * at the next few caps and a fewest-shifts search when the cap cannot meet the
@@ -5786,7 +5886,7 @@ async function planVirtueTankLaunches(
     /** A plan with a few more shifts that scores clearly better (VirtueTankPlannerResult.fasterOption). */
     faster?: PlannedLaunches;
   };
-  const finish = (plan: PlannedLaunches, outcome: TankOutcome = {}): PlannedLaunches => {
+  const finish = async (plan: PlannedLaunches, outcome: TankOutcome = {}): Promise<PlannedLaunches> => {
     const tanks = plan.virtueTanks!;
     const neededShifts = outcome.neededShifts;
     const notes = [...plan.notes];
@@ -5812,6 +5912,7 @@ async function planVirtueTankLaunches(
     const faster = outcome.faster
       ? { shifts: packedShifts(outcome.faster), expectedHours: outcome.faster.expectedHours }
       : undefined;
+    const lastTankTopUp = await planLastTankTopUp(plan, profile, plannerOptions);
     if (faster) {
       // Right after the over-cap line, or first within the cap.
       notes.splice(
@@ -5833,6 +5934,7 @@ async function planVirtueTankLaunches(
         ...(neededShifts !== undefined ? { neededShifts, neededShiftsProven: Boolean(outcome.proven) } : {}),
         ...(faster ? { fasterOption: faster } : {}),
         notes: tankNotes,
+        ...(lastTankTopUp ? { lastTankTopUp } : {}),
       },
     };
     try {

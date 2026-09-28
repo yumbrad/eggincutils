@@ -2974,6 +2974,39 @@
   margin: 0;
 }
 
+.topUpArea {
+  display: grid;
+  gap: 8px;
+}
+
+.topUpCard {
+  display: grid;
+  gap: 4px;
+  padding: 9px 11px;
+  border: 1px dashed color-mix(in oklab, var(--stroke), var(--accent) 35%);
+  border-radius: 10px;
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.topUpCard p {
+  margin: 0;
+}
+
+.topUpCard p.topUpMeta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.topUpTag {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .refuelNote {
   margin: 0;
   color: var(--muted);

@@ -258,6 +258,29 @@ describe("plannerResultSchema virtue tanks", () => {
     expect(throughRoute(result)).toStrictEqual(result);
   });
 
+  it("round-trips a last-tank top-up", () => {
+    const options = buildVirtueTankPlannerOptions(sampleTank(), 2, "current");
+    const virtueTanks = tankResult(options, sampleUnits());
+    const last = virtueTanks.pack.tanks[virtueTanks.pack.tanks.length - 1];
+    virtueTanks.lastTankTopUp = {
+      tankIndex: last.index,
+      roomBefore: 310 * T,
+      launches: [
+        { ship: "HENERPRISE", durationType: "EPIC", level: 8, targetAfxId: 18, launches: 4 },
+        { ship: "HENERPRISE", durationType: "SHORT", level: 8, targetAfxId: null, launches: 1 },
+      ],
+      fillTo: { curiosity: 215 * T, kindness: 142.5 * T },
+      limitPct: { curiosity: 43, kindness: 29 },
+      expected: { goldMeteorite: 12.5, tauCetiGeode: 210.25, solarTitanium: 0 },
+      totalValue: 222.75,
+      netValue: 101.5,
+      slotSeconds: 4 * 96 * 3600 + 24 * 3600,
+    };
+
+    const result = plannerResult(virtueTanks);
+    expect(throughRoute(result)).toStrictEqual(result);
+  });
+
   it("round-trips an infeasible plan with unplaced launches", () => {
     const options = buildVirtueTankPlannerOptions(sampleTank({ tankLevel: 3, capacity: 100 * T }), 0);
     const units: VirtueTankPlanUnit[] = [

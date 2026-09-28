@@ -7,6 +7,7 @@ import {
   type VirtueTankPlan,
   type VirtueTankStartMode,
 } from "./virtue-tanks";
+import type { VirtueLastTankTopUp } from "./virtue-top-up";
 
 /**
  * Planner input for Path of Virtue tank mode (`PlannerOptions.virtueTank`).
@@ -70,6 +71,13 @@ export type VirtueTankPlannerResult = {
   units: VirtueTankPlanUnit[];
   pack: VirtueTankPlan;
   notes: string[];
+  /**
+   * Advisory only, never part of the plan: when the last refuel loop leaves
+   * much of its tank empty (virtueLastTankRoom), limits to raise on that
+   * loop's own route eggs (no extra shifts) to also send extra launches for
+   * gold meteorite, Tau Ceti geode and solar titanium.
+   */
+  lastTankTopUp?: VirtueLastTankTopUp;
 };
 
 /**

@@ -485,6 +485,32 @@ const virtueTankPlanUnitSchema = z.object({
   targetAfxId: z.number().int().nullable().optional(),
 });
 
+const virtueTopUpYieldSchema = z.object({
+  goldMeteorite: nonNegativeFiniteSchema,
+  tauCetiGeode: nonNegativeFiniteSchema,
+  solarTitanium: nonNegativeFiniteSchema,
+});
+
+const virtueLastTankTopUpSchema = z.object({
+  tankIndex: nonNegativeIntSchema,
+  roomBefore: nonNegativeFiniteSchema,
+  launches: z.array(
+    z.object({
+      ship: z.string().min(1),
+      durationType: z.string().min(1),
+      level: nonNegativeIntSchema,
+      targetAfxId: z.number().int().nullable(),
+      launches: nonNegativeIntSchema,
+    })
+  ),
+  fillTo: virtueFuelVectorSchema,
+  limitPct: virtueLimitPctsSchema,
+  expected: virtueTopUpYieldSchema,
+  totalValue: nonNegativeFiniteSchema,
+  netValue: nonNegativeFiniteSchema,
+  slotSeconds: nonNegativeFiniteSchema,
+});
+
 export const virtueTankPlannerResultSchema = z.object({
   shiftCap: nonNegativeIntSchema.max(MAX_VIRTUE_SHIFT_CAP),
   plannedShiftCap: nonNegativeIntSchema,
@@ -502,6 +528,7 @@ export const virtueTankPlannerResultSchema = z.object({
   units: z.array(virtueTankPlanUnitSchema),
   pack: virtueTankPackSchema,
   notes: z.array(z.string()),
+  lastTankTopUp: virtueLastTankTopUpSchema.optional(),
 });
 
 export const plannerResultSchema = z.object({

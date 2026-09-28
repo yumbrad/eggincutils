@@ -71,6 +71,12 @@ import {
   type VirtueTankPlan,
   type VirtueTankStartMode,
 } from "../../lib/virtue-tanks";
+import {
+  virtueLastTankRoom,
+  virtueLastTankRoomText,
+  type VirtueLastTankTopUp,
+  type VirtueTopUpFamily,
+} from "../../lib/virtue-top-up";
 import styles from "./page.module.css";
 
 type ShipLevelInfo = {
@@ -2203,10 +2209,71 @@ function VirtueTankGauge({ view, tankView }: { view: VirtueTankPlanView; tankVie
   );
 }
 
+const VIRTUE_TOP_UP_TARGET_WORD: Record<number, string> = { 17: "gold", 18: "geode", 43: "titanium" };
+const VIRTUE_TOP_UP_FAMILY_WORD: Array<[VirtueTopUpFamily, string]> = [
+  ["goldMeteorite", "gold"],
+  ["tauCetiGeode", "geode"],
+  ["solarTitanium", "titanium"],
+];
+
+/**
+ * Advisory under the last tank: raise limits on this loop's own eggs (no extra
+ * shifts) to also send ingredient launches. Never part of the plan.
+ */
+function VirtueTopUpCard({ topUp, tank, capacity }: { topUp: VirtueLastTankTopUp; tank: VirtueTank; capacity: number }) {
+  const planLimits = tank.refill?.limitPct ?? {};
+  const raised = VIRTUE_REFILL_ROUTE_ORDER.filter(
+    (egg) => topUp.limitPct[egg] != null && topUp.limitPct[egg] !== planLimits[egg]
+  );
+  const launches = topUp.launches.map((launch, index) => (
+    <Fragment key={`${launch.ship}|${launch.durationType}|${launch.targetAfxId}`}>
+      {index > 0 && (index === topUp.launches.length - 1 ? " and " : ", ")}
+      <b>
+        {launch.launches.toLocaleString()} {titleCaseShip(launch.ship)} {durationTypeLabel(launch.durationType)}
+      </b>{" "}
+      ({launch.targetAfxId == null ? "untargeted" : VIRTUE_TOP_UP_TARGET_WORD[launch.targetAfxId] ?? afxIdToTargetFamilyName(launch.targetAfxId)})
+    </Fragment>
+  ));
+  const expected = VIRTUE_TOP_UP_FAMILY_WORD.filter(([family]) => topUp.expected[family] >= 0.5).map(
+    ([family, word]) => `${Math.round(topUp.expected[family]).toLocaleString()} ${word}`
+  );
+  return (
+    <div className={styles.topUpCard}>
+      <span className={styles.topUpTag}>Optional · for your next goals</span>
+      <p>
+        {raised.length > 0 ? (
+          <>
+            Room left: set{" "}
+            {raised.map((egg, index) => (
+              <Fragment key={egg}>
+                {index > 0 && ", "}
+                <b>
+                  {VIRTUE_EGG_DISPLAY[egg].label} {formatVirtueTankLimit(topUp.limitPct[egg]!, capacity)}
+                </b>
+              </Fragment>
+            ))}{" "}
+            to also send {launches}
+          </>
+        ) : (
+          <>Room left: the limits above also cover {launches}</>
+        )}
+        {expected.length > 0 && <> → ≈ {expected.join(" · ")} (T1)</>}.
+      </p>
+      <p className={styles.topUpMeta}>
+        About {formatDurationFromHours(topUp.slotSeconds / 3 / 3600)} more across your 3 slots. Not part of this plan.
+      </p>
+    </div>
+  );
+}
+
 /** Panel E: what each tank holds, how to refuel into it, and what burns it. */
 function VirtueFuelTanksPanel({ view, planStartMs }: { view: VirtueTankPlanView; planStartMs: number }) {
   const { pack, capacity, tanks } = view;
   const chartsOpen = tanks.length <= 3;
+  // The last refuel loop's tank, when it leaves much of the tank empty, and the optional top-up for it.
+  const lastRoom = virtueLastTankRoom(pack);
+  const topUp =
+    lastRoom && view.result.lastTankTopUp?.tankIndex === lastRoom.tank.index ? view.result.lastTankTopUp : null;
   const notes = Array.from(new Set([...view.result.notes, ...pack.notes])).filter(
     (note) =>
       !VIRTUE_TANK_NOTES_SHOWN_ELSEWHERE.some((prefix) => note.startsWith(prefix)) &&
@@ -2297,6 +2364,12 @@ function VirtueFuelTanksPanel({ view, planStartMs }: { view: VirtueTankPlanView;
                 </div>
               </header>
               <VirtueRefuelStrip view={view} tankView={tankView} planStartMs={planStartMs} />
+              {lastRoom?.tank.index === tank.index && (
+                <div className={styles.topUpArea}>
+                  <VirtueNotice tone="info">{virtueLastTankRoomText(lastRoom)}</VirtueNotice>
+                  {topUp && <VirtueTopUpCard topUp={topUp} tank={tank} capacity={capacity} />}
+                </div>
+              )}
               {tank.launches.length > 0 && (
                 <ul className={styles.tankMissionChips} aria-label={`Missions launched from ${tank.label}`}>
                   {groupTankLaunches(view, tank).map((group) => (
