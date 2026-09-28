@@ -49,7 +49,7 @@ export type VirtueTankPlannerResult = {
   neededShiftsProven?: boolean;
   /**
    * A plan with a few more shifts that scores clearly better
-   * (virtueTankPlanScoreSeconds: mission hours + 4 h per shift + 3 min per
+   * (virtueTankPlanScoreSeconds: mission hours + 24 h per shift + 3 min per
    * launch), offered beside the plan; `overCap` tells the two cases apart
    * (virtueFasterOptionQualifies).
    * - Over the cap: up to VIRTUE_FASTER_OPTION_EXTRA_SHIFTS more than the

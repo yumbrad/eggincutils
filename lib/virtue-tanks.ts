@@ -23,8 +23,12 @@ import { formatVirtueFuelQuantity, formatVirtueTankLimit, getVirtueFuelConfig, t
 /** Shift-cap slider stops. A refuel loop is at least two shifts (one egg and back), so 1 buys nothing over 0. */
 export const VIRTUE_SHIFT_CAP_DETENTS: number[] = [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
-/** Mission time a shift is charged as in the planner objective. */
-export const VIRTUE_SHIFT_PENALTY_SECONDS = 4 * 3600;
+/**
+ * Mission time a shift is charged as in the planner objective. A day, not the
+ * few minutes a shift takes: it stands in for the Soul Eggs each shift costs
+ * and the optionality a player spends by shifting.
+ */
+export const VIRTUE_SHIFT_PENALTY_SECONDS = 24 * 3600;
 
 /** Order a refuel loop visits the fuel eggs in, before shifting back to Humility. */
 export const VIRTUE_REFILL_ROUTE_ORDER: VirtueFuelKey[] = ["curiosity", "resilience", "integrity", "kindness"];

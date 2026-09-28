@@ -14,6 +14,7 @@ import {
   virtueTankPlanScoreSeconds,
   type VirtueTankPlannerOptions,
 } from "./virtue-tank-plan";
+import { VIRTUE_SHIFT_PENALTY_SECONDS } from "./virtue-tanks";
 
 // Path of Virtue tank mode against the real HiGHS solver. The loot tables are
 // tiny and injected, so every solve is small: one untargeted mission per ship
@@ -305,14 +306,16 @@ describe("Path of Virtue tank mode", () => {
     "times a plan of a few long missions by its rounds, not its slot time",
     async () => {
       // Real mission lengths: a Henerprise EPIC (38.4h) drops 5 cubes, a
-      // LONG (19.2h) 3 and a Voyegger EPIC (28.8h) 2. The tank has no
-      // Resilience, so any Henerprise costs an R loop (2 shifts). Slot time
-      // over three slots reads one EPIC as 12.8h and would take it; it really
-      // flies 38.4h. Two LONGs finish in 19.2h.
+      // LONG (19.2h) 3 and a Voyegger EPIC (28.8h) 1. The tank has no
+      // Resilience, so any Henerprise costs an R loop (2 shifts, charged a
+      // day each); seven Voyeggers need no shift but fly three rounds
+      // (86.4h). Slot time over three slots reads an EPIC and a LONG as
+      // 19.2h, the same as three LONGs in one fewer launch, and would take
+      // them; they really fly 38.4h. Three LONGs finish in 19.2h.
       const ships: Array<TestShip & { cubes: number }> = [
         { ship: "HENERPRISE", durationType: "EPIC", missionId: "henerprise-extended", durationSeconds: 138_240, cubes: 5 },
         { ship: "HENERPRISE", durationType: "LONG", missionId: "henerprise-long", durationSeconds: 69_120, cubes: 3 },
-        { ship: "VOYEGGER", durationType: "EPIC", missionId: "voyegger-extended", durationSeconds: 103_680, cubes: 2 },
+        { ship: "VOYEGGER", durationType: "EPIC", missionId: "voyegger-extended", durationSeconds: 103_680, cubes: 1 },
       ];
       const lootData = {
         missions: ships.map((ship) => ({
@@ -334,16 +337,17 @@ describe("Path of Virtue tank mode", () => {
         })),
       } as LootJson;
       const { solverFn } = recordingSolver();
-      const result = await planForTarget(profileFor(ships), "puzzle-cube-1", 5, 1, {
+      const result = await planForTarget(profileFor(ships), "puzzle-cube-1", 7, 1, {
         objectiveMode: "virtueFuel",
-        virtueTank: tankOptions({ shiftCap: 3, currentContents: { curiosity: 100 * T, kindness: 60 * T } }),
+        virtueTank: tankOptions({ shiftCap: 3, currentContents: { curiosity: 200 * T, kindness: 120 * T } }),
         lootData,
         solverFn,
       });
       const tanks = result.virtueTanks!;
       expect(result.unmetItems).toEqual([]);
       expect(tanks.overCap).toBe(false);
-      expect(plannedLaunches(result, "HENERPRISE")).toBe(2);
+      expect(plannedLaunches(result, "HENERPRISE")).toBe(3);
+      expect(plannedLaunches(result, "VOYEGGER")).toBe(0);
       expect(result.missions.find((mission) => mission.ship === "HENERPRISE")?.durationType).toBe("LONG");
       expect(result.expectedHours).toBeCloseTo(19.2, 6);
       expect(tanks.pack.totalShifts).toBe(2);
@@ -651,15 +655,15 @@ describe("Path of Virtue tank mode", () => {
   );
 
   describe("faster option within the cap", () => {
-    // A Chicken One burns no fuel and drops one cube per 3,000 s launch; a
+    // A Chicken One burns no fuel and drops one cube per 12,000 s launch; a
     // Henerprise EPIC drops 30 but needs C, K and R. From an empty tank, a
-    // cap of 0 leaves only Chicken Ones; one C, R and K refill (4 shifts)
-    // flies Henerprises instead.
+    // cap of 0 leaves only Chicken Ones; one C, R and K refill (4 shifts, a
+    // day each in the score) flies Henerprises instead.
     const CHICKEN_ONE_SHORT = {
       ship: "CHICKEN_ONE",
       durationType: "SHORT" as const,
       missionId: "chicken-one-short",
-      durationSeconds: 3_000,
+      durationSeconds: 12_000,
       cubes: 1,
     };
     const henerpriseEpic = (durationSeconds: number) => ({ ...HENERPRISE_EPIC, durationSeconds, cubes: 30 });
@@ -701,12 +705,12 @@ describe("Path of Virtue tank mode", () => {
         expect(tanks.neededShifts).toBeUndefined();
         expect(tanks.pack.totalShifts).toBe(0);
         expect(plannedLaunches(result, "CHICKEN_ONE")).toBe(150);
-        expect(result.expectedHours).toBeCloseTo((50 * 3_000) / 3600, 6);
+        expect(result.expectedHours).toBeCloseTo((50 * CHICKEN_ONE_SHORT.durationSeconds) / 3600, 6);
         expect(events).toContain("Checking whether up to 4 shifts is much faster…");
         expect(tanks.fasterOption).toBeDefined();
         expect(tanks.fasterOption!.shifts).toBe(4);
         expect(tanks.fasterOption!.expectedHours).toBeCloseTo((2 * HENERPRISE_EPIC_SECONDS) / 3600, 6);
-        expect(result.notes[0]).toBe("With 4 shifts the goals take about 11h 6m instead of 1d 17h 40m.");
+        expect(result.notes[0]).toBe("With 4 shifts the goals take about 11h 6m instead of 6d 22h 40m.");
 
         // Planning with the cap at the offered shifts gives that plan back,
         // and it clears both bars.
@@ -724,9 +728,9 @@ describe("Path of Virtue tank mode", () => {
     it(
       "does not offer more shifts that are faster but not by a quarter",
       async () => {
-        // Slower Henerprises (12.5h): the refill plan beats the Chicken Ones
-        // by more than one shift's worth, but by less than a quarter.
-        const ships = [CHICKEN_ONE_SHORT, henerpriseEpic(45_000)];
+        // Slower Henerprises (about 22h): the refill plan beats the Chicken
+        // Ones by more than one shift's worth, but by less than a quarter.
+        const ships = [CHICKEN_ONE_SHORT, henerpriseEpic(80_000)];
         const { result, events } = await plan(ships, 150, emptyTank(0));
         const tanks = result.virtueTanks!;
         expect(tanks.overCap).toBe(false);
@@ -751,7 +755,7 @@ describe("Path of Virtue tank mode", () => {
       async () => {
         const fast = henerpriseEpic(HENERPRISE_EPIC_SECONDS);
         // Too short to gain enough from any refill: 30 Chicken Ones take 10
-        // rounds (8h 20m), under the floor a plan with shifts starts from.
+        // rounds (33h 20m), under the floor a plan with shifts starts from.
         const short = await plan([CHICKEN_ONE_SHORT, fast], 30, emptyTank(0));
         // Fuel for everything: the tank flies the Henerprises with no refill.
         const fueled = await plan(
@@ -780,14 +784,18 @@ describe("Path of Virtue tank mode", () => {
       SOLVER_TIMEOUT_MS
     );
 
-    it("offers within the cap only on a gain of 4 h and a quarter of the score", () => {
+    it("offers within the cap only on a gain of 24 h and a quarter of the score", () => {
       const h = 3600;
-      expect(virtueFasterOptionQualifies(100 * h, 75 * h, true)).toBe(true);
-      expect(virtueFasterOptionQualifies(100 * h, 76 * h, true)).toBe(false);
-      expect(virtueFasterOptionQualifies(100 * h, 76 * h, false)).toBe(true);
-      expect(virtueFasterOptionQualifies(12 * h, 8 * h, true)).toBe(true);
-      expect(virtueFasterOptionQualifies(12 * h, 8.5 * h, true)).toBe(false);
-      expect(virtueFasterOptionQualifies(12 * h, 8.5 * h, false)).toBe(false);
+      const minGain = VIRTUE_FASTER_OPTION_MIN_GAIN_SECONDS;
+      expect(minGain).toBe(24 * h);
+      // A long plan: the quarter binds.
+      expect(virtueFasterOptionQualifies(8 * minGain, 6 * minGain, true)).toBe(true);
+      expect(virtueFasterOptionQualifies(8 * minGain, 6 * minGain + h, true)).toBe(false);
+      expect(virtueFasterOptionQualifies(8 * minGain, 6 * minGain + h, false)).toBe(true);
+      // A short plan: the 24 h floor binds.
+      expect(virtueFasterOptionQualifies(2 * minGain, minGain, true)).toBe(true);
+      expect(virtueFasterOptionQualifies(2 * minGain, minGain + h, true)).toBe(false);
+      expect(virtueFasterOptionQualifies(2 * minGain, minGain + h, false)).toBe(false);
       expect(virtueFasterOptionQualifies(Number.NaN, 0, false)).toBe(false);
     });
   });
@@ -818,7 +826,10 @@ describe("Path of Virtue tank mode", () => {
     "scores a tank plan by its hours, shifts and launches",
     () => {
       expect(VIRTUE_LAUNCH_EFFORT_SECONDS).toBe(180);
-      expect(virtueTankPlanScoreSeconds({ expectedHours: 10, shifts: 2, launches: 20 })).toBe(10 * 3600 + 2 * 4 * 3600 + 20 * 180);
+      expect(VIRTUE_SHIFT_PENALTY_SECONDS).toBe(24 * 3600);
+      expect(virtueTankPlanScoreSeconds({ expectedHours: 10, shifts: 2, launches: 20 })).toBe(
+        10 * 3600 + 2 * VIRTUE_SHIFT_PENALTY_SECONDS + 20 * VIRTUE_LAUNCH_EFFORT_SECONDS
+      );
       expect(virtueTankPlanScoreSeconds({ expectedHours: Number.NaN, shifts: -1, launches: 0 })).toBe(0);
     }
   );
