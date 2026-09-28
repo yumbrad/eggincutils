@@ -42,9 +42,9 @@ export const VIRTUE_TOP_UP_MIN_ROOM_FRACTION = 0.2;
  * Every extra launch is charged its time the way the planner charges it: a
  * third of its duration (three mission slots) plus VIRTUE_LAUNCH_EFFORT_SECONDS
  * of player effort. The charge per second (lambda) is this fraction of the
- * best value per charged second among all the player's candidates, whatever
- * the route: a launch has to be at least a quarter as time-efficient as the
- * best mission the player could fly instead. A light charge on purpose: slow,
+ * value per charged second of the player's Henerprise Extended, whatever the
+ * route (see virtueTopUpReferenceRate): a launch has to be at least a quarter
+ * as time-efficient as that workhorse. A light charge on purpose: slow,
  * fuel-thrifty ships filling leftover room for days (Defihents, Galeggticas)
  * is how players spend spare fuel, but fewer launches still win when they
  * come close. At 0.5 only the fastest ships survive; at 0 the room fills
@@ -208,6 +208,33 @@ function joinWords(parts: string[]): string {
 // ---------------------------------------------------------------------------
 // The top-up
 // ---------------------------------------------------------------------------
+
+/** The mission the top-up's time charge is scaled to: the community's workhorse. */
+export const VIRTUE_TOP_UP_REFERENCE_MISSION = { ship: "HENERPRISE", durationType: "EPIC" } as const;
+
+/**
+ * Value per charged second the time charge is a fraction of: the player's own
+ * Henerprise Extended at their stars, research and loot tier (its best target).
+ * A fixed reference keeps the bar from rising with a maxed player's fastest
+ * ship, so thrifty ships stay in reach for them too. Without a Henerprise
+ * Extended (locked or deselected), the player's best fueled mission stands in.
+ */
+export function virtueTopUpReferenceRate(candidates: VirtueTopUpCandidate[]): number {
+  let referenceRate = 0;
+  let bestRate = 0;
+  for (const raw of candidates) {
+    const fuel = VIRTUE_REFILL_ROUTE_ORDER.reduce((sum, egg) => sum + amount(raw.fuelPerLaunch, egg), 0);
+    if (fuel <= 0) {
+      continue;
+    }
+    const rate = virtueTopUpValue(raw.expected) / virtueTopUpLaunchCostSeconds(raw.durationSeconds);
+    bestRate = Math.max(bestRate, rate);
+    if (raw.ship === VIRTUE_TOP_UP_REFERENCE_MISSION.ship && raw.durationType === VIRTUE_TOP_UP_REFERENCE_MISSION.durationType) {
+      referenceRate = Math.max(referenceRate, rate);
+    }
+  }
+  return referenceRate > 0 ? referenceRate : bestRate;
+}
 
 export type VirtueTopUpCandidate = {
   ship: string;
@@ -484,15 +511,7 @@ export async function planVirtueLastTankTopUp(options: {
     return null;
   }
 
-  // Value per charged second of the best candidate the player has, on any route.
-  let bestRate = 0;
-  for (const raw of options.candidates) {
-    const fuel = VIRTUE_REFILL_ROUTE_ORDER.reduce((sum, egg) => sum + amount(raw.fuelPerLaunch, egg), 0);
-    if (fuel > 0) {
-      bestRate = Math.max(bestRate, virtueTopUpValue(raw.expected) / virtueTopUpLaunchCostSeconds(raw.durationSeconds));
-    }
-  }
-  const lambda = (options.lambdaFraction ?? VIRTUE_TOP_UP_LAMBDA_FRACTION) * bestRate;
+  const lambda = (options.lambdaFraction ?? VIRTUE_TOP_UP_LAMBDA_FRACTION) * virtueTopUpReferenceRate(options.candidates);
 
   // One candidate per mission (the same fuel and time): the target that brings the most.
   const byMission = new Map<string, Candidate>();

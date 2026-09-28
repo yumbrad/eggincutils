@@ -14,6 +14,7 @@ import {
   VIRTUE_TOP_UP_MAX_LAUNCHES,
   virtueLastTankRoom,
   virtueLastTankRoomText,
+  virtueTopUpReferenceRate,
   virtueTopUpT1Equivalent,
   virtueTopUpValue,
   virtueTopUpYieldOf,
@@ -489,5 +490,37 @@ describe("buildVirtueTopUpCandidates", () => {
       allowedShipDurations: [{ ship: "VOYEGGER", durationType: "EPIC" }],
     });
     expect(candidates.map((entry) => entry.ship)).toEqual(["VOYEGGER"]);
+  });
+});
+
+describe("virtueTopUpReferenceRate", () => {
+  const mission = (ship: string, durationType: string, hours: number, gold: number): VirtueTopUpCandidate => ({
+    ship,
+    durationType,
+    level: 8,
+    durationSeconds: hours * 3600,
+    targetAfxId: null,
+    fuelPerLaunch: getVirtueFuelConfig(ship, durationType),
+    expected: { goldMeteorite: gold, tauCetiGeode: 0, solarTitanium: 0 },
+  });
+  const rate = (candidate: VirtueTopUpCandidate) =>
+    virtueTopUpValue(candidate.expected) / (candidate.durationSeconds / 3 + VIRTUE_LAUNCH_EFFORT_SECONDS);
+
+  it("scales the time charge to the player's Henerprise Extended, not their fastest ship", () => {
+    const henerprise = mission("HENERPRISE", "EPIC", 38.4, 1_000);
+    const henliner = mission("ATREGGIES", "EPIC", 38.4, 2_000);
+    const defihent = mission("CHICKFIANT", "EPIC", 19.2, 150);
+    expect(rate(henliner)).toBeGreaterThan(rate(henerprise));
+    expect(virtueTopUpReferenceRate([henliner, henerprise, defihent])).toBeCloseTo(rate(henerprise), 12);
+  });
+
+  it("falls back to the best fueled mission without a Henerprise Extended", () => {
+    const henliner = mission("ATREGGIES", "EPIC", 38.4, 2_000);
+    const henerpriseShort = mission("HENERPRISE", "SHORT", 9.6, 200);
+    const chickenOne = mission("CHICKEN_ONE", "SHORT", 1, 1_000_000);
+    expect(virtueTopUpReferenceRate([henerpriseShort, henliner, chickenOne])).toBeCloseTo(
+      Math.max(rate(henliner), rate(henerpriseShort)),
+      12
+    );
   });
 });
