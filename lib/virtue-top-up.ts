@@ -43,12 +43,14 @@ export const VIRTUE_TOP_UP_MIN_ROOM_FRACTION = 0.2;
  * third of its duration (three mission slots) plus VIRTUE_LAUNCH_EFFORT_SECONDS
  * of player effort. The charge per second (lambda) is this fraction of the
  * best value per charged second among all the player's candidates, whatever
- * the route: a launch has to be at least half as time-efficient as the best
- * mission the player could fly instead, or its slot time is better spent
- * elsewhere. Lower fractions let slow small ships in (a 400T tank then fills
- * with dozens of Defihents); higher ones leave only the single best ship.
+ * the route: a launch has to be at least a quarter as time-efficient as the
+ * best mission the player could fly instead. A light charge on purpose: slow,
+ * fuel-thrifty ships filling leftover room for days (Defihents, Galeggticas)
+ * is how players spend spare fuel, but fewer launches still win when they
+ * come close. At 0.5 only the fastest ships survive; at 0 the room fills
+ * with as many small launches as fit.
  */
-export const VIRTUE_TOP_UP_LAMBDA_FRACTION = 0.5;
+export const VIRTUE_TOP_UP_LAMBDA_FRACTION = 0.25;
 
 /** A top-up is offered only when its value net of the time charge is at least this share of its value. */
 export const VIRTUE_TOP_UP_MIN_NET_FRACTION = 0.1;

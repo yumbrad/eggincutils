@@ -10,6 +10,7 @@ import { VIRTUE_LAUNCH_EFFORT_SECONDS } from "./virtue-tank-plan";
 import { VIRTUE_REFILL_ROUTE_ORDER, type VirtueFuelVector, type VirtueTankPlan } from "./virtue-tanks";
 import {
   planVirtueLastTankTopUp,
+  VIRTUE_TOP_UP_LAMBDA_FRACTION,
   VIRTUE_TOP_UP_MAX_LAUNCHES,
   virtueLastTankRoom,
   virtueLastTankRoomText,
@@ -228,7 +229,7 @@ describe("planVirtueLastTankTopUp", () => {
 
       // Brute force over every mix: the solve finds the best value net of the time charge.
       const costOf = (hours: number) => (hours * 3600) / 3 + VIRTUE_LAUNCH_EFFORT_SECONDS;
-      const lambda = 0.5 * Math.max(12 / costOf(9.6), 20 / costOf(19.2), 60 / costOf(38.4));
+      const lambda = VIRTUE_TOP_UP_LAMBDA_FRACTION * Math.max(12 / costOf(9.6), 20 / costOf(19.2), 60 / costOf(38.4));
       const net = (value: number, hours: number) => Math.max(0, value - lambda * costOf(hours));
       let best = 0;
       let bestGross = 0;
@@ -277,7 +278,8 @@ describe("planVirtueLastTankTopUp", () => {
       const greedy = await planVirtueLastTankTopUp({ pack, candidates });
       expect(greedy).not.toBeNull();
       checkFits(pack, greedy!);
-      expect(topUp!.totalValue).toBeGreaterThanOrEqual(greedy!.totalValue - 1e-9);
+      // The solve maximizes value net of the time charge, so it never does worse than greedy on that.
+      expect(topUp!.netValue).toBeGreaterThanOrEqual(greedy!.netValue - 1e-9);
     },
     SOLVER_TIMEOUT_MS
   );
@@ -319,13 +321,45 @@ describe("planVirtueLastTankTopUp", () => {
   );
 
   it(
+    "lets slow fuel-thrifty ships fill the room by default when they bring clearly more per egg",
+    async () => {
+      const pack = packWithLastTank(["curiosity", "kindness"], { curiosity: 40 * T, kindness: 30 * T });
+      // Defihent Extended: half Henerprise Short's value per hour, but 5 per egg-T against 1.2.
+      const thrifty = [
+        candidate("HENERPRISE", "SHORT", { goldMeteorite: 30 }, 17),
+        candidate("CHICKFIANT", "EPIC", { goldMeteorite: 30 }, 17),
+      ];
+      const topUp = await planVirtueLastTankTopUp({ pack, candidates: thrifty, solverFn: solveWithHighs });
+      const defihents = topUp!.launches.find((launch) => launch.ship === "CHICKFIANT")?.launches ?? 0;
+      expect(defihents).toBeGreaterThan(30);
+      checkFits(pack, topUp!);
+      // A heavier charge keeps only the fast ship.
+      const strict = await planVirtueLastTankTopUp({ pack, candidates: thrifty, solverFn: solveWithHighs, lambdaFraction: 0.5 });
+      expect(strict!.launches.map((launch) => launch.ship)).toEqual(["HENERPRISE"]);
+
+      // When the thrifty ship is only about as good per egg, the fewer, faster launches win.
+      const close = await planVirtueLastTankTopUp({
+        pack,
+        candidates: [candidate("HENERPRISE", "SHORT", { goldMeteorite: 30 }, 17), candidate("CHICKFIANT", "EPIC", { goldMeteorite: 20 }, 17)],
+        solverFn: solveWithHighs,
+      });
+      expect(close!.launches.find((launch) => launch.ship === "HENERPRISE")?.launches ?? 0).toBeGreaterThan(
+        close!.launches.find((launch) => launch.ship === "CHICKFIANT")?.launches ?? 0
+      );
+      checkFits(pack, close!);
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
     "offers nothing when only slow ships fit the route",
     async () => {
       const pack = packWithLastTank(["curiosity", "kindness"], { curiosity: 40 * T, kindness: 30 * T });
       // The player's best mission (Henerprise Extended) burns Resilience, which the route skips.
       const topUp = await planVirtueLastTankTopUp({
         pack,
-        candidates: [candidate("HENERPRISE", "EPIC", { goldMeteorite: 60 }, 17), candidate("CHICKFIANT", "EPIC", { goldMeteorite: 10 }, 17)],
+        // Defihent Extended at a sixth of Henerprise Extended's value per hour: under even the light default charge.
+        candidates: [candidate("HENERPRISE", "EPIC", { goldMeteorite: 60 }, 17), candidate("CHICKFIANT", "EPIC", { goldMeteorite: 5 }, 17)],
         solverFn: solveWithHighs,
       });
       expect(topUp).toBeNull();
