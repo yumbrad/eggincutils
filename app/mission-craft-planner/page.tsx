@@ -58,7 +58,6 @@ import {
   buildVirtueTankPlannerOptions,
   DEFAULT_VIRTUE_SHIFT_CAP,
   snapVirtueTankReading,
-  VIRTUE_LAUNCH_EFFORT_SECONDS,
   type VirtueTankPlannerResult,
   type VirtueTankPlanUnit,
 } from "../../lib/virtue-tank-plan";
@@ -66,7 +65,6 @@ import {
   nearestVirtueShiftCapDetent,
   VIRTUE_REFILL_ROUTE_ORDER,
   VIRTUE_SHIFT_CAP_DETENTS,
-  VIRTUE_SHIFT_PENALTY_SECONDS,
   virtueFuelTolerance,
   type VirtueFuelVector,
   type VirtueTank,
@@ -2222,10 +2220,6 @@ function VirtueFuelTanksPanel({ view, planStartMs }: { view: VirtueTankPlanView;
           {pluralize(tanks.length, "tank")} · {pluralize(pack.totalShifts, "shift")} · {formatTankFuel(capacity)} tank
         </span>
       </div>
-      <p className={styles.tankPanelIntro}>
-        Each tank is what you launch from before the next refuel. Rows are drawn against the full tank, the same scale as
-        the in-game limit sliders. Missions already in the air paid for their fuel and aren&apos;t counted.
-      </p>
       {pack.unplaced.length > 0 && (
         <div className={styles.tankPanelNotices}>
           {pack.unplaced.map((entry) => {
@@ -2372,16 +2366,8 @@ function VirtueFuelTanksPanel({ view, planStartMs }: { view: VirtueTankPlanView;
   );
 }
 
-/** Panel G in tank mode: the packer's schedule, with tank boundaries and refuel windows. */
-function VirtueTankTimeline({
-  view,
-  plan,
-  planStartMs,
-}: {
-  view: VirtueTankPlanView;
-  plan: PlanResponse["plan"];
-  planStartMs: number;
-}) {
+/** Panel G in tank mode: the packer's schedule, each block badged with the tank it launches from. */
+function VirtueTankTimeline({ view, plan }: { view: VirtueTankPlanView; plan: PlanResponse["plan"] }) {
   const { pack } = view;
   const totalSeconds = Math.max(1, pack.schedule.makespanSeconds);
   const at = (seconds: number) => Math.max(0, Math.min(100, (seconds / totalSeconds) * 100));
@@ -2397,59 +2383,6 @@ function VirtueTankTimeline({
     )
     .sort((a, b) => b.seconds - a.seconds)
     .slice(0, 3);
-  const boundaries = view.tanks
-    .filter((tankView) => tankView.window)
-    .map((tankView) => ({
-      tankIndex: tankView.tank.index,
-      label: tankView.tank.label,
-      fromSeconds: tankView.window!.fromSeconds,
-      toSeconds: tankView.window!.toSeconds,
-    }));
-  const clock = (seconds: number) => formatClockTime(new Date(planStartMs + seconds * 1000), planStartMs);
-  // Boundaries that nearly coincide share one label ("Tanks 2–5"); close labels
-  // then stack in two rows, the earlier one on top so they read in order.
-  const markerGroups: Array<typeof boundaries> = [];
-  for (const boundary of boundaries) {
-    const group = markerGroups[markerGroups.length - 1];
-    if (group && at(boundary.toSeconds) - at(group[0].toSeconds) < 7) {
-      group.push(boundary);
-    } else {
-      markerGroups.push([boundary]);
-    }
-  }
-  const markers = markerGroups.map((group) => {
-    const first = group[0];
-    const last = group[group.length - 1];
-    return {
-      key: first.label,
-      label: group.length === 1 ? first.label : `Tanks ${first.tankIndex + 1}–${last.tankIndex + 1}`,
-      title: group
-        .map(
-          (boundary) =>
-            `${boundary.label}: refuel between ${clock(boundary.fromSeconds)} and ${clock(boundary.toSeconds)} (${formatDurationFromHours((boundary.toSeconds - boundary.fromSeconds) / 3600)})`
-        )
-        .join("\n"),
-      left: at(first.toSeconds),
-      row: 0,
-      edge: "" as "" | "start" | "end",
-    };
-  });
-  let markerRows = 1;
-  markers.forEach((marker, index) => {
-    const previous = markers[index - 1];
-    if (previous && marker.left - previous.left < 14 && previous.row === 0) {
-      previous.row = 1;
-      markerRows = 2;
-    }
-    marker.edge = marker.left < 6 ? "start" : marker.left > 94 ? "end" : "";
-  });
-  const windowsText = boundaries
-    .map((boundary) => {
-      const seconds = boundary.toSeconds - boundary.fromSeconds;
-      return `${boundary.label} ${seconds < VIRTUE_TIGHT_REFUEL_WINDOW_SECONDS ? "none" : formatDurationFromHours(seconds / 3600)}`;
-    })
-    .join(", ");
-
   const legendIds: string[] = [];
   for (const tank of pack.tanks) {
     for (const entry of tank.launches) {
@@ -2462,8 +2395,7 @@ function VirtueTankTimeline({
   return (
     <div className={styles.timelinePanel}>
       <p className={`muted ${styles.timelineIntro}`}>
-        Launches in tank order: a tank&apos;s launches start only after the previous tank&apos;s last launch and its
-        refuel. Shaded spans are refuel windows.
+        The number on each block is the tank it launches from.
       </p>
       <div className={styles.timelineStats}>
         <span>
@@ -2472,33 +2404,8 @@ function VirtueTankTimeline({
         <span>
           Timeline makespan: <strong>{formatDurationFromHours(pack.schedule.makespanSeconds / 3600)}</strong>
         </span>
-        {windowsText && (
-          <span>
-            Refuel windows: <strong>{windowsText}</strong>
-          </span>
-        )}
       </div>
       <div className={styles.timelineLanes}>
-        {markers.length > 0 && (
-          <div className={styles.timelineMarkerRow} aria-hidden="true">
-            <span />
-            <div className={styles.timelineMarkerLabels} data-rows={markerRows}>
-              {markers.map((marker) => (
-                <span
-                  key={marker.key}
-                  className={styles.timelineTankLabel}
-                  data-row={marker.row}
-                  data-edge={marker.edge || undefined}
-                  style={{ left: `${marker.left}%` }}
-                  title={marker.title}
-                >
-                  {VIRTUE_REFUEL_ICON}
-                  {marker.label}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
         {pack.schedule.lanes.map((lane, laneIndex) => {
           const seed = inAirLaunches[laneIndex];
           let cursor = 0;
@@ -2561,7 +2468,9 @@ function VirtueTankTimeline({
                   `${formatDurationFromHours(block.startSeconds / 3600)} → ${formatDurationFromHours(block.endSeconds / 3600)}`,
                 ].join("\n")}
               >
-                <span className={styles.timelineBlockLabel}>x{block.launches.toLocaleString()}</span>
+                <span className={styles.timelineBlockLabel}>
+                  <span className={styles.timelineTankBadge}>{block.tankIndex + 1}</span>x{block.launches.toLocaleString()}
+                </span>
               </div>
             );
             cursor = block.endSeconds;
@@ -2571,18 +2480,6 @@ function VirtueTankTimeline({
               <div className={styles.timelineLaneLabel}>Slot {laneIndex + 1}</div>
               <div className={styles.timelineTrack}>
                 {items}
-                {boundaries.map((boundary) => (
-                  <Fragment key={boundary.label}>
-                    <span
-                      className={styles.timelineRefuelBand}
-                      style={{
-                        left: `${at(boundary.fromSeconds)}%`,
-                        width: `${Math.max(0, at(boundary.toSeconds) - at(boundary.fromSeconds))}%`,
-                      }}
-                    />
-                    <span className={styles.timelineTankMarker} style={{ left: `${at(boundary.toSeconds)}%` }} />
-                  </Fragment>
-                ))}
               </div>
             </div>
           );
@@ -5706,9 +5603,8 @@ export default function MissionCraftPlannerPage() {
                     </>
                   ) : (
                     <>
-                      <strong>Plan as if you first fill the tank with the best mix for these goals.</strong> That first
-                      fill doesn&apos;t count toward the shift cap, but it still costs shifts in game. The Fuel tanks panel
-                      lists what to add and drain.
+                      <strong>Plan as if you first fill the tank with the best mix for these goals.</strong> Use your
+                      build-up phase to match the Initial Tank.
                     </>
                   )}
                 </p>
@@ -5829,11 +5725,6 @@ export default function MissionCraftPlannerPage() {
                         </>
                       )}
                     </div>
-                  </div>
-                  <div className={styles.cardSub}>
-                    The planner counts each shift as {VIRTUE_SHIFT_PENALTY_SECONDS / 3600} h and each launch as{" "}
-                    {VIRTUE_LAUNCH_EFFORT_SECONDS / 60} min of mission time, so it only spends a shift that saves more than
-                    that.
                   </div>
                 </>
               ) : (
@@ -6272,11 +6163,7 @@ export default function MissionCraftPlannerPage() {
           <div className="panel">
             <h2 style={{ marginTop: 0 }}>Mission plan</h2>
             {virtueTankView && (
-              <VirtueTankTimeline
-                view={virtueTankView}
-                plan={response.plan}
-                planStartMs={planReceivedAtMs ?? Date.now()}
-              />
+              <VirtueTankTimeline view={virtueTankView} plan={response.plan} />
             )}
             {missionTimeline && (
               <div className={styles.timelinePanel}>

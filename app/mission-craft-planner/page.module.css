@@ -1884,7 +1884,6 @@
 
 .virtueNotice svg,
 .shiftCapBanner svg,
-.timelineTankLabel svg,
 .tankMarkerRow svg {
   fill: none;
   stroke: currentColor;
@@ -3306,74 +3305,22 @@
   cursor: help;
 }
 
-/* G. Tank boundaries on the timeline */
-.timelineMarkerRow {
-  display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
-  gap: 8px;
-}
-
-.timelineMarkerLabels {
-  position: relative;
-  height: 22px;
-}
-
-.timelineMarkerLabels[data-rows="2"] {
-  height: 44px;
-}
-
-.timelineTankLabel {
-  position: absolute;
-  bottom: 0;
+/* G. The tank each timeline block launches from. */
+.timelineTankBadge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 7px;
-  border: 1px solid color-mix(in oklab, var(--tank-marker), transparent 55%);
-  border-radius: 6px;
-  background: var(--panel);
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  padding: 0 3px;
+  border-radius: 4px 4px 3px 3px;
+  background: color-mix(in oklab, var(--panel), transparent 15%);
   color: var(--ink);
-  font-size: 10.5px;
-  font-weight: 700;
-  white-space: nowrap;
-  transform: translateX(-50%);
-}
-
-.timelineTankLabel[data-row="1"] {
-  bottom: 22px;
-}
-
-.timelineTankLabel svg {
-  width: 11px;
-  height: 11px;
-}
-
-.timelineTankLabel[data-edge="start"] {
-  transform: none;
-}
-
-.timelineTankLabel[data-edge="end"] {
-  transform: translateX(-100%);
-}
-
-.timelineTankMarker {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  z-index: 2;
-  width: 0;
-  border-left: 2px dashed color-mix(in oklab, var(--tank-marker), transparent 25%);
-  pointer-events: none;
-}
-
-/* Refuel window: the previous tank's last launch to this tank's first. */
-.timelineRefuelBand {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  z-index: 2;
-  background: color-mix(in oklab, var(--tank-marker), transparent 88%);
-  pointer-events: none;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  vertical-align: 1px;
 }
 
 /* The tank timeline's legend also lists the tanks each mission launches from. */
@@ -3407,15 +3354,6 @@
   }
 
   .tankAxis > :first-child {
-    display: none;
-  }
-
-  .timelineMarkerRow {
-    grid-template-columns: 1fr;
-    gap: 4px;
-  }
-
-  .timelineMarkerRow > :first-child {
     display: none;
   }
 
