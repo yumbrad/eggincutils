@@ -5665,14 +5665,7 @@ export default function MissionCraftPlannerPage() {
                   </div>
                   {cardVirtueTank && (
                     <span className={styles.virtueOptMeta}>
-                      {formatBackupAge(cardVirtueTank.backupTimeSeconds, Date.now()) ?? "Demo tank"} ·{" "}
-                      {cardVirtueTank.currentEgg ? (
-                        <>
-                          on <strong>{VIRTUE_EGG_DISPLAY[cardVirtueTank.currentEgg].label}</strong>
-                        </>
-                      ) : (
-                        "on the main farm"
-                      )}
+                      {formatBackupAge(cardVirtueTank.backupTimeSeconds, Date.now()) ?? "Demo tank"}
                     </span>
                   )}
                 </div>
@@ -5719,23 +5712,6 @@ export default function MissionCraftPlannerPage() {
                     </>
                   )}
                 </p>
-                {cardVirtueTank?.currentEgg && cardVirtueTank.currentEgg !== "humility" && (
-                  <VirtueNotice tone="warn">
-                    You&apos;re on {VIRTUE_EGG_DISPLAY[cardVirtueTank.currentEgg].label}. Missions only launch from
-                    Humility, so shift back first: 1 shift, not in the plan&apos;s count.
-                  </VirtueNotice>
-                )}
-                {cardVirtueTank && cardVirtueTank.currentEgg === null && (
-                  <VirtueNotice tone="info">
-                    This backup is from your main farm. The plan assumes you start on your Humility farm with the tank
-                    below.
-                  </VirtueNotice>
-                )}
-                {cardVirtueTank && !cardVirtueTank.fillingEnabled && (
-                  <VirtueNotice tone="warn">
-                    Tank filling is off. Turn it on in the fuel tank before a refuel, or nothing will fill.
-                  </VirtueNotice>
-                )}
                 {virtueTankMissing && (
                   <VirtueNotice tone="info">No tank data in this backup, so the Initial Tank uses the ideal mix.</VirtueNotice>
                 )}
