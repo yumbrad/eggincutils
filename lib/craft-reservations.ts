@@ -2,8 +2,8 @@ import { itemIdToCanonicalKey } from "./item-utils";
 import { recipes as defaultRecipes, type Recipes } from "./recipes";
 
 /**
- * Keeping inventory back for a player's crafting goals, so the XP planner can
- * optimize over what is left without eating into it.
+ * What a player's crafting goals ask of their inventory, so the XP planner can
+ * plan the goals' crafts and keep the rest of the plan away from them.
  *
  * - A copies goal "X ×N" means "have N of X": owned copies of X are kept
  *   first, and each copy still missing keeps one recipe's worth of ingredients
@@ -13,10 +13,11 @@ import { recipes as defaultRecipes, type Recipes } from "./recipes";
  *   N − (crafts so far) crafts still to make.
  * - Goals take from one shared pool in row order, so two goals never keep the
  *   same copies.
- * - When owned items can't cover a goal, everything owned along its recipe
- *   tree stays kept anyway (never released). The goal reports how much of it
- *   inventory can finish (`finishable` of `needed`), and the uncraftable items
- *   still missing (`short`).
+ * - Each goal reports how much of it inventory can finish (`finishable` of
+ *   `needed`) and what that part takes (`finishTake`). When owned items can't
+ *   cover all of it, everything owned along the unfinishable remainder's tree
+ *   is held anyway (`held`, never released), and the uncraftable items still
+ *   missing are `short`.
  */
 
 export type CraftReservationGoal = {
@@ -39,7 +40,13 @@ export type CraftGoalReservation = {
   needed: number;
   /** How much of `needed` the inventory left for this goal can finish (all of it when covered). */
   finishable: number;
-  /** Owned items this goal keeps, canonical key → count, in the order its recipe tree reached them. */
+  /** Owned items the finishable part uses (owned copies of the goal item included). */
+  finishTake: Record<string, number>;
+  /** Copies goals: owned copies of the goal item counted toward it (the rest of `finishable` is crafted). */
+  ownedCopies: number;
+  /** Owned items held back for the unfinishable remainder. */
+  held: Record<string, number>;
+  /** Everything the goal takes: `finishTake` and `held` together, in the order its recipe tree reached them. */
   keeps: Record<string, number>;
   /** Uncraftable items the goal still needs beyond everything owned, canonical key → count. */
   short: Record<string, number>;
@@ -49,6 +56,8 @@ export type CraftReservations = {
   goals: CraftGoalReservation[];
   /** Total kept per canonical key across all goals. */
   reserved: Record<string, number>;
+  /** Total held back for unfinishable remainders. */
+  held: Record<string, number>;
   /** The inventory with everything kept taken out (never below 0). */
   available: Record<string, number>;
   /** Number of items kept across all goals. */
@@ -154,6 +163,7 @@ export function reserveInventoryForGoals(
     }
   }
   const reserved: Record<string, number> = {};
+  const held: Record<string, number> = {};
   // Crafts earlier craft-count rows already keep ingredients for, so a second
   // row for the same artifact only adds what the first doesn't cover.
   const plannedGoalCrafts = new Map<string, number>();
@@ -162,7 +172,19 @@ export function reserveInventoryForGoals(
     const itemKey = goal.itemId ? itemIdToCanonicalKey(goal.itemId) : "";
     const quantity = Math.max(0, Math.round(Number(goal.quantity) || 0));
     if (!itemKey || !(itemKey in recipeMap)) {
-      return { itemKey: "", quantity, craftGoal: false, craftsToGo: null, needed: 0, finishable: 0, keeps: {}, short: {} };
+      return {
+        itemKey: "",
+        quantity,
+        craftGoal: false,
+        craftsToGo: null,
+        needed: 0,
+        finishable: 0,
+        finishTake: {},
+        ownedCopies: 0,
+        held: {},
+        keeps: {},
+        short: {},
+      };
     }
 
     const craftGoal = Boolean(goal.craftGoal && recipeMap[itemKey]);
@@ -174,14 +196,34 @@ export function reserveInventoryForGoals(
       plannedGoalCrafts.set(itemKey, alreadyPlanned + craftsToGo);
     }
     const needed = craftsToGo ?? quantity;
-    const poolBefore = new Map(pool);
-    const { keeps, short } = takeFromPool(pool, recipeMap, itemKey, needed, craftGoal);
+    const covered = Object.keys(takeFromPool(new Map(pool), recipeMap, itemKey, needed, craftGoal).short).length === 0;
+    const finishable = covered ? needed : finishableFromPool(pool, recipeMap, itemKey, needed, craftGoal);
+    // Taking the finishable part and then the remainder takes the same as
+    // taking all of it at once: owned copies first, then recipes.
+    const finishTake = takeFromPool(pool, recipeMap, itemKey, finishable, craftGoal).keeps;
+    const remainder = takeFromPool(pool, recipeMap, itemKey, needed - finishable, craftGoal);
+    const keeps = { ...finishTake };
+    for (const [key, count] of Object.entries(remainder.keeps)) {
+      keeps[key] = (keeps[key] || 0) + count;
+      held[key] = (held[key] || 0) + count;
+    }
     for (const [key, count] of Object.entries(keeps)) {
       reserved[key] = (reserved[key] || 0) + count;
     }
-    const finishable =
-      Object.keys(short).length === 0 ? needed : finishableFromPool(poolBefore, recipeMap, itemKey, needed, craftGoal);
-    return { itemKey, quantity, craftGoal, craftsToGo, needed, finishable, keeps, short };
+    const ownedCopies = craftGoal ? 0 : finishTake[itemKey] || 0;
+    return {
+      itemKey,
+      quantity,
+      craftGoal,
+      craftsToGo,
+      needed,
+      finishable,
+      finishTake,
+      ownedCopies,
+      held: remainder.keeps,
+      keeps,
+      short: remainder.short,
+    };
   });
 
   const available: Record<string, number> = {};
@@ -189,7 +231,7 @@ export function reserveInventoryForGoals(
     available[itemKey] = Math.max(0, (Number(quantity) || 0) - (reserved[itemKey] || 0));
   }
   const totalReserved = Object.values(reserved).reduce((sum, count) => sum + count, 0);
-  return { goals: results, reserved, available, totalReserved };
+  return { goals: results, reserved, held, available, totalReserved };
 }
 
 /** Whether a goal is fully covered by owned items (nothing short). */
@@ -198,15 +240,23 @@ export function goalReservationCovered(goal: CraftGoalReservation): boolean {
 }
 
 /**
- * Whether a plan leaves every kept item in place: inventory plus what the plan
- * crafts minus what its crafts consume, per item, is at least what is kept.
+ * Whether a plan meets goals: per item, inventory plus what the plan crafts
+ * minus what its crafts consume is at least what must be left (`keep`), and
+ * each artifact is crafted at least `minCrafts` times.
  */
-export function planLeavesReserved(
+export function planMeetsGoals(
   plannedCrafts: Record<string, number>,
   inventory: Record<string, number>,
-  reserved: Record<string, number>,
+  keep: Record<string, number>,
+  minCrafts: Record<string, number> = {},
   recipeMap: Recipes = defaultRecipes
 ): boolean {
+  const craftsMet = Object.entries(minCrafts).every(
+    ([artifact, least]) => Math.round(plannedCrafts[artifact] || 0) >= least
+  );
+  if (!craftsMet) {
+    return false;
+  }
   const net: Record<string, number> = {};
   for (const [artifact, rawCount] of Object.entries(plannedCrafts)) {
     const count = Math.max(0, Math.round(rawCount));
@@ -219,7 +269,7 @@ export function planLeavesReserved(
       net[ingredient] = (net[ingredient] || 0) - perCraft * count;
     }
   }
-  return Object.entries(reserved).every(
+  return Object.entries(keep).every(
     ([itemKey, kept]) => (Number(inventory[itemKey]) || 0) + (net[itemKey] || 0) >= kept - 1e-6
   );
 }

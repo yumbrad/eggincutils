@@ -5,8 +5,17 @@ export type CraftCounts = Record<string, number>;
 
 export interface Highs {
   solve: (problem: string, options?: Record<string, string | number | boolean>) => {
+    Status?: string;
     Columns: Record<string, { Primal: number }>;
   };
+}
+
+/** What a plan must do on top of maximizing XP (the XP planner's goals). */
+export interface CraftRequirements {
+  /** Copies of each item the plan must end with: the item's balance row keeps them back. */
+  keepCopies?: Record<string, number>;
+  /** Least crafts of each artifact (craft-count goals): a lower bound on its craft count. */
+  minCrafts?: Record<string, number>;
 }
 
 export interface CraftModeMetrics {
@@ -56,6 +65,8 @@ export interface Solution {
   crafts: Record<string, SolutionCraftRow>;
   totalXp: number;
   totalCost: number;
+  /** Set when the requirements (with the craft limits) can't all be met: nothing is planned. */
+  infeasible?: boolean;
 }
 
 export type CraftLimits = Record<string, number>;
@@ -133,9 +144,10 @@ export function optimizeCrafts(
   inventory: Inventory,
   craftCounts: CraftCounts = {},
   saleEnabled: boolean = false,
-  craftLimits: CraftLimits = {}
+  craftLimits: CraftLimits = {},
+  requirements: CraftRequirements = {}
 ): Solution {
-  const problem = getProblem(inventory, craftLimits);
+  const problem = getProblem(inventory, craftLimits, requirements);
   const solution = highs.solve(problem, HIGHS_SOLVE_OPTIONS);
 
   const result: Solution = {
@@ -143,6 +155,10 @@ export function optimizeCrafts(
     totalXp: 0,
     totalCost: 0,
   };
+  if (/infeasible/i.test(solution.Status || "")) {
+    result.infeasible = true;
+    return result;
+  }
 
   for (const artifact of Object.keys(solution.Columns || {})) {
     if (!recipes[artifact]) {
@@ -234,6 +250,114 @@ export function simulateGeEfficiencyPlan(
     finalInventory: simulationInventory,
     finalCraftCounts: simulationCraftCounts,
   };
+}
+
+export interface GoalCraftStep {
+  artifact: string;
+  /** Copies goals: copies to have at the end (set aside from inventory). Craft-count goals: crafts to make. */
+  amount: number;
+  craftGoal: boolean;
+}
+
+export interface GoalCraftSimulation {
+  /** Inventory left for the rest of the plan (copies goals' copies set aside). */
+  inventory: Inventory;
+  craftCounts: CraftCounts;
+  /** Copies set aside for copies goals. */
+  setAside: Inventory;
+  /** Every craft the goals made, auto-crafted ingredients included. */
+  crafts: Record<string, number>;
+  xp: number;
+  cost: number;
+}
+
+/**
+ * Craft goals in order before anything else (the Max GE Efficiency Plan does
+ * this first): a copies goal keeps owned copies and crafts the rest, auto-
+ * crafting missing ingredients from inventory first; a craft-count goal crafts
+ * its count the same way and leaves the copies in inventory. Every craft earns
+ * its XP. A goal stops early if inventory runs out.
+ */
+export function simulateGoalCrafts(
+  inventory: Inventory,
+  craftCounts: CraftCounts,
+  steps: GoalCraftStep[],
+  saleEnabled: boolean = false
+): GoalCraftSimulation {
+  let simulationInventory = cloneCountMap(inventory);
+  let simulationCraftCounts = cloneCountMap(craftCounts);
+  // Keep fractional expected drops (pre-plan sends) that cloneCountMap rounds.
+  for (const [itemKey, quantity] of Object.entries(inventory)) {
+    simulationInventory[itemKey] = Math.max(0, Number(quantity) || 0);
+  }
+  const setAside: Inventory = {};
+  let cost = 0;
+  const craftOneInto = (artifact: string): boolean => {
+    const attemptInventory = { ...simulationInventory };
+    const attemptCraftCounts = { ...simulationCraftCounts };
+    let attemptCost = 0;
+    const didCraft = craftOne(recipes, attemptInventory, attemptCraftCounts, artifact, true, saleEnabled, (craftCost) => {
+      attemptCost += craftCost;
+    });
+    if (didCraft) {
+      simulationInventory = attemptInventory;
+      simulationCraftCounts = attemptCraftCounts;
+      cost += attemptCost;
+    }
+    return didCraft;
+  };
+
+  for (const step of steps) {
+    const amount = Math.max(0, Math.round(step.amount));
+    if (amount <= 0 || !(step.artifact in recipes)) {
+      continue;
+    }
+    if (step.craftGoal) {
+      for (let index = 0; index < amount && craftOneInto(step.artifact); index += 1) {
+        // Craft-count goal: the copies stay in inventory.
+      }
+      continue;
+    }
+    const owned = Math.min(Math.floor(simulationInventory[step.artifact] || 0), amount);
+    let kept = owned;
+    simulationInventory[step.artifact] = (simulationInventory[step.artifact] || 0) - owned;
+    while (kept < amount && craftOneInto(step.artifact)) {
+      simulationInventory[step.artifact] -= 1;
+      kept += 1;
+    }
+    setAside[step.artifact] = (setAside[step.artifact] || 0) + kept;
+  }
+
+  const crafts: Record<string, number> = {};
+  let xp = 0;
+  for (const [artifact, count] of Object.entries(simulationCraftCounts)) {
+    const made = count - Math.max(0, Math.round(craftCounts[artifact] || 0));
+    if (made > 0) {
+      crafts[artifact] = made;
+      xp += made * (recipes[artifact]?.xp || 0);
+    }
+  }
+  return { inventory: simulationInventory, craftCounts: simulationCraftCounts, setAside, crafts, xp, cost };
+}
+
+/**
+ * The solution with its standalone comparisons (direct / auto-craft counts per
+ * artifact) read from another inventory: what is left once goals are crafted.
+ */
+export function withStandaloneComparisons(
+  solution: Solution,
+  inventory: Inventory,
+  craftCounts: CraftCounts = {},
+  saleEnabled: boolean = false
+): Solution {
+  const crafts: Record<string, SolutionCraftRow> = {};
+  for (const [artifact, craft] of Object.entries(solution.crafts)) {
+    crafts[artifact] = {
+      ...craft,
+      modeComparison: getCraftModeComparison(recipes, inventory, craftCounts, artifact, craft.xpPerCraft, saleEnabled),
+    };
+  }
+  return { ...solution, crafts };
 }
 
 export function buildMaxXpExecutionPlan(
@@ -937,19 +1061,21 @@ function applyCraftingSale(cost: number, saleEnabled: boolean): number {
   return Math.max(0, Math.floor(cost * CRAFTING_SALE_FACTOR));
 }
 
-function getProblem(inventory: Inventory, craftLimits: CraftLimits = {}): string {
+function getProblem(inventory: Inventory, craftLimits: CraftLimits = {}, requirements: CraftRequirements = {}): string {
   const lines: string[] = [];
   const artifacts = Object.keys(recipes).sort();
   const cappedArtifacts = Object.entries(craftLimits)
     .filter(([artifact, limit]) => Boolean(recipes[artifact]) && Number.isFinite(limit) && limit >= 0)
     .map(([artifact, limit]) => [artifact, Math.max(0, Math.round(limit))] as const);
+  const keepCopies = positiveWholeCounts(requirements.keepCopies);
+  const minCrafts = positiveWholeCounts(requirements.minCrafts);
 
   lines.push("Maximize");
   lines.push(`  obj: ${getObjective(recipes, artifacts)}`);
 
   lines.push("Subject To");
   for (const artifact of artifacts) {
-    const constraint = getConstraint(recipes, inventory, artifact);
+    const constraint = getConstraint(recipes, inventory, artifact, keepCopies[artifact] || 0);
     if (constraint) {
       lines.push(`  c_${artifact}: ${constraint}`);
     }
@@ -960,7 +1086,7 @@ function getProblem(inventory: Inventory, craftLimits: CraftLimits = {}): string
 
   lines.push("Bounds");
   for (const artifact of artifacts) {
-    lines.push(`  ${artifact} >= 0`);
+    lines.push(`  ${artifact} >= ${recipes[artifact] ? minCrafts[artifact] || 0 : 0}`);
   }
 
   lines.push("General");
@@ -980,17 +1106,34 @@ function getObjective(recipeMap: Recipes, artifacts: string[]): string {
   return crafts.join(" + ");
 }
 
-function getConstraint(recipeMap: Recipes, inventory: Inventory, artifact: string): string | null {
+function positiveWholeCounts(counts: Record<string, number> | undefined): Record<string, number> {
+  const whole: Record<string, number> = {};
+  for (const [itemKey, count] of Object.entries(counts || {})) {
+    const rounded = Math.round(Number(count) || 0);
+    if (rounded > 0) {
+      whole[itemKey] = rounded;
+    }
+  }
+  return whole;
+}
+
+/**
+ * The balance row for an item: what parent crafts use, net of what is crafted,
+ * can't exceed what is owned. `keep` copies must still be there at the end.
+ */
+function getConstraint(recipeMap: Recipes, inventory: Inventory, artifact: string, keep = 0): string | null {
   const used = getDemandTerms(recipeMap, artifact);
+  const available = inventory[artifact] || 0;
+  const limit = keep > 0 ? available - keep : available;
   if (used.length === 0) {
-    return null;
+    // Nothing consumes the item, so only crafting it can make up kept copies.
+    return keep > 0 && recipeMap[artifact] ? `${artifact} >= ${keep - available}` : null;
   }
 
-  const available = inventory[artifact] || 0;
   if (recipeMap[artifact]) {
-    return `${used.join(" + ")} - ${artifact} <= ${available}`;
+    return `${used.join(" + ")} - ${artifact} <= ${limit}`;
   }
-  return `${used.join(" + ")} <= ${available}`;
+  return `${used.join(" + ")} <= ${limit}`;
 }
 
 function getDemandTerms(recipeMap: Recipes, artifact: string): string[] {

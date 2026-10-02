@@ -194,7 +194,7 @@ function expectPlanKeepsReserved(
   }
 }
 
-describe("optimizeCrafts with goal reservations", () => {
+describe("optimizeCrafts on inventory with goal items held back (blocked goals)", () => {
   it("never consumes items kept for goals", async () => {
     const highs = await realHighs();
     expectPlanKeepsReserved(

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { goalReservationCovered, planLeavesReserved, reserveInventoryForGoals } from "./craft-reservations";
+import { goalReservationCovered, planMeetsGoals, reserveInventoryForGoals } from "./craft-reservations";
 import { recipes } from "./recipes";
 
 describe("reserveInventoryForGoals", () => {
@@ -265,7 +265,10 @@ describe("reserveInventoryForGoals", () => {
         for (const [key, count] of Object.entries(goal.keeps)) {
           expect(count).toBeGreaterThan(0);
           keptByGoals[key] = (keptByGoals[key] || 0) + count;
+          // What a goal takes splits into its finishable part and its held remainder.
+          expect((goal.finishTake[key] || 0) + (goal.held[key] || 0)).toBe(count);
         }
+        expect(goal.ownedCopies).toBeLessThanOrEqual(goal.finishable);
       }
       expect(keptByGoals).toEqual(result.reserved);
       for (const [key, count] of Object.entries(result.reserved)) {
@@ -295,15 +298,15 @@ describe("reserveInventoryForGoals", () => {
   });
 });
 
-describe("planLeavesReserved", () => {
+describe("planMeetsGoals", () => {
   it("checks a plan's net use of each kept item", () => {
     const inventory = { ornate_gusset_2: 20, mercurys_lens_2: 4, ornate_gusset_3: 1 };
     // 2 gusset T3 crafts use 12 gusset T2 and 4 lens T2.
-    expect(planLeavesReserved({ ornate_gusset_3: 2 }, inventory, { ornate_gusset_2: 8 })).toBe(true);
-    expect(planLeavesReserved({ ornate_gusset_3: 2 }, inventory, { ornate_gusset_2: 9 })).toBe(false);
-    expect(planLeavesReserved({ ornate_gusset_3: 2 }, inventory, { mercurys_lens_2: 1 })).toBe(false);
+    expect(planMeetsGoals({ ornate_gusset_3: 2 }, inventory, { ornate_gusset_2: 8 })).toBe(true);
+    expect(planMeetsGoals({ ornate_gusset_3: 2 }, inventory, { ornate_gusset_2: 9 })).toBe(false);
+    expect(planMeetsGoals({ ornate_gusset_3: 2 }, inventory, { mercurys_lens_2: 1 })).toBe(false);
     // Crafted copies count toward what is kept of the crafted item.
-    expect(planLeavesReserved({ ornate_gusset_3: 2 }, inventory, { ornate_gusset_3: 3 })).toBe(true);
-    expect(planLeavesReserved({}, inventory, {})).toBe(true);
+    expect(planMeetsGoals({ ornate_gusset_3: 2 }, inventory, { ornate_gusset_3: 3 })).toBe(true);
+    expect(planMeetsGoals({}, inventory, {})).toBe(true);
   });
 });
