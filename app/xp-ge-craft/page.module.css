@@ -232,6 +232,65 @@
   line-height: 1.35;
 }
 
+/* "Keep for your goals" uses the shared goal rows (app/goal-rows-editor),
+   which read their picker font from this variable as on the attainment planner. */
+.goalsDrawer {
+  --planner-control-font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* Undo .inputSection's 280px text inputs for the quantity stepper and picker filter. */
+.goalsDrawer input[type="text"] {
+  width: 100%;
+}
+
+.goalsBody {
+  max-width: 640px;
+}
+
+.goalReservation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  padding-left: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.goalCovered {
+  color: var(--ok);
+  font-weight: 750;
+}
+
+.goalShort {
+  color: var(--warn-ink);
+  font-weight: 750;
+}
+
+.goalKeeps {
+  min-width: 0;
+}
+
+.goalsActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.goalsImportButton {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 12.5px;
+}
+
+.goalsCost {
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 750;
+}
+
 .errorBox {
   margin-top: 12px;
   padding: 10px;

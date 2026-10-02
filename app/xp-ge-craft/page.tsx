@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import React, { JSX, useEffect, useMemo, useState } from "react";
+import React, { JSX, useEffect, useMemo, useRef, useState } from "react";
 
 import targetFamilies from "../../data/target-families.json";
 import { getArtifactDisplayData, getArtifactDisplayLabel } from "../../lib/artifact-display";
@@ -11,6 +11,24 @@ import {
   getCraftingLevelThresholds,
   getCraftingLevelTotalXpForLevel,
 } from "../../lib/crafting-levels";
+import {
+  planLeavesReserved,
+  reserveInventoryForGoals,
+  type CraftGoalReservation,
+  type CraftReservationGoal,
+  type CraftReservations,
+} from "../../lib/craft-reservations";
+import {
+  buildTargetOptions,
+  MAX_TARGET_ROWS,
+  newTargetRowId,
+  normalizedTargetQuantity,
+  parseStoredTargetRows,
+  readPlannerSavedTargetRows,
+  serializeTargetRows,
+  targetRowToPlannerTarget,
+  type PlannerTargetRow,
+} from "../../lib/goal-rows";
 import { afxIdToTargetFamilyName } from "../../lib/item-utils";
 import { recipes } from "../../lib/recipes";
 import {
@@ -33,6 +51,7 @@ import {
   type SequentialMode,
 } from "../../lib/xp-ge-optimize";
 import { XP_GE_CRAFT_COPY } from "../../lib/xp-ge-craft-copy";
+import GoalRowsEditor from "../goal-rows-editor";
 import styles from "./page.module.css";
 
 type SortKey = "xpPerGe" | "xp" | "tierXpPerGe" | "familyTier" | "name";
@@ -134,8 +153,24 @@ type InventoryMatrixRow = {
   counts: number[];
 };
 
+type SolveInputs = {
+  inventory: Record<string, number>;
+  craftCounts: Record<string, number>;
+  sale: boolean;
+  limits: CraftLimits;
+  /** What goals kept out of the inventory (JSON of the reserved counts). */
+  reservedKey: string;
+};
+
+/** The plan without any goals kept, to price what keeping them costs. */
+type PlanBaseline = Omit<SolveInputs, "reservedKey"> & {
+  totalXp: number;
+  crafts: Record<string, number>;
+};
+
 type OptimizePayload = {
   solution: Solution;
+  reservedKey: string;
   inventory: Record<string, number>;
   craftCounts: Record<string, number>;
   craftingXp: number;
@@ -147,6 +182,12 @@ const SHARED_EID_KEYS = [LOCAL_PREF_KEYS.sharedEid, LOCAL_PREF_KEYS.legacyEid] a
 const SHARED_INCLUDE_SLOTTED_KEYS = [LOCAL_PREF_KEYS.sharedIncludeSlotted, LOCAL_PREF_KEYS.legacyIncludeSlotted] as const;
 const SHARED_CRAFTING_SALE_KEYS = [LOCAL_PREF_KEYS.sharedCraftingSale] as const;
 const PRE_PLAN_UNTARGETED_TARGET_AFX_ID = 10000;
+// Goal edits reach the solver after a short pause: a solve can block the page for up to a second.
+const GOAL_APPLY_DELAY_MS = 600;
+const GOAL_TARGET_OPTIONS = buildTargetOptions();
+const GOAL_COPIES_TITLE = "Keep this many copies. Copies you own count first, then what it takes to craft the rest.";
+const GOAL_CRAFT_COUNT_TITLE =
+  "Keep what it takes to reach this many all-time crafts. 400 maxes shiny luck; 300 maxes the GE discount. Copies you own don't count.";
 const PRE_PLAN_UNTARGETED_ONLY_SHIPS = new Set(["CHICKEN_ONE", "CHICKEN_NINE", "CHICKEN_HEAVY", "BCR"]);
 const PRE_PLAN_SHIPS = [
   "ATREGGIES",
@@ -212,6 +253,85 @@ const INVENTORY_MATRIX_FAMILIES: InventoryMatrixFamily[] = [
   { key: "tau_ceti_geode", label: "Geode" },
 ];
 
+function goalRowToReservationGoal(row: PlannerTargetRow): CraftReservationGoal {
+  const target = targetRowToPlannerTarget(row);
+  return { itemId: target.targetItemId, quantity: target.quantity, craftGoal: target.craftGoal };
+}
+
+/** Goal rows with an item picked, as reservation goals. */
+function goalRowsToReservationGoals(rows: PlannerTargetRow[]): CraftReservationGoal[] {
+  return rows.filter((row) => row.itemId).map(goalRowToReservationGoal);
+}
+
+function parseGoalsKey(key: string): CraftReservationGoal[] {
+  try {
+    const parsed = JSON.parse(key) as unknown;
+    return Array.isArray(parsed) ? (parsed as CraftReservationGoal[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function reservationsFor(
+  inventory: Record<string, number>,
+  craftCounts: Record<string, number>,
+  goals: CraftReservationGoal[]
+): CraftReservations | null {
+  if (goals.length === 0) {
+    return null;
+  }
+  const reservations = reserveInventoryForGoals(inventory, craftCounts, goals);
+  return reservations.totalReserved > 0 ? reservations : null;
+}
+
+function reservedKeyOf(reservations: CraftReservations | null): string {
+  return JSON.stringify(reservations?.reserved ?? {});
+}
+
+function addCountMaps(base: Record<string, number>, extra: Record<string, number>): Record<string, number> {
+  const sum = { ...base };
+  for (const [itemKey, count] of Object.entries(extra)) {
+    sum[itemKey] = (sum[itemKey] || 0) + count;
+  }
+  return sum;
+}
+
+function plannedCraftCounts(solution: Solution): Record<string, number> {
+  return Object.fromEntries(Object.entries(solution.crafts).map(([artifact, craft]) => [artifact, craft.count]));
+}
+
+const GOAL_LIST_LIMIT = 4;
+
+function formatGoalItemList(counts: Record<string, number>, limit = GOAL_LIST_LIMIT): string {
+  const entries = Object.entries(counts).filter(([, count]) => count > 0);
+  const shown = entries
+    .slice(0, limit)
+    .map(([itemKey, count]) => `${count.toLocaleString()}× ${getArtifactDisplayLabel(itemKey)}`);
+  return entries.length > limit ? `${shown.join(", ")}, +${entries.length - limit} more` : shown.join(", ");
+}
+
+function GoalReservationLine({ goal }: { goal: CraftGoalReservation | undefined }): JSX.Element | null {
+  if (!goal || !goal.itemKey) {
+    return null;
+  }
+  const keeps = formatGoalItemList(goal.keeps);
+  const shortList = formatGoalItemList(goal.short, 3);
+  const keepsTitle = formatGoalItemList(goal.keeps, Number.MAX_SAFE_INTEGER);
+  const shortTitle = formatGoalItemList(goal.short, Number.MAX_SAFE_INTEGER);
+  return (
+    <div className={styles.goalReservation}>
+      {shortList ? (
+        <span className={styles.goalShort} title={`Short ${shortTitle}`}>Short {shortList}</span>
+      ) : (
+        <span className={styles.goalCovered}>Covered</span>
+      )}
+      <span className={styles.goalKeeps} title={keepsTitle ? `Keeps ${keepsTitle}` : undefined}>
+        {keeps ? `Keeps ${keeps}` : "Keeps nothing"}
+      </span>
+    </div>
+  );
+}
+
 async function getOptimalCrafts(
   highs: Highs,
   eid: string,
@@ -221,7 +341,8 @@ async function getOptimalCrafts(
   saleEnabled: boolean,
   inventorySource: InventorySource,
   craftLimits: CraftLimits,
-  prePlanSends: PrePlanSendRow[]
+  prePlanSends: PrePlanSendRow[],
+  goals: CraftReservationGoal[]
 ): Promise<OptimizePayload> {
   const params = new URLSearchParams({
     eid,
@@ -260,8 +381,11 @@ async function getOptimalCrafts(
   const inventory = data.inventory;
   const craftCounts = data.craftCounts || {};
   const craftingXp = Math.max(0, Math.floor(data.craftingXp || 0));
+  // The plan may use everything not kept for a goal.
+  const reservations = reservationsFor(inventory, craftCounts, goals);
   return {
-    solution: optimizeCrafts(highs, inventory, craftCounts, saleEnabled, craftLimits),
+    solution: optimizeCrafts(highs, reservations?.available ?? inventory, craftCounts, saleEnabled, craftLimits),
+    reservedKey: reservedKeyOf(reservations),
     inventory,
     craftCounts,
     craftingXp,
@@ -1234,6 +1358,15 @@ export default function XpGeCraftPage(): JSX.Element {
   const [planSourceCraftCounts, setPlanSourceCraftCounts] = useState<Record<string, number>>({});
   const [planSourceCraftingXp, setPlanSourceCraftingXp] = useState<number | null>(null);
   const [planShinyIngredientCount, setPlanShinyIngredientCount] = useState<number>(0);
+  const [goalRows, setGoalRows] = useState<PlannerTargetRow[]>([]);
+  const [goalsOpen, setGoalsOpen] = useState<boolean>(false);
+  const [appliedGoalsKey, setAppliedGoalsKey] = useState<string>("[]");
+  // What the shown solution kept for goals (it lags the goals while a solve is pending).
+  const [solvedReservedKey, setSolvedReservedKey] = useState<string | null>(null);
+  const [planBaseline, setPlanBaseline] = useState<PlanBaseline | null>(null);
+  const [savedPlannerGoalCount, setSavedPlannerGoalCount] = useState<number>(0);
+  const [goalImportNote, setGoalImportNote] = useState<string | null>(null);
+  const lastSolveRef = useRef<SolveInputs | null>(null);
 
   useEffect(() => {
     const savedEid = readFirstStoredString(SHARED_EID_KEYS);
@@ -1280,6 +1413,9 @@ export default function XpGeCraftPage(): JSX.Element {
     setAppliedCraftLimits(savedCraftLimits);
     setDraftCraftLimitInputs(craftLimitsToInputs(savedCraftLimits));
     setPrePlanSends(parseStoredPrePlanSends(readFirstStoredString([LOCAL_PREF_KEYS.craftPrePlanSends])));
+    const savedGoalRows = parseStoredTargetRows(readFirstStoredString([LOCAL_PREF_KEYS.craftGoalRows]), GOAL_TARGET_OPTIONS) || [];
+    setGoalRows(savedGoalRows);
+    setAppliedGoalsKey(JSON.stringify(goalRowsToReservationGoals(savedGoalRows)));
     setPrefsLoaded(true);
   }, []);
 
@@ -1360,11 +1496,97 @@ export default function XpGeCraftPage(): JSX.Element {
   }, [prePlanSends, prefsLoaded]);
 
   useEffect(() => {
-    if (!highs || !planSourceInventory) {
+    if (!prefsLoaded) {
       return;
     }
-    setSolution(optimizeCrafts(highs, planSourceInventory, planSourceCraftCounts, craftingSale, appliedCraftLimits));
-  }, [highs, planSourceCraftCounts, planSourceInventory, craftingSale, appliedCraftLimits]);
+    writeStoredString([LOCAL_PREF_KEYS.craftGoalRows], serializeTargetRows(goalRows.filter((row) => row.itemId)));
+  }, [goalRows, prefsLoaded]);
+
+  const goalsKey = useMemo(() => JSON.stringify(goalRowsToReservationGoals(goalRows)), [goalRows]);
+
+  useEffect(() => {
+    if (goalsKey === appliedGoalsKey) {
+      return;
+    }
+    const timer = window.setTimeout(() => setAppliedGoalsKey(goalsKey), GOAL_APPLY_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [goalsKey, appliedGoalsKey]);
+
+  const appliedGoals = useMemo(() => parseGoalsKey(appliedGoalsKey), [appliedGoalsKey]);
+  // What the plan keeps for goals, from exactly the inventory it optimizes over.
+  const planReservations = useMemo(
+    () => (planSourceInventory ? reservationsFor(planSourceInventory, planSourceCraftCounts, appliedGoals) : null),
+    [planSourceInventory, planSourceCraftCounts, appliedGoals]
+  );
+  const planInventory = planReservations?.available ?? planSourceInventory;
+  const planReservedKey = useMemo(() => reservedKeyOf(planReservations), [planReservations]);
+  // Per-row keeps and status for the goal rows as they are now (no solve needed).
+  const goalRowReservations = useMemo(
+    () =>
+      planSourceInventory && goalRows.length > 0
+        ? reserveInventoryForGoals(planSourceInventory, planSourceCraftCounts, goalRows.map(goalRowToReservationGoal))
+        : null,
+    [goalRows, planSourceInventory, planSourceCraftCounts]
+  );
+
+  useEffect(() => {
+    if (!highs || !planSourceInventory || !planInventory) {
+      return;
+    }
+    // Skip inputs already solved: by Calculate, or a goal edit that keeps the same items.
+    const last = lastSolveRef.current;
+    if (
+      last &&
+      last.inventory === planSourceInventory &&
+      last.craftCounts === planSourceCraftCounts &&
+      last.sale === craftingSale &&
+      last.limits === appliedCraftLimits &&
+      last.reservedKey === planReservedKey
+    ) {
+      return;
+    }
+    lastSolveRef.current = {
+      inventory: planSourceInventory,
+      craftCounts: planSourceCraftCounts,
+      sale: craftingSale,
+      limits: appliedCraftLimits,
+      reservedKey: planReservedKey,
+    };
+    setSolution(optimizeCrafts(highs, planInventory, planSourceCraftCounts, craftingSale, appliedCraftLimits));
+    setSolvedReservedKey(planReservedKey);
+  }, [highs, planInventory, planSourceCraftCounts, planSourceInventory, craftingSale, appliedCraftLimits, planReservedKey]);
+
+  const keepsForGoals = planReservations != null;
+  const baselineCurrent =
+    planBaseline &&
+    planBaseline.inventory === planSourceInventory &&
+    planBaseline.craftCounts === planSourceCraftCounts &&
+    planBaseline.sale === craftingSale &&
+    planBaseline.limits === appliedCraftLimits
+      ? planBaseline
+      : null;
+
+  useEffect(() => {
+    if (!highs || !planSourceInventory || !keepsForGoals || baselineCurrent) {
+      return;
+    }
+    const baseline = optimizeCrafts(highs, planSourceInventory, planSourceCraftCounts, craftingSale, appliedCraftLimits);
+    setPlanBaseline({
+      inventory: planSourceInventory,
+      craftCounts: planSourceCraftCounts,
+      sale: craftingSale,
+      limits: appliedCraftLimits,
+      totalXp: baseline.totalXp,
+      crafts: plannedCraftCounts(baseline),
+    });
+  }, [highs, planSourceInventory, planSourceCraftCounts, craftingSale, appliedCraftLimits, keepsForGoals, baselineCurrent]);
+
+  useEffect(() => {
+    if (!goalsOpen) {
+      return;
+    }
+    setSavedPlannerGoalCount(readPlannerSavedTargetRows(inventorySource, GOAL_TARGET_OPTIONS).length);
+  }, [goalsOpen, inventorySource]);
 
   async function runOptimize(): Promise<void> {
     if (!highs) {
@@ -1378,6 +1600,7 @@ export default function XpGeCraftPage(): JSX.Element {
 
     setError(null);
     setSolution(null);
+    setSolvedReservedKey(null);
     setPlanSourceInventory(null);
     setPlanSourceCraftCounts({});
     setPlanSourceCraftingXp(null);
@@ -1388,6 +1611,9 @@ export default function XpGeCraftPage(): JSX.Element {
       const nextLimits = normalizeCraftLimitInputs(draftCraftLimitInputs);
       setAppliedCraftLimits(nextLimits);
       setDraftCraftLimitInputs(craftLimitsToInputs(nextLimits));
+      // Calculate uses the goal rows as they are now, without waiting out the edit pause.
+      const nextGoals = goalRowsToReservationGoals(goalRows);
+      setAppliedGoalsKey(JSON.stringify(nextGoals));
       const result = await getOptimalCrafts(
         highs,
         eid,
@@ -1397,9 +1623,18 @@ export default function XpGeCraftPage(): JSX.Element {
         craftingSale,
         inventorySource,
         nextLimits,
-        prePlanSends
+        prePlanSends,
+        nextGoals
       );
+      lastSolveRef.current = {
+        inventory: result.inventory,
+        craftCounts: result.craftCounts,
+        sale: craftingSale,
+        limits: nextLimits,
+        reservedKey: result.reservedKey,
+      };
       setSolution(result.solution);
+      setSolvedReservedKey(result.reservedKey);
       setPlanSourceInventory(result.inventory);
       setPlanShinyIngredientCount(result.shinyIngredientCount);
       setPlanSourceCraftCounts(result.craftCounts);
@@ -1579,10 +1814,11 @@ export default function XpGeCraftPage(): JSX.Element {
     );
   }
 
+  // The efficiency plan crafts greedily, so it only gets what goals don't keep.
   const geEfficiencyPlan =
-    solution && planSourceInventory
+    solution && planInventory
       ? simulateGeEfficiencyPlan(
-          planSourceInventory,
+          planInventory,
           planSourceCraftCounts,
           xpPerGeModeRows.map((row) => ({
             artifact: row.artifact,
@@ -1593,6 +1829,10 @@ export default function XpGeCraftPage(): JSX.Element {
           craftingSale
         )
       : null;
+  const geEfficiencyRemainingInventory =
+    geEfficiencyPlan && planReservations
+      ? addCountMaps(geEfficiencyPlan.finalInventory, planReservations.reserved)
+      : geEfficiencyPlan?.finalInventory;
   const geEfficiencyOverallXpPerGe =
     geEfficiencyPlan && geEfficiencyPlan.totalCost > 0 ? geEfficiencyPlan.totalXp / geEfficiencyPlan.totalCost : 0;
   const geEfficiencyStatusByRowKey = getGeEfficiencyStatusMap(xpPerGeModeRows, geEfficiencyPlan, minEfficiencyXpPerGe);
@@ -1600,6 +1840,9 @@ export default function XpGeCraftPage(): JSX.Element {
   let maxXpExecutionPlanError = null as string | null;
   if (solution && planSourceInventory) {
     try {
+      // The click order starts from the whole inventory, kept items included:
+      // the game uses owned copies before auto-crafting, so the order re-crafts
+      // any kept copy it uses and every kept item is still there at the end.
       maxXpExecutionPlan = buildMaxXpExecutionPlan(
         solution,
         planSourceInventory,
@@ -1627,6 +1870,60 @@ export default function XpGeCraftPage(): JSX.Element {
         maxXpFlatSortDirection
       )
     : [];
+
+  const goalCount = goalRows.filter((row) => row.itemId).length;
+  const shortGoalCount =
+    goalRowReservations?.goals.filter((goal) => goal.itemKey && Object.keys(goal.short).length > 0).length ?? 0;
+  const goalsSummary =
+    goalCount === 0
+      ? "None"
+      : [
+          `${goalCount} goal${goalCount === 1 ? "" : "s"}`,
+          goalRowReservations
+            ? `keeps ${goalRowReservations.totalReserved.toLocaleString()} item${goalRowReservations.totalReserved === 1 ? "" : "s"}`
+            : null,
+          shortGoalCount > 0 ? `${shortGoalCount} short` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ");
+  // What keeping the goals costs: the plan without them, unless that plan
+  // already leaves every kept item alone (then the difference is solver noise).
+  const keepCostXp =
+    solution && planReservations && baselineCurrent && planSourceInventory && solvedReservedKey === planReservedKey
+      ? planLeavesReserved(baselineCurrent.crafts, planSourceInventory, planReservations.reserved)
+        ? 0
+        : Math.max(0, Math.round(baselineCurrent.totalXp - solution.totalXp))
+      : 0;
+  const keepCostShare = keepCostXp > 0 && baselineCurrent && baselineCurrent.totalXp > 0 ? keepCostXp / baselineCurrent.totalXp : 0;
+
+  function updateGoalRows(update: (rows: PlannerTargetRow[]) => PlannerTargetRow[]): void {
+    setGoalRows(update);
+    setGoalImportNote(null);
+  }
+
+  function importPlannerGoals(): void {
+    const saved = readPlannerSavedTargetRows(inventorySource, GOAL_TARGET_OPTIONS);
+    setSavedPlannerGoalCount(saved.length);
+    if (saved.length === 0) {
+      setGoalImportNote(null);
+      return;
+    }
+    const sameGoal = (left: PlannerTargetRow, right: PlannerTargetRow) =>
+      left.itemId === right.itemId &&
+      left.craftGoal === right.craftGoal &&
+      normalizedTargetQuantity(left.quantityInput) === normalizedTargetQuantity(right.quantityInput);
+    const current = goalRows.filter((row) => row.itemId);
+    const added = saved.filter((row) => !current.some((existing) => sameGoal(existing, row)));
+    const room = Math.max(0, MAX_TARGET_ROWS - current.length);
+    setGoalRows([...current, ...added.slice(0, room).map((row) => ({ ...row, id: newTargetRowId() }))]);
+    setGoalImportNote(
+      added.length === 0
+        ? "Already here"
+        : added.length > room
+          ? `Imported ${room} (${MAX_TARGET_ROWS} max)`
+          : `Imported ${added.length}`
+    );
+  }
 
   return (
     <main className="page">
@@ -1833,6 +2130,69 @@ export default function XpGeCraftPage(): JSX.Element {
               )}
             </div>
           </details>
+
+          <details
+            className={`${styles.prePlanDrawer} ${styles.goalsDrawer}`}
+            open={goalsOpen}
+            onToggle={(event) => setGoalsOpen(event.currentTarget.open)}
+          >
+            <summary className={styles.prePlanSummary}>
+              <span className={styles.prePlanTitleRow}>
+                <span className={styles.prePlanCaret} aria-hidden="true">▶</span>
+                <span>Keep for your goals</span>
+              </span>
+              <span className={styles.prePlanSummaryMeta}>
+                {goalsSummary}
+                {keepCostXp > 0 && <> · costs {keepCostXp.toLocaleString()} XP</>}
+              </span>
+            </summary>
+            <div className={`${styles.prePlanDrawerBody} ${styles.goalsBody}`}>
+              <div className={styles.prePlanMeta}>The XP plan won&apos;t use what these goals need.</div>
+              <GoalRowsEditor
+                rows={goalRows}
+                onRowsChange={updateGoalRows}
+                options={GOAL_TARGET_OPTIONS}
+                craftCounts={planSourceInventory ? planSourceCraftCounts : null}
+                minRows={0}
+                newRowItemId=""
+                copyLastRowItem={false}
+                emptyRowLabel="Choose an artifact"
+                addLabel="Add goal"
+                copiesTitle={GOAL_COPIES_TITLE}
+                craftCountTitle={GOAL_CRAFT_COUNT_TITLE}
+                craftCountPendingText="craft count loads when you calculate"
+                idPrefix="goalItem"
+                renderRowFooter={(row, rowIndex) =>
+                  row.itemId ? <GoalReservationLine goal={goalRowReservations?.goals[rowIndex]} /> : null
+                }
+              />
+              <div className={styles.goalsActions}>
+                <button
+                  type="button"
+                  className={styles.goalsImportButton}
+                  onClick={importPlannerGoals}
+                  disabled={savedPlannerGoalCount === 0}
+                  title="Copy the goals saved in the Artifact Attainment Planner"
+                >
+                  Import my AAP goals
+                </button>
+                {savedPlannerGoalCount === 0 ? (
+                  <span className={styles.prePlanMeta}>No AAP goals saved yet</span>
+                ) : (
+                  goalImportNote && <span className={styles.prePlanMeta}>{goalImportNote}</span>
+                )}
+              </div>
+              {goalCount > 0 && !planSourceInventory && (
+                <div className={styles.prePlanMeta}>Calculate to see what each goal keeps.</div>
+              )}
+              {keepCostXp > 0 && (
+                <div className={styles.goalsCost}>
+                  Keeping these goals costs {keepCostXp.toLocaleString()} XP (
+                  {keepCostShare < 0.01 ? "<1%" : `${Math.round(keepCostShare * 100)}%`} of the plan).
+                </div>
+              )}
+            </div>
+          </details>
         </div>
 
         {error && (
@@ -1920,7 +2280,7 @@ export default function XpGeCraftPage(): JSX.Element {
                   <RemainingInventoryDisclosure
                     label="Remaining inventory"
                     planLabel="Remaining inventory after Max GE Efficiency Plan"
-                    inventory={geEfficiencyPlan?.finalInventory}
+                    inventory={geEfficiencyRemainingInventory}
                   />
                 </div>
               </div>

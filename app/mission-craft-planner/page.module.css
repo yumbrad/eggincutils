@@ -69,8 +69,7 @@
 }
 
 .textInput:focus,
-.selectInput:focus,
-.targetPickerInput:focus {
+.selectInput:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent), transparent 70%);
   background: color-mix(in oklab, var(--field), var(--panel) 22%);
@@ -203,291 +202,12 @@
   outline-offset: 2px;
 }
 
-.targetRows {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
 .craftGoalTag {
   margin-top: 1px;
   color: var(--muted);
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.01em;
-}
-
-.targetRowGroup {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.targetRowMeta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-left: 8px;
-  min-width: 0;
-}
-
-.targetGoalChip {
-  flex: none;
-  padding: 3px 9px;
-  border: 1px solid color-mix(in oklab, var(--stroke), transparent 10%);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  font-family: var(--planner-control-font);
-  font-size: 10.5px;
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
-}
-
-.targetGoalChip:hover {
-  border-color: color-mix(in oklab, var(--stroke), var(--ink) 20%);
-  color: var(--ink);
-}
-
-.targetGoalChip[data-on="1"] {
-  border-color: color-mix(in oklab, var(--accent), transparent 40%);
-  background: color-mix(in oklab, var(--accent), transparent 88%);
-  color: var(--ink);
-}
-
-.targetRowMetaText {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--muted);
-  font-size: 10.5px;
-  font-weight: 600;
-}
-
-.targetRow {
-  position: relative;
-  display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) 110px 28px;
-  gap: 10px;
-  align-items: center;
-  padding: 8px 10px 8px 8px;
-  border: 1px solid color-mix(in oklab, var(--stroke), transparent 12%);
-  border-radius: 10px;
-  background: color-mix(in oklab, var(--panel), var(--accent) 3%);
-  transition: border-color 120ms ease, background 120ms ease;
-}
-
-.targetRow:hover {
-  border-color: color-mix(in oklab, var(--stroke), var(--ink) 20%);
-}
-
-.targetIcon {
-  display: flex;
-  width: 36px;
-  height: 36px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid color-mix(in oklab, var(--stroke), transparent 12%);
-  border-radius: 8px;
-  background:
-    radial-gradient(circle at 35% 28%, color-mix(in oklab, #fff, transparent 88%), transparent 60%),
-    color-mix(in oklab, var(--field), var(--panel) 28%);
-}
-
-.targetIcon img {
-  width: 32px;
-  height: 32px;
-  object-fit: contain;
-}
-
-.targetRowSelect {
-  display: flex;
-  min-width: 0;
-  height: 30px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent !important;
-  box-shadow: none !important;
-  color: var(--ink);
-  text-align: left;
-  cursor: pointer;
-  outline: none;
-}
-
-.targetRowSelect:hover {
-  background: transparent !important;
-}
-
-.targetRowSelect:focus,
-.targetRowSelect:focus-visible,
-.targetStepper button:focus,
-.targetStepper button:focus-visible,
-.targetRemove:focus,
-.targetRemove:focus-visible,
-.addTargetButton:focus,
-.addTargetButton:focus-visible {
-  outline: none;
-  box-shadow: none !important;
-}
-
-.targetRowSelect span:first-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--planner-control-font);
-  font-size: 13.5px;
-  font-weight: 600;
-}
-
-.targetStepper {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 28px;
-  height: 30px;
-  overflow: hidden;
-  border: 1px solid color-mix(in oklab, var(--stroke), transparent 12%);
-  border-radius: 8px;
-  background: color-mix(in oklab, var(--field), transparent 12%);
-}
-
-.targetStepper button,
-.targetRemove {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  background: transparent !important;
-  box-shadow: none !important;
-  color: var(--muted);
-  cursor: pointer;
-  outline: none;
-}
-
-.targetStepper button {
-  font-size: 15px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.targetStepper button:hover,
-.targetRemove:hover {
-  background: color-mix(in oklab, var(--accent), transparent 86%) !important;
-  color: var(--ink);
-}
-
-.targetStepper input {
-  min-width: 0;
-  width: 100%;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--ink);
-  text-align: center;
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, "Courier New", monospace;
-  font-size: 13px;
-  font-weight: 800;
-  outline: none;
-}
-
-.targetStepper:focus-within {
-  border-color: color-mix(in oklab, var(--stroke), transparent 12%);
-  box-shadow: none;
-}
-
-.targetStepper input::-webkit-outer-spin-button,
-.targetStepper input::-webkit-inner-spin-button {
-  margin: 0;
-  appearance: none;
-}
-
-.targetRemove {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-}
-
-.targetRemove svg {
-  width: 14px;
-  height: 14px;
-}
-
-.targetRemove path {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-}
-
-.targetRemove:hover {
-  background: color-mix(in oklab, var(--accent-2), transparent 85%) !important;
-  color: color-mix(in oklab, var(--accent-2), #fff 20%);
-}
-
-.targetRemove:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-.targetRowDropdown {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  top: calc(100% + 6px);
-  z-index: 35;
-}
-
-.targetPicker {
-  position: relative;
-}
-
-.targetRowDropdown .targetPickerDropdown {
-  position: relative;
-  top: auto;
-  margin-top: 4px;
-}
-
-.addTargetButton {
-  display: flex;
-  height: 36px;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  border: 1px dashed color-mix(in oklab, var(--stroke), var(--ink) 18%);
-  border-radius: 10px;
-  background: transparent !important;
-  box-shadow: none !important;
-  color: var(--accent);
-  font-size: 12.5px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.addTargetButton:hover {
-  border-color: var(--accent);
-  background: color-mix(in oklab, var(--accent), transparent 90%) !important;
-}
-
-.targetPickerInput {
-  width: 100%;
-  height: 38px;
-  padding: 0 12px;
-  border: 1px solid color-mix(in oklab, var(--stroke), transparent 10%);
-  border-radius: 9px;
-  background: color-mix(in oklab, var(--field), var(--panel) 18%);
-  color: var(--field-ink);
-  font-size: 13px;
-  font-weight: 650;
-  outline: none;
 }
 
 .targetPickerIconWrap {
@@ -523,90 +243,6 @@
   font-weight: 700;
 }
 
-.targetPickerChevron {
-  width: 8px;
-  height: 8px;
-  border-right: 1.5px solid var(--muted);
-  border-bottom: 1.5px solid var(--muted);
-  color: var(--muted);
-  pointer-events: none;
-  transform: translateY(-2px) rotate(45deg);
-}
-
-.targetRowSelect .targetPickerChevron {
-  flex: 0 0 auto;
-}
-
-.targetPickerDropdown {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: calc(100% + 4px);
-  margin: 0;
-  padding: 4px 0;
-  list-style: none;
-  border-radius: 12px;
-  border: 1px solid color-mix(in oklab, var(--stroke), transparent 12%);
-  background: color-mix(in oklab, var(--panel), #fff 6%);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24);
-  z-index: 30;
-  max-height: 22rem;
-  overflow: auto;
-}
-
-.targetPickerOption {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 10px;
-  cursor: default;
-  color: var(--ink);
-  font-family: var(--planner-control-font);
-  font-size: 12.5px;
-  font-weight: 500;
-  user-select: none;
-}
-
-.targetPickerOption[data-active="1"] {
-  background: color-mix(in oklab, var(--accent), transparent 22%);
-  color: var(--button-ink);
-}
-
-.targetPickerOptionIcon {
-  width: 22px;
-  height: 22px;
-  object-fit: contain;
-  flex: 0 0 auto;
-}
-
-.targetPickerOptionLabel {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--planner-control-font);
-}
-
-.targetPickerCheck {
-  margin-left: auto;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.targetPickerOption[data-active="1"] .targetPickerCheck {
-  color: var(--button-ink);
-}
-
-.targetPickerOption[data-selected="1"]:not([data-active="1"]) .targetPickerOptionLabel {
-  font-weight: 600;
-}
-
-.targetPickerEmpty {
-  padding: 8px 10px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
 @media (max-width: 900px) {
   .plannerControlGrid {
     grid-template-columns: 1fr;
@@ -614,10 +250,6 @@
 
   .profileRow {
     grid-template-columns: 1fr;
-  }
-
-  .targetRow {
-    grid-template-columns: 36px minmax(0, 1fr) 96px 28px;
   }
 }
 
@@ -1821,15 +1453,6 @@
 }
 
 @media (max-width: 600px) {
-  .targetRow {
-    grid-template-columns: 36px minmax(0, 1fr) 94px 28px;
-    gap: 8px;
-  }
-
-  .targetRowSelect span:first-child {
-    font-size: 12.5px;
-  }
-
   .sourceMatrix {
     grid-template-columns: 58px repeat(5, minmax(0, 1fr));
   }

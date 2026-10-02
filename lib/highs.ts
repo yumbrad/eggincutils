@@ -41,7 +41,7 @@ export async function solveWithHighs(
   });
 }
 
-async function getHighsModule(): Promise<HighsModule> {
+export async function getHighsModule(): Promise<HighsModule> {
   if (highsModulePromise) {
     return highsModulePromise;
   }

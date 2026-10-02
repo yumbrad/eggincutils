@@ -23,6 +23,7 @@ export const LOCAL_PREF_KEYS = {
   craftStandaloneOpen: "eggincutils-craft-standalone-open",
   craftAllLimits: "eggincutils-craft-all-limits",
   craftPrePlanSends: "eggincutils-craft-pre-plan-sends",
+  craftGoalRows: "eggincutils-craft-goal-rows",
   plannerIncludeInventoryRare: "eggincutils-planner-include-inventory-rare",
   plannerIncludeInventoryEpic: "eggincutils-planner-include-inventory-epic",
   plannerIncludeInventoryLegendary: "eggincutils-planner-include-inventory-legendary",

@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 
@@ -18,6 +17,16 @@ import artifactConsumption from "../../data/artifact-consumption.json";
 import artifactShortNames from "../../data/artifact-short-names.json";
 import recipes from "../../data/recipes.json";
 import { MISSION_CRAFT_COPY } from "../../lib/mission-craft-copy";
+import {
+  buildTargetOptions,
+  normalizedTargetQuantity,
+  parseStoredTargetRows,
+  serializeTargetRows,
+  targetFamilyKey,
+  targetRowToPlannerTarget,
+  targetTierNumber,
+  type PlannerTargetRow,
+} from "../../lib/goal-rows";
 import {
   afxIdToDisplayName,
   afxIdToItemKey,
@@ -37,7 +46,6 @@ import {
 } from "../../lib/local-preferences";
 import useHighsWorker from "../../lib/use-highs-worker";
 import { planForTarget, computeMonolithicPaths, type PlannerProgressEvent } from "../../lib/planner";
-import { itemIdTakesCraftCountGoal } from "../../lib/recipes";
 import { createDemoProfile, isBlankEid } from "../../lib/demo-profile";
 import type { LootJson } from "../../lib/loot-data";
 import {
@@ -77,6 +85,7 @@ import {
   type VirtueLastTankTopUp,
   type VirtueTopUpFamily,
 } from "../../lib/virtue-top-up";
+import GoalRowsEditor, { type GoalRowsChange } from "../goal-rows-editor";
 import styles from "./page.module.css";
 
 type ShipLevelInfo = {
@@ -449,24 +458,6 @@ type CraftPlanDetailRow = {
   consumedTooltip: string | null;
 };
 
-type TargetOption = {
-  itemId: string;
-  itemKey: string;
-  label: string;
-  familyKey: string;
-  tierNumber: number;
-  iconUrl: string | null;
-  searchText: string;
-};
-
-type PlannerTargetRow = {
-  id: string;
-  itemId: string;
-  quantityInput: string;
-  /** Read the quantity as an all-time craft-count goal rather than copies to add. */
-  craftGoal: boolean;
-};
-
 type MissionTimeline = {
   lanes: TimelineLaneBlock[][];
   segments: TimelineSegment[];
@@ -553,16 +544,6 @@ type PlannerSourcePreferenceStore = Partial<Record<InventorySource, PlannerSourc
 const ARTIFACT_DISPLAY = artifactDisplay as Record<string, { id: string; name: string; tierName: string; tierNumber: number }>;
 const ARTIFACT_CONSUMPTION = artifactConsumption as Record<string, Record<string, number>>;
 const ARTIFACT_SHORT_NAMES = artifactShortNames as Array<{ familyKey: string; shortName: string }>;
-/** Craft count a new craft-count goal starts at: where an artifact's shiny
- *  (rarity) luck from crafting stops improving. Only artifacts take the goal
- *  (itemIdTakesCraftCountGoal). */
-const CRAFT_GOAL_DEFAULT_COUNT = 400;
-/** Where an artifact's GE crafting discount stops improving. Mirrors
- *  MAX_CRAFT_COUNT_FOR_DISCOUNT in lib/planner.ts. Earlier builds seeded every
- *  craft-count goal here (artifacts, stones and ingredients alike), so it still
- *  counts as a seed. A saved artifact goal at 300 loads as 300: it is also the
- *  GE-discount target, so it may be the count the player wants. */
-const CRAFT_DISCOUNT_MAX_COUNT = 300;
 const SHARED_EID_KEYS = [LOCAL_PREF_KEYS.sharedEid, LOCAL_PREF_KEYS.legacyEid] as const;
 const SHARED_INCLUDE_SLOTTED_KEYS = [LOCAL_PREF_KEYS.sharedIncludeSlotted, LOCAL_PREF_KEYS.legacyIncludeSlotted] as const;
 
@@ -589,11 +570,6 @@ function isCraftedOnlyEligibleGoalKey(itemKey: string): boolean {
     /^tau_ceti_geode_\d+$/.test(itemKey) ||
     /^solar_titanium_\d+$/.test(itemKey)
   );
-}
-
-/** A craft-count goal still at a seeded default (or the older 300 seed) rather than a number the player typed. */
-function isCraftGoalSeed(quantity: number): boolean {
-  return quantity === CRAFT_GOAL_DEFAULT_COUNT || quantity === CRAFT_DISCOUNT_MAX_COUNT;
 }
 
 function durationTypeLabel(durationType: string): string {
@@ -2952,96 +2928,6 @@ function itemIdToIconUrl(itemId: string): string | null {
   return itemKeyToIconUrl(itemIdToCanonicalKey(itemId));
 }
 
-function targetFamilyKey(itemKey: string): string {
-  const match = itemKey.match(/^(.*)_\d+$/);
-  return match ? match[1] : itemKey;
-}
-
-function targetTierNumber(itemKey: string, displayTierNumber?: number): number {
-  if (displayTierNumber != null && Number.isFinite(displayTierNumber)) {
-    return displayTierNumber;
-  }
-  const match = itemKey.match(/_(\d+)$/);
-  if (!match) {
-    return Number.MAX_SAFE_INTEGER;
-  }
-  const parsed = Number(match[1]);
-  return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
-}
-
-function normalizedTargetQuantity(rawValue: string): number {
-  return Math.max(1, Math.min(9999, Math.round(Number(rawValue) || 1)));
-}
-
-function targetRowToPlannerTarget(row: PlannerTargetRow): {
-  targetItemId: string;
-  quantity: number;
-  craftGoal?: boolean;
-} {
-  const target: { targetItemId: string; quantity: number; craftGoal?: boolean } = {
-    targetItemId: row.itemId,
-    quantity: normalizedTargetQuantity(row.quantityInput),
-  };
-  if (row.craftGoal && itemIdTakesCraftCountGoal(row.itemId)) {
-    target.craftGoal = true;
-  }
-  return target;
-}
-
-function parseStoredTargetRows(raw: string | null, targetOptions: TargetOption[]): PlannerTargetRow[] | null {
-  if (!raw) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) {
-      return null;
-    }
-    const availableTargets = new Set(targetOptions.map((option) => option.itemId));
-    const rows: PlannerTargetRow[] = [];
-    for (const value of parsed) {
-      if (!value || typeof value !== "object" || rows.length >= 10) {
-        continue;
-      }
-      const record = value as {
-        targetItemId?: unknown;
-        itemId?: unknown;
-        quantity?: unknown;
-        quantityInput?: unknown;
-        craftGoal?: unknown;
-      };
-      const itemId = typeof record.targetItemId === "string"
-        ? record.targetItemId
-        : typeof record.itemId === "string"
-          ? record.itemId
-          : "";
-      if (!availableTargets.has(itemId)) {
-        continue;
-      }
-      const storedQuantity = Math.max(1, Math.min(9999, Math.round(Number(record.quantity ?? record.quantityInput) || 1)));
-      // Only artifacts take a craft-count goal. A saved goal on a stone or an
-      // ingredient loads as copies, and a seeded count drops back to one copy
-      // (as toggling the chip off does) rather than asking for hundreds.
-      const craftGoal = record.craftGoal === true && itemIdTakesCraftCountGoal(itemId);
-      const quantity =
-        record.craftGoal === true && !craftGoal && isCraftGoalSeed(storedQuantity) ? 1 : storedQuantity;
-      rows.push({
-        id: `target-${rows.length + 1}`,
-        itemId,
-        quantityInput: String(quantity),
-        craftGoal,
-      });
-    }
-    return rows.length > 0 ? rows : null;
-  } catch {
-    return null;
-  }
-}
-
-function serializeTargetRows(rows: PlannerTargetRow[]): string {
-  return JSON.stringify(rows.map(targetRowToPlannerTarget));
-}
-
 function normalizeShipDurations(value: unknown): ShipDurationSelection | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -3252,10 +3138,6 @@ export default function MissionCraftPlannerPage() {
   const [targetRows, setTargetRows] = useState<PlannerTargetRow[]>([
     { id: "target-1", itemId: "soul-stone-2", quantityInput: "1", craftGoal: false },
   ]);
-  const [activeTargetRowId, setActiveTargetRowId] = useState("target-1");
-  const [targetPickerOpen, setTargetPickerOpen] = useState(false);
-  const [targetFilter, setTargetFilter] = useState("");
-  const [targetActiveIndex, setTargetActiveIndex] = useState(0);
   const [quantity, setQuantity] = useState(1);
   const [quantityInput, setQuantityInput] = useState("1");
   const [targetCraftedOnly, setTargetCraftedOnly] = useState(false);
@@ -3305,8 +3187,6 @@ export default function MissionCraftPlannerPage() {
   const [selectedConsumptionItemIds, setSelectedConsumptionItemIds] = useState<string[]>(DEFAULT_CONSUMPTION_ITEM_IDS);
   const [lootData, setLootData] = useState<LootJson | null>(null);
   const lootDataRef = useRef<LootJson | null>(null);
-  const targetPickerRef = useRef<HTMLDivElement | null>(null);
-  const targetFilterInputRef = useRef<HTMLInputElement | null>(null);
   const skipNextScopedPreferenceSaveRef = useRef(false);
   const highs = useHighsWorker();
   const highsRef = useRef(highs);
@@ -3379,7 +3259,6 @@ export default function MissionCraftPlannerPage() {
     const nextRows = rows || [{ id: "target-1", itemId: "soul-stone-2", quantityInput: "1", craftGoal: false }];
     const primaryTarget = nextRows[0];
     setTargetRows(nextRows);
-    setActiveTargetRowId(primaryTarget.id);
     setTargetItemId(primaryTarget.itemId);
     const primaryQuantity = normalizedTargetQuantity(primaryTarget.quantityInput);
     setQuantity(primaryQuantity);
@@ -3464,34 +3343,7 @@ export default function MissionCraftPlannerPage() {
     };
   }, []);
 
-  const targetOptions = useMemo(() => {
-    const recipeMap = recipes as Record<string, unknown>;
-
-    return Object.keys(recipeMap)
-      .map((itemKey) => {
-        const displayInfo = ARTIFACT_DISPLAY[itemKey];
-        const itemId = displayInfo?.id || itemKeyToId(itemKey);
-        const tierNumber = targetTierNumber(itemKey, displayInfo?.tierNumber);
-        const familyKey = targetFamilyKey(itemKey);
-        const label =
-          displayInfo && Number.isFinite(displayInfo.tierNumber)
-            ? `${displayInfo.name} (T${displayInfo.tierNumber})`
-            : itemKeyToDisplayName(itemKey);
-        const iconUrl = itemKeyToIconUrl(itemKey);
-        const searchText = [label, itemId, itemKey, familyKey].join(" ").toLowerCase();
-        return { itemId, itemKey, label, familyKey, tierNumber, iconUrl, searchText } satisfies TargetOption;
-      })
-      .sort((a, b) => {
-        const familyCompare = a.familyKey.localeCompare(b.familyKey);
-        if (familyCompare !== 0) {
-          return familyCompare;
-        }
-        if (a.tierNumber !== b.tierNumber) {
-          return a.tierNumber - b.tierNumber;
-        }
-        return a.label.localeCompare(b.label);
-      });
-  }, []);
+  const targetOptions = useMemo(() => buildTargetOptions(), []);
   const consumptionFamilies = useMemo(
     () =>
       ARTIFACT_SHORT_NAMES.map((entry) => {
@@ -3527,29 +3379,7 @@ export default function MissionCraftPlannerPage() {
         .sort((a, b) => itemIdToCanonicalKey(a).localeCompare(itemIdToCanonicalKey(b))),
     [consumptionFamilies]
   );
-  const activeTargetRow = useMemo(
-    () => targetRows.find((row) => row.id === activeTargetRowId) || targetRows[0] || null,
-    [activeTargetRowId, targetRows]
-  );
-  const selectedTargetOption = useMemo(
-    () => targetOptions.find((option) => option.itemId === (activeTargetRow?.itemId || targetItemId)) || null,
-    [activeTargetRow?.itemId, targetItemId, targetOptions]
-  );
   const solveTargets = useMemo(() => targetRows.map(targetRowToPlannerTarget), [targetRows]);
-  const filteredTargetOptions = useMemo(() => {
-    if (!targetPickerOpen) {
-      return targetOptions;
-    }
-    const query = targetFilter.trim().toLowerCase();
-    if (!query) {
-      return targetOptions;
-    }
-    const terms = query.split(/\s+/).filter((term) => term.length > 0);
-    if (terms.length === 0) {
-      return targetOptions;
-    }
-    return targetOptions.filter((option) => terms.every((term) => option.searchText.includes(term)));
-  }, [targetFilter, targetOptions, targetPickerOpen]);
 
   // Tank mode schedules launches tank by tank (the packer's schedule), so its
   // timeline replaces the heuristic one below.
@@ -3990,7 +3820,6 @@ export default function MissionCraftPlannerPage() {
         if (savedTargetRows) {
           const primaryTarget = savedTargetRows[0];
           setTargetRows(savedTargetRows);
-          setActiveTargetRowId(primaryTarget.id);
           setTargetItemId(primaryTarget.itemId);
           const primaryQuantity = normalizedTargetQuantity(primaryTarget.quantityInput);
           setQuantity(primaryQuantity);
@@ -4108,81 +3937,6 @@ export default function MissionCraftPlannerPage() {
       setPrefsLoaded(true);
     }
   }, [targetOptions]);
-
-  useEffect(() => {
-    if (targetPickerOpen) {
-      return;
-    }
-    setTargetFilter(selectedTargetOption?.label || "");
-  }, [selectedTargetOption, targetPickerOpen]);
-
-  useEffect(() => {
-    if (!targetPickerOpen) {
-      return;
-    }
-    targetFilterInputRef.current?.focus();
-    targetFilterInputRef.current?.select();
-  }, [targetPickerOpen, activeTargetRowId]);
-
-  useEffect(() => {
-    if (!targetPickerOpen) {
-      return;
-    }
-    const selectedIndex = filteredTargetOptions.findIndex((option) => option.itemId === (activeTargetRow?.itemId || targetItemId));
-    if (selectedIndex >= 0) {
-      setTargetActiveIndex(selectedIndex);
-      return;
-    }
-    setTargetActiveIndex(filteredTargetOptions.length > 0 ? 0 : -1);
-  }, [activeTargetRow?.itemId, filteredTargetOptions, targetItemId, targetPickerOpen]);
-
-  useEffect(() => {
-    if (!targetPickerOpen || targetActiveIndex < 0) {
-      return;
-    }
-    const activeNode = targetPickerRef.current?.querySelector<HTMLElement>(
-      `[data-target-option-index="${targetActiveIndex}"]`
-    );
-    activeNode?.scrollIntoView({ block: "nearest" });
-  }, [targetActiveIndex, targetPickerOpen, filteredTargetOptions]);
-
-  useEffect(() => {
-    if (!targetPickerOpen) {
-      return;
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") {
-        return;
-      }
-      event.preventDefault();
-      closeTargetPicker();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [targetPickerOpen, selectedTargetOption]);
-
-  useEffect(() => {
-    if (!targetPickerOpen) {
-      return;
-    }
-    const handleMouseDown = (event: MouseEvent) => {
-      const target = event.target as Node;
-      const activeRowNode = targetPickerRef.current?.querySelector<HTMLElement>(
-        `[data-target-row-id="${activeTargetRowId}"]`
-      );
-      if (activeRowNode?.contains(target)) {
-        return;
-      }
-      setTargetPickerOpen(false);
-      setTargetFilter(selectedTargetOption?.label || "");
-    };
-    window.addEventListener("mousedown", handleMouseDown);
-    return () => {
-      window.removeEventListener("mousedown", handleMouseDown);
-    };
-  }, [activeTargetRowId, selectedTargetOption, targetPickerOpen]);
 
   useEffect(() => {
     if (!prefsLoaded) {
@@ -4699,206 +4453,67 @@ export default function MissionCraftPlannerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buildQueued]);
 
-  function openTargetPicker(rowId?: string): void {
-    if (rowId && targetPickerOpen && rowId === activeTargetRowId) {
-      closeTargetPicker();
-      return;
-    }
-    if (rowId) {
-      setActiveTargetRowId(rowId);
-    }
-    setTargetPickerOpen(true);
-    setTargetFilter("");
-  }
-
-  function closeTargetPicker(): void {
-    setTargetPickerOpen(false);
-    setTargetFilter(selectedTargetOption?.label || "");
-  }
-
-  function selectTargetOption(option: TargetOption): void {
+  // The Goals rows live in GoalRowsEditor. The first row is mirrored into
+  // targetItemId / quantity (saved as the legacy single-target preferences).
+  function handleTargetRowsChange(
+    update: (rows: PlannerTargetRow[]) => PlannerTargetRow[],
+    change: GoalRowsChange
+  ): void {
     setTargetRows((rows) => {
-      const activeId = activeTargetRow?.id || rows[0]?.id || "target-1";
-      const next = rows.map((row) => {
-        if (row.id !== activeId) {
-          return row;
-        }
-        const craftGoal = row.craftGoal && itemIdTakesCraftCountGoal(option.itemId);
-        // A seeded craft count drops back to one copy when the new item can't
-        // take a craft-count goal (a stone, an ingredient or a tier-1 artifact),
-        // as toggling the chip off does. A number the player typed stays.
-        const quantityInput =
-          row.craftGoal && !craftGoal && isCraftGoalSeed(normalizedTargetQuantity(row.quantityInput))
-            ? "1"
-            : row.quantityInput;
-        return { ...row, itemId: option.itemId, craftGoal, quantityInput };
-      });
-      if (next[0]) {
-        setTargetItemId(next[0].itemId);
-        if (next[0].id === activeId) {
-          const primaryQuantity = normalizedTargetQuantity(next[0].quantityInput);
-          setQuantity(primaryQuantity);
-          setQuantityInput(String(primaryQuantity));
-        }
-      }
-      return next.length > 0 ? next : [{ id: activeId, itemId: option.itemId, quantityInput: "1", craftGoal: false }];
-    });
-    setTargetPickerOpen(false);
-    setTargetFilter(option.label);
-  }
-
-  function updateTargetQuantity(rowId: string, rawValue: string): void {
-    setTargetRows((rows) => {
-      const next = rows.map((row) => (row.id === rowId ? { ...row, quantityInput: rawValue } : row));
-      if (next[0]?.id === rowId) {
-        const parsed = Number(rawValue);
-        if (Number.isFinite(parsed)) {
-          const nextQuantity = Math.max(1, Math.min(9999, Math.round(parsed)));
-          setQuantity(nextQuantity);
-          setQuantityInput(String(nextQuantity));
-        }
+      const next = update(rows);
+      const primary = next[0];
+      switch (change.kind) {
+        case "select":
+          if (primary) {
+            setTargetItemId(primary.itemId);
+            if (primary.id === change.rowId) {
+              const primaryQuantity = normalizedTargetQuantity(primary.quantityInput);
+              setQuantity(primaryQuantity);
+              setQuantityInput(String(primaryQuantity));
+            }
+          }
+          break;
+        case "quantity":
+          if (primary?.id === change.rowId) {
+            const parsed = Number(change.rawValue);
+            if (Number.isFinite(parsed)) {
+              const nextQuantity = Math.max(1, Math.min(9999, Math.round(parsed)));
+              setQuantity(nextQuantity);
+              setQuantityInput(String(nextQuantity));
+            }
+          }
+          break;
+        case "toggleCraftGoal":
+          if (primary?.id === change.rowId) {
+            const primaryQuantity = normalizedTargetQuantity(primary.quantityInput);
+            setQuantity(primaryQuantity);
+            setQuantityInput(String(primaryQuantity));
+          }
+          break;
+        case "normalizeQuantity":
+          if (primary) {
+            const parsed = Number(primary.quantityInput);
+            const nextQuantity = Number.isFinite(parsed) ? Math.max(1, Math.min(9999, Math.round(parsed))) : 1;
+            setQuantity(nextQuantity);
+            setQuantityInput(String(nextQuantity));
+          }
+          break;
+        case "remove":
+          if (primary) {
+            setTargetItemId(primary.itemId);
+            const parsed = Number(primary.quantityInput);
+            if (Number.isFinite(parsed)) {
+              const nextQuantity = Math.max(1, Math.min(9999, Math.round(parsed)));
+              setQuantity(nextQuantity);
+              setQuantityInput(String(nextQuantity));
+            }
+          }
+          break;
+        case "add":
+          break;
       }
       return next;
     });
-  }
-
-  function toggleTargetCraftGoal(rowId: string): void {
-    setTargetRows((rows) => {
-      const next = rows.map((row) => {
-        if (row.id !== rowId || !itemIdTakesCraftCountGoal(row.itemId)) {
-          return row;
-        }
-        const nextCraftGoal = !row.craftGoal;
-        const quantity = normalizedTargetQuantity(row.quantityInput);
-        // Copies and craft counts live on very different scales, so a goal that
-        // is still the stepper default gets seeded at CRAFT_GOAL_DEFAULT_COUNT,
-        // and switching back drops that seed (or the older 300 one) rather than
-        // asking for hundreds of copies.
-        const quantityInput = nextCraftGoal
-          ? quantity <= 1
-            ? String(CRAFT_GOAL_DEFAULT_COUNT)
-            : row.quantityInput
-          : isCraftGoalSeed(quantity)
-            ? "1"
-            : row.quantityInput;
-        return { ...row, craftGoal: nextCraftGoal, quantityInput };
-      });
-      if (next[0]?.id === rowId) {
-        const primaryQuantity = normalizedTargetQuantity(next[0].quantityInput);
-        setQuantity(primaryQuantity);
-        setQuantityInput(String(primaryQuantity));
-      }
-      return next;
-    });
-  }
-
-  function normalizeTargetQuantity(rowId: string): void {
-    setTargetRows((rows) => {
-      const next = rows.map((row) => {
-        if (row.id !== rowId) {
-          return row;
-        }
-        const parsed = Number(row.quantityInput);
-        const quantity = Number.isFinite(parsed) ? Math.max(1, Math.min(9999, Math.round(parsed))) : 1;
-        return { ...row, quantityInput: String(quantity) };
-      });
-      if (next[0]) {
-        const parsed = Number(next[0].quantityInput);
-        const nextQuantity = Number.isFinite(parsed) ? Math.max(1, Math.min(9999, Math.round(parsed))) : 1;
-        setQuantity(nextQuantity);
-        setQuantityInput(String(nextQuantity));
-      }
-      return next;
-    });
-  }
-
-  function addTargetRow(): void {
-    const id = `target-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-    const itemId = targetRows[targetRows.length - 1]?.itemId || targetItemId;
-    setTargetRows((rows) => [...rows, { id, itemId, quantityInput: "1", craftGoal: false }].slice(0, 10));
-    setActiveTargetRowId(id);
-    setTargetPickerOpen(true);
-    setTargetFilter("");
-  }
-
-  function removeTargetRow(rowId: string): void {
-    setTargetRows((rows) => {
-      const next = rows.filter((row) => row.id !== rowId);
-      const safeNext = next.length > 0 ? next : rows;
-      if (safeNext[0]) {
-        setTargetItemId(safeNext[0].itemId);
-        const parsed = Number(safeNext[0].quantityInput);
-        if (Number.isFinite(parsed)) {
-          const nextQuantity = Math.max(1, Math.min(9999, Math.round(parsed)));
-          setQuantity(nextQuantity);
-          setQuantityInput(String(nextQuantity));
-        }
-      }
-      return safeNext;
-    });
-  }
-
-  function onTargetInputKeyDown(event: ReactKeyboardEvent<HTMLInputElement>): void {
-    if (event.key === "Escape") {
-      if (!targetPickerOpen) {
-        return;
-      }
-      event.preventDefault();
-      closeTargetPicker();
-      return;
-    }
-    if (event.key === "Tab") {
-      if (targetPickerOpen) {
-        closeTargetPicker();
-      }
-      return;
-    }
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      if (!targetPickerOpen) {
-        openTargetPicker();
-        return;
-      }
-      if (filteredTargetOptions.length === 0) {
-        return;
-      }
-      setTargetActiveIndex((current) => {
-        const base = current < 0 ? 0 : current;
-        const delta = event.key === "ArrowDown" ? 1 : -1;
-        const next = (base + delta + filteredTargetOptions.length) % filteredTargetOptions.length;
-        return next;
-      });
-      return;
-    }
-    if (event.key === "Home" || event.key === "PageUp") {
-      if (!targetPickerOpen || filteredTargetOptions.length === 0) {
-        return;
-      }
-      event.preventDefault();
-      setTargetActiveIndex(0);
-      return;
-    }
-    if (event.key === "End" || event.key === "PageDown") {
-      if (!targetPickerOpen || filteredTargetOptions.length === 0) {
-        return;
-      }
-      event.preventDefault();
-      setTargetActiveIndex(filteredTargetOptions.length - 1);
-      return;
-    }
-    if (event.key === "Enter") {
-      if (!targetPickerOpen) {
-        return;
-      }
-      event.preventDefault();
-      if (filteredTargetOptions.length === 0) {
-        return;
-      }
-      const selected = filteredTargetOptions[Math.max(0, targetActiveIndex)];
-      if (selected) {
-        selectTargetOption(selected);
-      }
-    }
   }
 
   const comboKey = (c: { ship: string; durationType: string; targetAfxId: number }) =>
@@ -5442,7 +5057,7 @@ export default function MissionCraftPlannerPage() {
           </div>
 
           <div className={styles.controlColumn}>
-            <div className={styles.controlCard} ref={targetPickerRef}>
+            <div className={styles.controlCard}>
               <div className={styles.controlCardHeader}>
                 <div className={styles.controlCardTitle}>
                   <span className={styles.titleDot} aria-hidden="true" />
@@ -5464,166 +5079,13 @@ export default function MissionCraftPlannerPage() {
                   </span>
                 </label>
               </div>
-              <div className={styles.targetRows}>
-                {targetRows.map((row, rowIndex) => {
-                  const option = targetOptions.find((candidate) => candidate.itemId === row.itemId) || null;
-                  const rowActive = row.id === activeTargetRowId;
-                  // The copies / craft-count chip is only for artifacts that can be crafted.
-                  const takesCraftGoal = itemIdTakesCraftCountGoal(row.itemId);
-                  const craftedSoFar = profileSnapshot
-                    ? Math.max(0, Math.round(profileSnapshot.craftCounts[itemIdToCanonicalKey(row.itemId)] || 0))
-                    : null;
-                  const craftsToGo =
-                    craftedSoFar == null ? null : Math.max(0, normalizedTargetQuantity(row.quantityInput) - craftedSoFar);
-                  return (
-                    <div key={row.id} className={styles.targetRowGroup}>
-                    <div className={styles.targetRow} data-target-row-id={row.id}>
-                      <span className={styles.targetIcon} aria-hidden="true">
-                        {option?.iconUrl ? (
-                          <img src={option.iconUrl} alt="" width={32} height={32} loading="lazy" />
-                        ) : (
-                          <span className={styles.targetPickerFallbackIcon}>?</span>
-                        )}
-                      </span>
-                      <button
-                        type="button"
-                        className={styles.targetRowSelect}
-                        onClick={() => openTargetPicker(row.id)}
-                      >
-                        <span>{option?.label || row.itemId}</span>
-                        <span className={styles.targetPickerChevron} aria-hidden="true" />
-                      </button>
-                      <div className={styles.targetStepper}>
-                        <button
-                          type="button"
-                          aria-label={`Decrease ${option?.label || "target"} quantity`}
-                          onClick={() => updateTargetQuantity(row.id, String(Math.max(1, (Number(row.quantityInput) || 1) - 1)))}
-                        >
-                          -
-                        </button>
-                        <input
-                          aria-label={`${option?.label || "Target"} quantity`}
-                          type="text"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          value={row.quantityInput}
-                          onChange={(event) => updateTargetQuantity(row.id, event.target.value)}
-                          onBlur={() => normalizeTargetQuantity(row.id)}
-                        />
-                        <button
-                          type="button"
-                          aria-label={`Increase ${option?.label || "target"} quantity`}
-                          onClick={() => updateTargetQuantity(row.id, String(Math.min(9999, (Number(row.quantityInput) || 1) + 1)))}
-                        >
-                          +
-                        </button>
-                      </div>
-                      <button
-                        type="button"
-                        className={styles.targetRemove}
-                        onClick={() => removeTargetRow(row.id)}
-                        disabled={targetRows.length <= 1}
-                        aria-label={`Remove target ${rowIndex + 1}`}
-                      >
-                        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-                          <path d="M4.25 4.25 11.75 11.75M11.75 4.25 4.25 11.75" />
-                        </svg>
-                      </button>
-                      {targetPickerOpen && rowActive && (
-                        <div className={styles.targetRowDropdown}>
-                          <div className={styles.targetPicker}>
-                            <input
-                              ref={targetFilterInputRef}
-                              id="targetItemFilter"
-                              type="text"
-                              value={targetFilter}
-                              onChange={(event) => setTargetFilter(event.target.value)}
-                              onKeyDown={onTargetInputKeyDown}
-                              placeholder="Filter artifacts"
-                              autoComplete="off"
-                              className={styles.targetPickerInput}
-                              role="combobox"
-                              aria-expanded={targetPickerOpen}
-                              aria-controls="targetItemDropdown"
-                            />
-                          </div>
-                          <ul id="targetItemDropdown" className={styles.targetPickerDropdown} role="listbox">
-                            {filteredTargetOptions.length === 0 ? (
-                              <li className={styles.targetPickerEmpty}>No match</li>
-                            ) : (
-                              filteredTargetOptions.map((optionRow, index) => {
-                                const selected = optionRow.itemId === row.itemId;
-                                const active = index === targetActiveIndex;
-                                return (
-                                  <li
-                                    key={optionRow.itemId}
-                                    data-target-option-index={index}
-                                    className={styles.targetPickerOption}
-                                    data-active={active ? "1" : "0"}
-                                    data-selected={selected ? "1" : "0"}
-                                    role="option"
-                                    aria-selected={selected}
-                                    onMouseDown={(event) => {
-                                      event.preventDefault();
-                                      selectTargetOption(optionRow);
-                                    }}
-                                    onMouseEnter={() => setTargetActiveIndex(index)}
-                                  >
-                                    {optionRow.iconUrl ? (
-                                      <img src={optionRow.iconUrl} alt="" width={22} height={22} className={styles.targetPickerOptionIcon} loading="lazy" />
-                                    ) : (
-                                      <span className={styles.targetPickerFallbackIcon} aria-hidden="true">?</span>
-                                    )}
-                                    <span className={styles.targetPickerOptionLabel}>{optionRow.label}</span>
-                                    {selected && <span className={styles.targetPickerCheck}>✓</span>}
-                                  </li>
-                                );
-                              })
-                            )}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-                    {takesCraftGoal && (
-                      <div className={styles.targetRowMeta}>
-                        <button
-                          type="button"
-                          className={styles.targetGoalChip}
-                          data-on={row.craftGoal ? "1" : "0"}
-                          onClick={() => toggleTargetCraftGoal(row.id)}
-                          aria-pressed={row.craftGoal}
-                          title={
-                            row.craftGoal
-                              ? `Aiming for an all-time craft count instead of new copies: ${CRAFT_GOAL_DEFAULT_COUNT} crafts maxes this artifact's shiny luck; ${CRAFT_DISCOUNT_MAX_COUNT} already maxes its GE discount. The count comes from your save, so it is the same on every device. Mission drops do not raise it, and copies a higher tier consumes still do, so the plan crafts exactly the difference.`
-                              : "Read this number as copies to add to what you already have."
-                          }
-                        >
-                          {row.craftGoal ? "craft count" : "copies"}
-                        </button>
-                        {row.craftGoal ? (
-                          <span className={styles.targetRowMetaText}>
-                            {craftedSoFar == null
-                              ? "craft count loads with your profile"
-                              : craftsToGo === 0
-                                ? `${craftedSoFar.toLocaleString()} crafted - goal already met`
-                                : `${craftedSoFar.toLocaleString()} crafted, ${craftsToGo?.toLocaleString()} to go`}
-                          </span>
-                        ) : (
-                          craftedSoFar != null &&
-                          craftedSoFar > 0 && (
-                            <span className={styles.targetRowMetaText}>{craftedSoFar.toLocaleString()} crafted so far</span>
-                          )
-                        )}
-                      </div>
-                    )}
-                    </div>
-                  );
-                })}
-                <button type="button" className={styles.addTargetButton} onClick={addTargetRow} disabled={targetRows.length >= 10}>
-                  <span aria-hidden="true">+</span>
-                  Add target
-                </button>
-              </div>
+              <GoalRowsEditor
+                rows={targetRows}
+                onRowsChange={handleTargetRowsChange}
+                options={targetOptions}
+                craftCounts={profileSnapshot ? profileSnapshot.craftCounts : null}
+                newRowItemId={targetItemId}
+              />
             </div>
 
             {inventorySource === "virtue" && (
