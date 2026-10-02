@@ -8,6 +8,7 @@ import {
   MAX_TARGET_ROWS,
   normalizeTargetRowQuantity,
   parseStoredTargetRows,
+  plannerRowsToKeepRows,
   plannerSavedTargetRows,
   removeTargetRow,
   selectTargetRowOption,
@@ -128,5 +129,35 @@ describe("plannerSavedTargetRows", () => {
     // Saved preferences for the source without usable rows import nothing.
     expect(plannerSavedTargetRows({ sourcePreferences: JSON.stringify({ main: {} }), targets }, "main", options)).toEqual([]);
     expect(plannerSavedTargetRows({ sourcePreferences: "garbage", targets: null }, "main", options)).toEqual([]);
+  });
+});
+
+describe("plannerRowsToKeepRows", () => {
+  it("turns planner copies goals (N more) into keep goals of owned + N", () => {
+    const inventory = { book_of_basan_4: 2, ornate_gusset_2: 7.6, soul_stone_3: 0 };
+    expect(
+      plannerRowsToKeepRows(
+        [
+          row("a", "book-of-basan-4", "1"),
+          // Display id "gusset-2" is ornate_gusset_2; only whole copies count.
+          row("b", "gusset-2", "3"),
+          row("c", "soul-stone-3", "2"),
+          row("d", "tachyon-deflector-4", "5"),
+        ],
+        inventory
+      )
+    ).toEqual([
+      row("a", "book-of-basan-4", "3"),
+      row("b", "gusset-2", "10"),
+      row("c", "soul-stone-3", "2"),
+      row("d", "tachyon-deflector-4", "5"),
+    ]);
+  });
+
+  it("keeps craft-count goals as they are and caps totals at the stepper maximum", () => {
+    const inventory = { ornate_gusset_3: 50, gold_meteorite_1: 9990 };
+    expect(
+      plannerRowsToKeepRows([row("a", "gusset-3", "400", true), row("b", "gold-meteorite-1", "25")], inventory)
+    ).toEqual([row("a", "gusset-3", "400", true), row("b", "gold-meteorite-1", "9999")]);
   });
 });

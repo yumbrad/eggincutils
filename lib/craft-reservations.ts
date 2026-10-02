@@ -14,8 +14,9 @@ import { recipes as defaultRecipes, type Recipes } from "./recipes";
  * - Goals take from one shared pool in row order, so two goals never keep the
  *   same copies.
  * - When owned items can't cover a goal, everything owned along its recipe
- *   tree stays kept anyway (never released), and the uncraftable items still
- *   missing are reported as `short`.
+ *   tree stays kept anyway (never released). The goal reports how much of it
+ *   inventory can finish (`finishable` of `needed`), and the uncraftable items
+ *   still missing (`short`).
  */
 
 export type CraftReservationGoal = {
@@ -34,6 +35,10 @@ export type CraftGoalReservation = {
   craftGoal: boolean;
   /** Craft-count goals: crafts still to make; null for copies goals. */
   craftsToGo: number | null;
+  /** What the goal still asks of inventory: copies to have, or crafts still to go. */
+  needed: number;
+  /** How much of `needed` the inventory left for this goal can finish (all of it when covered). */
+  finishable: number;
   /** Owned items this goal keeps, canonical key → count, in the order its recipe tree reached them. */
   keeps: Record<string, number>;
   /** Uncraftable items the goal still needs beyond everything owned, canonical key → count. */
@@ -49,6 +54,89 @@ export type CraftReservations = {
   /** Number of items kept across all goals. */
   totalReserved: number;
 };
+
+type PoolTake = {
+  keeps: Record<string, number>;
+  short: Record<string, number>;
+};
+
+/**
+ * Take `amount` of an item from the pool (or, with `asCrafts`, the
+ * ingredients for `amount` crafts of it): owned copies first, then each
+ * missing copy's recipe, recursively. Mutates the pool.
+ */
+function takeFromPool(
+  pool: Map<string, number>,
+  recipeMap: Recipes,
+  itemKey: string,
+  amount: number,
+  asCrafts: boolean
+): PoolTake {
+  const taken: PoolTake = { keeps: {}, short: {} };
+  const keep = (key: string, needed: number, path: Set<string>): void => {
+    if (needed <= 0) {
+      return;
+    }
+    const owned = pool.get(key) || 0;
+    const fromPool = Math.min(owned, needed);
+    if (fromPool > 0) {
+      pool.set(key, owned - fromPool);
+      taken.keeps[key] = (taken.keeps[key] || 0) + fromPool;
+    }
+    const missing = needed - fromPool;
+    if (missing <= 0) {
+      return;
+    }
+    if (!recipeMap[key] || path.has(key)) {
+      taken.short[key] = (taken.short[key] || 0) + missing;
+      return;
+    }
+    keepIngredients(key, missing, path);
+  };
+  const keepIngredients = (key: string, crafts: number, path: Set<string>): void => {
+    const recipe = recipeMap[key];
+    if (!recipe || crafts <= 0) {
+      return;
+    }
+    const nextPath = new Set(path).add(key);
+    for (const [ingredient, perCraft] of Object.entries(recipe.ingredients)) {
+      keep(ingredient, crafts * Math.max(0, Math.round(perCraft)), nextPath);
+    }
+  };
+  if (asCrafts) {
+    keepIngredients(itemKey, amount, new Set());
+  } else {
+    keep(itemKey, amount, new Set());
+  }
+  return taken;
+}
+
+/**
+ * The most of `needed` (copies, or crafts with `asCrafts`) the pool can fully
+ * cover, given it can't cover all of it. Coverage only gets harder as the
+ * amount grows, so a binary search finds it.
+ */
+function finishableFromPool(
+  pool: Map<string, number>,
+  recipeMap: Recipes,
+  itemKey: string,
+  needed: number,
+  asCrafts: boolean
+): number {
+  const covers = (amount: number) =>
+    Object.keys(takeFromPool(new Map(pool), recipeMap, itemKey, amount, asCrafts).short).length === 0;
+  let low = 0;
+  let high = needed - 1;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (covers(mid)) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return low;
+}
 
 export function reserveInventoryForGoals(
   inventory: Record<string, number>,
@@ -73,64 +161,27 @@ export function reserveInventoryForGoals(
   const results = goals.map((goal): CraftGoalReservation => {
     const itemKey = goal.itemId ? itemIdToCanonicalKey(goal.itemId) : "";
     const quantity = Math.max(0, Math.round(Number(goal.quantity) || 0));
-    const result: CraftGoalReservation = {
-      itemKey,
-      quantity,
-      craftGoal: false,
-      craftsToGo: null,
-      keeps: {},
-      short: {},
-    };
     if (!itemKey || !(itemKey in recipeMap)) {
-      result.itemKey = "";
-      return result;
+      return { itemKey: "", quantity, craftGoal: false, craftsToGo: null, needed: 0, finishable: 0, keeps: {}, short: {} };
     }
 
-    const keep = (key: string, amount: number, path: Set<string>): void => {
-      if (amount <= 0) {
-        return;
-      }
-      const owned = pool.get(key) || 0;
-      const taken = Math.min(owned, amount);
-      if (taken > 0) {
-        pool.set(key, owned - taken);
-        result.keeps[key] = (result.keeps[key] || 0) + taken;
-        reserved[key] = (reserved[key] || 0) + taken;
-      }
-      const missing = amount - taken;
-      if (missing <= 0) {
-        return;
-      }
-      const recipe = recipeMap[key];
-      if (!recipe || path.has(key)) {
-        result.short[key] = (result.short[key] || 0) + missing;
-        return;
-      }
-      keepIngredients(key, missing, path);
-    };
-    const keepIngredients = (key: string, crafts: number, path: Set<string>): void => {
-      const recipe = recipeMap[key];
-      if (!recipe || crafts <= 0) {
-        return;
-      }
-      const nextPath = new Set(path).add(key);
-      for (const [ingredient, perCraft] of Object.entries(recipe.ingredients)) {
-        keep(ingredient, crafts * Math.max(0, Math.round(perCraft)), nextPath);
-      }
-    };
-
-    if (goal.craftGoal && recipeMap[itemKey]) {
+    const craftGoal = Boolean(goal.craftGoal && recipeMap[itemKey]);
+    let craftsToGo: number | null = null;
+    if (craftGoal) {
       const craftedSoFar = Math.max(0, Math.round(Number(craftCounts[itemKey]) || 0));
       const alreadyPlanned = plannedGoalCrafts.get(itemKey) || 0;
-      const craftsToGo = Math.max(0, quantity - craftedSoFar - alreadyPlanned);
+      craftsToGo = Math.max(0, quantity - craftedSoFar - alreadyPlanned);
       plannedGoalCrafts.set(itemKey, alreadyPlanned + craftsToGo);
-      result.craftGoal = true;
-      result.craftsToGo = craftsToGo;
-      keepIngredients(itemKey, craftsToGo, new Set());
-    } else {
-      keep(itemKey, quantity, new Set());
     }
-    return result;
+    const needed = craftsToGo ?? quantity;
+    const poolBefore = new Map(pool);
+    const { keeps, short } = takeFromPool(pool, recipeMap, itemKey, needed, craftGoal);
+    for (const [key, count] of Object.entries(keeps)) {
+      reserved[key] = (reserved[key] || 0) + count;
+    }
+    const finishable =
+      Object.keys(short).length === 0 ? needed : finishableFromPool(poolBefore, recipeMap, itemKey, needed, craftGoal);
+    return { itemKey, quantity, craftGoal, craftsToGo, needed, finishable, keeps, short };
   });
 
   const available: Record<string, number> = {};

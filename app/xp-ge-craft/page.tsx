@@ -12,6 +12,7 @@ import {
   getCraftingLevelTotalXpForLevel,
 } from "../../lib/crafting-levels";
 import {
+  goalReservationCovered,
   planLeavesReserved,
   reserveInventoryForGoals,
   type CraftGoalReservation,
@@ -24,6 +25,7 @@ import {
   newTargetRowId,
   normalizedTargetQuantity,
   parseStoredTargetRows,
+  plannerRowsToKeepRows,
   readPlannerSavedTargetRows,
   serializeTargetRows,
   targetRowToPlannerTarget,
@@ -310,18 +312,39 @@ function formatGoalItemList(counts: Record<string, number>, limit = GOAL_LIST_LI
   return entries.length > limit ? `${shown.join(", ")}, +${entries.length - limit} more` : shown.join(", ");
 }
 
+/** How much of a goal inventory can't finish yet, or null when it is covered. */
+function goalShortfallText(goal: CraftGoalReservation): string | null {
+  if (goalReservationCovered(goal)) {
+    return null;
+  }
+  const needed = goal.needed.toLocaleString();
+  const finishable = goal.finishable.toLocaleString();
+  if (goal.craftGoal) {
+    return goal.finishable > 0
+      ? `Can craft ${finishable} of the ${needed} still to go from inventory`
+      : `Can't craft any of the ${needed} still to go from inventory yet`;
+  }
+  return goal.finishable > 0
+    ? `Can finish ${finishable} of ${needed} from inventory`
+    : `Can't finish ${needed}× ${getArtifactDisplayLabel(goal.itemKey)} from inventory yet`;
+}
+
 function GoalReservationLine({ goal }: { goal: CraftGoalReservation | undefined }): JSX.Element | null {
   if (!goal || !goal.itemKey) {
     return null;
   }
   const keeps = formatGoalItemList(goal.keeps);
-  const shortList = formatGoalItemList(goal.short, 3);
   const keepsTitle = formatGoalItemList(goal.keeps, Number.MAX_SAFE_INTEGER);
-  const shortTitle = formatGoalItemList(goal.short, Number.MAX_SAFE_INTEGER);
+  const shortfall = goalShortfallText(goal);
   return (
     <div className={styles.goalReservation}>
-      {shortList ? (
-        <span className={styles.goalShort} title={`Short ${shortTitle}`}>Short {shortList}</span>
+      {shortfall ? (
+        <span
+          className={styles.goalShort}
+          title={`Missing from inventory: ${formatGoalItemList(goal.short, Number.MAX_SAFE_INTEGER)}`}
+        >
+          {shortfall}
+        </span>
       ) : (
         <span className={styles.goalCovered}>Covered</span>
       )}
@@ -1332,6 +1355,8 @@ export default function XpGeCraftPage(): JSX.Element {
   const [includeLegendary, setIncludeLegendary] = useState<boolean>(false);
   const [craftingSale, setCraftingSale] = useState<boolean>(false);
   const [inventorySource, setInventorySource] = useState<InventorySource>("main");
+  // The source the loaded plan inventory came from (the dropdown may have moved on since).
+  const [planInventorySource, setPlanInventorySource] = useState<InventorySource>("main");
   const [solution, setSolution] = useState<Solution | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("xpPerGe");
   const [hideUncraftable, setHideUncraftable] = useState<boolean>(true);
@@ -1581,12 +1606,15 @@ export default function XpGeCraftPage(): JSX.Element {
     });
   }, [highs, planSourceInventory, planSourceCraftCounts, craftingSale, appliedCraftLimits, keepsForGoals, baselineCurrent]);
 
+  // Import reads the planner goals for the inventory the goals reserve from.
+  const goalImportSource = planSourceInventory ? planInventorySource : inventorySource;
+
   useEffect(() => {
     if (!goalsOpen) {
       return;
     }
-    setSavedPlannerGoalCount(readPlannerSavedTargetRows(inventorySource, GOAL_TARGET_OPTIONS).length);
-  }, [goalsOpen, inventorySource]);
+    setSavedPlannerGoalCount(readPlannerSavedTargetRows(goalImportSource, GOAL_TARGET_OPTIONS).length);
+  }, [goalsOpen, goalImportSource]);
 
   async function runOptimize(): Promise<void> {
     if (!highs) {
@@ -1636,6 +1664,7 @@ export default function XpGeCraftPage(): JSX.Element {
       setSolution(result.solution);
       setSolvedReservedKey(result.reservedKey);
       setPlanSourceInventory(result.inventory);
+      setPlanInventorySource(inventorySource);
       setPlanShinyIngredientCount(result.shinyIngredientCount);
       setPlanSourceCraftCounts(result.craftCounts);
       setPlanSourceCraftingXp(result.craftingXp);
@@ -1902,12 +1931,17 @@ export default function XpGeCraftPage(): JSX.Element {
   }
 
   function importPlannerGoals(): void {
-    const saved = readPlannerSavedTargetRows(inventorySource, GOAL_TARGET_OPTIONS);
-    setSavedPlannerGoalCount(saved.length);
-    if (saved.length === 0) {
+    if (!planSourceInventory) {
+      return;
+    }
+    const plannerRows = readPlannerSavedTargetRows(goalImportSource, GOAL_TARGET_OPTIONS);
+    setSavedPlannerGoalCount(plannerRows.length);
+    if (plannerRows.length === 0) {
       setGoalImportNote(null);
       return;
     }
+    // Planner copies goals mean "N more"; here a goal means having N in total.
+    const saved = plannerRowsToKeepRows(plannerRows, planSourceInventory);
     const sameGoal = (left: PlannerTargetRow, right: PlannerTargetRow) =>
       left.itemId === right.itemId &&
       left.craftGoal === right.craftGoal &&
@@ -2171,8 +2205,8 @@ export default function XpGeCraftPage(): JSX.Element {
                   type="button"
                   className={styles.goalsImportButton}
                   onClick={importPlannerGoals}
-                  disabled={savedPlannerGoalCount === 0}
-                  title="Copy the goals saved in the Artifact Attainment Planner"
+                  disabled={savedPlannerGoalCount === 0 || !planSourceInventory}
+                  title="Copy the goals saved in the Artifact Attainment Planner. Its copies goals mean N more, so they arrive as what you own + N."
                 >
                   Import my AAP goals
                 </button>
@@ -2182,8 +2216,8 @@ export default function XpGeCraftPage(): JSX.Element {
                   goalImportNote && <span className={styles.prePlanMeta}>{goalImportNote}</span>
                 )}
               </div>
-              {goalCount > 0 && !planSourceInventory && (
-                <div className={styles.prePlanMeta}>Calculate to see what each goal keeps.</div>
+              {!planSourceInventory && (goalCount > 0 || savedPlannerGoalCount > 0) && (
+                <div className={styles.prePlanMeta}>Calculate to load your inventory first.</div>
               )}
               {keepCostXp > 0 && (
                 <div className={styles.goalsCost}>

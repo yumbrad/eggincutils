@@ -29,6 +29,8 @@ describe("reserveInventoryForGoals", () => {
     expect(result.goals[0].keeps).toEqual({ soul_stone_2: 10, soul_stone_1: 60 });
     expect(result.goals[0].short).toEqual({ soul_stone_1: 40 });
     expect(goalReservationCovered(result.goals[0])).toBe(false);
+    // 10 owned + 3 craftable T2 is short of the 15 one T3 takes.
+    expect(result.goals[0]).toMatchObject({ needed: 1, finishable: 0 });
     expect(result.available).toEqual({ soul_stone_2: 0, soul_stone_1: 0 });
   });
 
@@ -64,6 +66,7 @@ describe("reserveInventoryForGoals", () => {
       "gold_meteorite_2",
     ]);
     expect(goal.short).toEqual({ mercurys_lens_1: 24 });
+    expect(goal).toMatchObject({ needed: 1, finishable: 0 });
     expect(result.available.ornate_gusset_1).toBe(60);
     expect(result.available.gold_meteorite_2).toBe(8);
   });
@@ -79,6 +82,7 @@ describe("reserveInventoryForGoals", () => {
     // 10 crafts to go, each 6× gusset T2 + 2× lens T2.
     expect(goal.craftGoal).toBe(true);
     expect(goal.craftsToGo).toBe(10);
+    expect(goal).toMatchObject({ needed: 10, finishable: 10 });
     expect(goal.keeps).toEqual({ ornate_gusset_2: 60, mercurys_lens_2: 20 });
     expect(goal.short).toEqual({});
     expect(result.available.ornate_gusset_3).toBe(50);
@@ -92,6 +96,7 @@ describe("reserveInventoryForGoals", () => {
     );
 
     expect(result.goals[0].craftsToGo).toBe(0);
+    expect(result.goals[0]).toMatchObject({ needed: 0, finishable: 0 });
     expect(result.goals[0].keeps).toEqual({});
     expect(goalReservationCovered(result.goals[0])).toBe(true);
     expect(result.totalReserved).toBe(0);
@@ -126,8 +131,11 @@ describe("reserveInventoryForGoals", () => {
 
     expect(result.goals[0].keeps).toEqual({ soul_stone_2: 2, soul_stone_1: 20 });
     expect(result.goals[0].short).toEqual({});
+    expect(result.goals[0]).toMatchObject({ needed: 3, finishable: 3 });
     expect(result.goals[1].keeps).toEqual({ soul_stone_1: 10 });
     expect(result.goals[1].short).toEqual({ soul_stone_1: 30 });
+    // The first goal took both T2 and 20 fragments, so 10 fragments make no T2.
+    expect(result.goals[1]).toMatchObject({ needed: 2, finishable: 0 });
     expect(result.reserved).toEqual({ soul_stone_2: 2, soul_stone_1: 30 });
     expect(result.available).toEqual({ soul_stone_2: 0, soul_stone_1: 0 });
   });
@@ -137,6 +145,7 @@ describe("reserveInventoryForGoals", () => {
 
     expect(result.goals[0].keeps).toEqual({ book_of_basan_1: 4 });
     expect(result.goals[0].short).toEqual({ book_of_basan_1: 6 });
+    expect(result.goals[0]).toMatchObject({ needed: 10, finishable: 4 });
   });
 
   it("resolves display ids that differ from recipe keys", () => {
@@ -187,6 +196,42 @@ describe("reserveInventoryForGoals", () => {
     expect(result.totalReserved).toBe(2);
   });
 
+  it("counts how many copies a partly covered copies goal can finish, owned copies included", () => {
+    // 2 owned T2 + 50 fragments (2 more T2 at 20 each) = 4 of 5.
+    const result = reserveInventoryForGoals({ soul_stone_2: 2, soul_stone_1: 50 }, {}, [
+      { itemId: "soul-stone-2", quantity: 5 },
+    ]);
+
+    expect(result.goals[0]).toMatchObject({ needed: 5, finishable: 4 });
+    // Everything owned along the tree stays kept even so.
+    expect(result.goals[0].keeps).toEqual({ soul_stone_2: 2, soul_stone_1: 50 });
+  });
+
+  it("counts how many of the crafts still to go a craft-count goal can finish", () => {
+    // 340 crafts to go, each 6× gusset T2 + 2× lens T2: 100 T2 make 16, 30 lens make 15.
+    const result = reserveInventoryForGoals(
+      { ornate_gusset_3: 40, ornate_gusset_2: 100, mercurys_lens_2: 30 },
+      { ornate_gusset_3: 60 },
+      [{ itemId: "gusset-3", quantity: 400, craftGoal: true }]
+    );
+
+    expect(result.goals[0]).toMatchObject({ craftsToGo: 340, needed: 340, finishable: 15 });
+    expect(result.goals[0].keeps).toEqual({ ornate_gusset_2: 100, mercurys_lens_2: 30 });
+  });
+
+  it("finds the finishable amount through deep, shared recipe trees", () => {
+    // Gusset T4 = 8× T3 + 3× gold T3. Owned: 12 T3, 7 gold T3 and 11 gold T2
+    // (one more gold T3): 1 T4 from T3 + gold, the second short of T3 crafts.
+    const result = reserveInventoryForGoals(
+      { ornate_gusset_3: 12, gold_meteorite_3: 7, gold_meteorite_2: 11, ornate_gusset_2: 6, mercurys_lens_2: 2 },
+      {},
+      [{ itemId: "gusset-4", quantity: 3 }]
+    );
+
+    // T4 #2 needs 4 more T3 (only 1 craftable from 6 T2 + 2 lens T2).
+    expect(result.goals[0]).toMatchObject({ needed: 3, finishable: 1 });
+  });
+
   it("never keeps more than the inventory holds", () => {
     let seed = 12345;
     const random = () => {
@@ -230,6 +275,21 @@ describe("reserveInventoryForGoals", () => {
       for (const [key, quantity] of Object.entries(inventory)) {
         expect(result.available[key]).toBeGreaterThanOrEqual(0);
         expect(result.available[key]).toBeCloseTo(quantity - (result.reserved[key] || 0));
+      }
+
+      // The first goal sees the whole pool: exactly `finishable` of it is coverable.
+      const first = result.goals[0];
+      expect(first.finishable).toBeLessThanOrEqual(first.needed);
+      expect(first.finishable === first.needed).toBe(goalReservationCovered(first));
+      if (first.itemKey && first.finishable < first.needed) {
+        const goal = goals[0];
+        const craftedSoFar = first.craftGoal ? Math.round(craftCounts[first.itemKey] || 0) : 0;
+        const probe = (amount: number) =>
+          reserveInventoryForGoals(inventory, craftCounts, [{ ...goal, quantity: craftedSoFar + amount }]).goals[0];
+        if (first.finishable > 0) {
+          expect(goalReservationCovered(probe(first.finishable))).toBe(true);
+        }
+        expect(goalReservationCovered(probe(first.finishable + 1))).toBe(false);
       }
     }
   });

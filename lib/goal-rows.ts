@@ -1,4 +1,4 @@
-import { artifactDisplayMap, itemKeyToDisplayName, itemKeyToIconUrl, itemKeyToId } from "./item-utils";
+import { artifactDisplayMap, itemIdToCanonicalKey, itemKeyToDisplayName, itemKeyToIconUrl, itemKeyToId } from "./item-utils";
 import { LOCAL_PREF_KEYS, readFirstStoredString } from "./local-preferences";
 import { itemIdTakesCraftCountGoal, recipes } from "./recipes";
 
@@ -287,4 +287,21 @@ export function readPlannerSavedTargetRows(source: "main" | "virtue", targetOpti
     source,
     targetOptions
   );
+}
+
+/**
+ * Attainment-planner goals as XP-planner keep goals. A planner copies goal
+ * "×N" means N more copies; a keep goal means having N in total, so it becomes
+ * owned + N (whole copies in `inventory`, the inventory the keep goals reserve
+ * from). Craft-count goals already mean the same on both pages.
+ */
+export function plannerRowsToKeepRows(rows: PlannerTargetRow[], inventory: Record<string, number>): PlannerTargetRow[] {
+  return rows.map((row) => {
+    if (row.craftGoal && itemIdTakesCraftCountGoal(row.itemId)) {
+      return row;
+    }
+    const owned = Math.max(0, Math.floor(Number(inventory[itemIdToCanonicalKey(row.itemId)]) || 0));
+    const total = Math.min(9999, normalizedTargetQuantity(row.quantityInput) + owned);
+    return { ...row, craftGoal: false, quantityInput: String(total) };
+  });
 }
