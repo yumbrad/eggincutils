@@ -625,7 +625,8 @@ function getModeComparisonRows(solution: Solution, sortKey: SortKey): ModeCompar
     if (craft.modeComparison.auto) {
       const autoExtraCount = Math.max(0, craft.modeComparison.auto.count - craft.modeComparison.direct.count);
       if (autoExtraCount > 0) {
-        const autoExtraXp = autoExtraCount * craft.xpPerCraft;
+        // Auto mode's XP includes the ingredients it auto-crafts, as its cost does.
+        const autoExtraXp = Math.max(0, craft.modeComparison.auto.xp - craft.modeComparison.direct.xp);
         const autoExtraCost = Math.max(0, craft.modeComparison.auto.cost - craft.modeComparison.direct.cost);
         rows.push({
           key: getModeRowKey(artifact, "auto"),
@@ -1343,8 +1344,13 @@ function formatPercent(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function getXpTooltip(xpPerCraft: number, count: number): string {
-  return `XP per craft: ${xpPerCraft.toLocaleString()}\nCrafts: ${count.toLocaleString()}`;
+function getXpTooltip(xpPerCraft: number, count: number, totalXp: number): string {
+  const lines = [`XP per craft: ${xpPerCraft.toLocaleString()}`, `Crafts: ${count.toLocaleString()}`];
+  const ingredientXp = totalXp - xpPerCraft * count;
+  if (ingredientXp > 0) {
+    lines.push(`Plus ${ingredientXp.toLocaleString()} XP from the ingredients they auto-craft`);
+  }
+  return lines.join("\n");
 }
 
 function getCostTooltip(artifact: string, craft: Solution["crafts"][string]): string {
@@ -2507,7 +2513,7 @@ export default function XpGeCraftPage(): JSX.Element {
                           </td>
                           <td className={styles.num}>{getModeRowCountLabel(row, status)}</td>
                           <td className={styles.num}>
-                            <span className={styles.valueTooltip} title={getXpTooltip(standaloneSolution!.crafts[row.artifact].xpPerCraft, row.count)}>
+                            <span className={styles.valueTooltip} title={getXpTooltip(standaloneSolution!.crafts[row.artifact].xpPerCraft, row.count, row.xp)}>
                               {row.xp.toLocaleString()}
                             </span>
                           </td>

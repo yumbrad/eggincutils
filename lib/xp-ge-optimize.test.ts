@@ -8,6 +8,7 @@ import { recipes } from "./recipes";
 import {
   buildMaxXpExecutionPlan,
   optimizeCrafts,
+  simulateGeEfficiencyPlan,
   type Highs,
   type MaxXpExecutionPlanNode,
   type Solution,
@@ -229,4 +230,57 @@ describe("optimizeCrafts on inventory with goal items held back (blocked goals)"
       { itemId: "soul-stone-3", quantity: 20 },
     ]);
   }, 60_000);
+});
+
+describe("auto-craft XP", () => {
+  // Ship in a bottle T3 with no T2s on hand: auto mode crafts the T2s first,
+  // and each of those is a real craft with its own GE cost and XP.
+  const t3 = "ship_in_a_bottle_3";
+  const t2 = "ship_in_a_bottle_2";
+  const recipeT3 = recipes[t3]!;
+  const recipeT2 = recipes[t2]!;
+  const t2PerT3 = recipeT3.ingredients[t2];
+  const inventory: Record<string, number> = { [t2]: 0 };
+  for (const [ingredient, quantity] of Object.entries(recipeT3.ingredients)) {
+    if (ingredient !== t2) {
+      inventory[ingredient] = quantity;
+    }
+  }
+  for (const [ingredient, quantity] of Object.entries(recipeT2.ingredients)) {
+    inventory[ingredient] = (inventory[ingredient] || 0) + quantity * t2PerT3;
+  }
+
+  it("counts the XP of the ingredients auto mode crafts, not just the top-level craft", () => {
+    const result = simulateGeEfficiencyPlan(inventory, {}, [{ artifact: t3, mode: "auto", referenceXpPerGe: 1 }], 0);
+    const row = result.rows[0];
+    expect(t2PerT3).toBeGreaterThan(0);
+    expect(row.craftedCount).toBe(1);
+    expect(result.finalCraftCounts[t2]).toBe(t2PerT3);
+    expect(row.xp).toBe(recipeT3.xp + t2PerT3 * recipeT2.xp);
+    expect(result.totalXp).toBe(row.xp);
+  });
+
+  it("matches the XP of every craft it makes on a real profile", () => {
+    const snapshotPath = path.join(process.cwd(), "benchmarks", "mission-craft-planner", "profile-snapshot-benchmark.json");
+    const snapshot = JSON.parse(fs.readFileSync(snapshotPath, "utf8"));
+    const startInventory: Record<string, number> = snapshot.profile.inventory;
+    const startCounts: Record<string, number> = snapshot.profile.craftCounts;
+    let checked = 0;
+    for (const artifact of Object.keys(recipes)) {
+      if (!recipes[artifact]) {
+        continue;
+      }
+      const result = simulateGeEfficiencyPlan(startInventory, startCounts, [{ artifact, mode: "auto", referenceXpPerGe: 1 }], 0);
+      let everyCraftXp = 0;
+      for (const [itemKey, finalCount] of Object.entries(result.finalCraftCounts)) {
+        const crafted = finalCount - (startCounts[itemKey] || 0);
+        if (crafted > 0 && recipes[itemKey]) {
+          everyCraftXp += crafted * recipes[itemKey]!.xp;
+        }
+      }
+      expect(result.rows[0]?.xp ?? 0).toBe(everyCraftXp);
+      checked += 1;
+    }
+    expect(checked).toBeGreaterThan(50);
+  });
 });

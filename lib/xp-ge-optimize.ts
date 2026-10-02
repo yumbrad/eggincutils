@@ -170,7 +170,7 @@ export function optimizeCrafts(
     const costDetails = getCostDetails(recipes, craftCounts, artifact, count, saleEnabled);
     const cost = costDetails.totalDirectCost;
     const xpPerGe = cost > 0 ? xp / cost : 0;
-    const modeComparison = getCraftModeComparison(recipes, inventory, craftCounts, artifact, xpPerCraft, saleEnabled);
+    const modeComparison = getCraftModeComparison(recipes, inventory, craftCounts, artifact, saleEnabled);
 
     result.crafts[artifact] = { count, xp, cost, xpPerGe, xpPerCraft, costDetails, modeComparison };
     result.totalXp += xp;
@@ -221,7 +221,7 @@ export function simulateGeEfficiencyPlan(
     simulationInventory = simulated.inventory;
     simulationCraftCounts = simulated.craftCounts;
 
-    const xp = simulated.count * recipe.xp;
+    const xp = simulated.xp;
     const effectiveXpPerGe = simulated.cost > 0 ? xp / simulated.cost : 0;
     results.push({
       artifact: row.artifact,
@@ -354,7 +354,7 @@ export function withStandaloneComparisons(
   for (const [artifact, craft] of Object.entries(solution.crafts)) {
     crafts[artifact] = {
       ...craft,
-      modeComparison: getCraftModeComparison(recipes, inventory, craftCounts, artifact, craft.xpPerCraft, saleEnabled),
+      modeComparison: getCraftModeComparison(recipes, inventory, craftCounts, artifact, saleEnabled),
     };
   }
   return { ...solution, crafts };
@@ -861,15 +861,14 @@ function getCraftModeComparison(
   inventory: Inventory,
   craftCounts: CraftCounts,
   artifact: string,
-  xpPerCraft: number,
   saleEnabled: boolean
 ): CraftModeComparison {
   const directResult = simulateCraftMode(recipeMap, inventory, craftCounts, artifact, false, saleEnabled);
   const direct: CraftModeMetrics = {
     count: directResult.count,
-    xp: directResult.count * xpPerCraft,
+    xp: directResult.xp,
     cost: directResult.cost,
-    xpPerGe: directResult.cost > 0 ? (directResult.count * xpPerCraft) / directResult.cost : 0,
+    xpPerGe: directResult.cost > 0 ? directResult.xp / directResult.cost : 0,
   };
 
   const recipe = recipeMap[artifact];
@@ -883,11 +882,13 @@ function getCraftModeComparison(
   }
 
   const autoResult = simulateCraftMode(recipeMap, inventory, craftCounts, artifact, true, saleEnabled);
+  // XP of every craft auto mode makes, the auto-crafted ingredients included:
+  // their GE is in the cost, so their XP belongs in the XP.
   const auto: CraftModeMetrics = {
     count: autoResult.count,
-    xp: autoResult.count * xpPerCraft,
+    xp: autoResult.xp,
     cost: autoResult.cost,
-    xpPerGe: autoResult.cost > 0 ? (autoResult.count * xpPerCraft) / autoResult.cost : 0,
+    xpPerGe: autoResult.cost > 0 ? autoResult.xp / autoResult.cost : 0,
   };
   return { direct, auto };
 }
@@ -899,15 +900,17 @@ function simulateCraftMode(
   artifact: string,
   allowAutocraft: boolean,
   saleEnabled: boolean
-): { count: number; cost: number } {
+): { count: number; cost: number; xp: number } {
   let simulationInventory = cloneCountMap(inventory);
   let simulationCraftCounts = cloneCountMap(craftCounts);
   let totalCost = 0;
+  let totalXp = 0;
   let craftedCount = 0;
   while (true) {
     const attemptInventory = cloneCountMap(simulationInventory);
     const attemptCraftCounts = cloneCountMap(simulationCraftCounts);
     let attemptCost = 0;
+    let attemptXp = 0;
     const didCraft = craftOne(
       recipeMap,
       attemptInventory,
@@ -915,8 +918,9 @@ function simulateCraftMode(
       artifact,
       allowAutocraft,
       saleEnabled,
-      (cost) => {
+      (cost, xp) => {
         attemptCost += cost;
+        attemptXp += xp;
       }
     );
     if (!didCraft) {
@@ -925,11 +929,13 @@ function simulateCraftMode(
     simulationInventory = attemptInventory;
     simulationCraftCounts = attemptCraftCounts;
     totalCost += attemptCost;
+    totalXp += attemptXp;
     craftedCount += 1;
   }
   return {
     count: craftedCount,
     cost: totalCost,
+    xp: totalXp,
   };
 }
 
@@ -943,18 +949,22 @@ function simulateCraftModeWithState(
 ): {
   count: number;
   cost: number;
+  /** Every craft's XP, auto-crafted ingredients included. */
+  xp: number;
   inventory: Record<string, number>;
   craftCounts: Record<string, number>;
 } {
   let simulationInventory = cloneCountMap(inventory);
   let simulationCraftCounts = cloneCountMap(craftCounts);
   let totalCost = 0;
+  let totalXp = 0;
   let craftedCount = 0;
 
   while (true) {
     const attemptInventory = cloneCountMap(simulationInventory);
     const attemptCraftCounts = cloneCountMap(simulationCraftCounts);
     let attemptCost = 0;
+    let attemptXp = 0;
     const didCraft = craftOne(
       recipeMap,
       attemptInventory,
@@ -962,8 +972,9 @@ function simulateCraftModeWithState(
       artifact,
       allowAutocraft,
       saleEnabled,
-      (cost) => {
+      (cost, xp) => {
         attemptCost += cost;
+        attemptXp += xp;
       }
     );
     if (!didCraft) {
@@ -972,12 +983,14 @@ function simulateCraftModeWithState(
     simulationInventory = attemptInventory;
     simulationCraftCounts = attemptCraftCounts;
     totalCost += attemptCost;
+    totalXp += attemptXp;
     craftedCount += 1;
   }
 
   return {
     count: craftedCount,
     cost: totalCost,
+    xp: totalXp,
     inventory: simulationInventory,
     craftCounts: simulationCraftCounts,
   };
@@ -990,7 +1003,8 @@ function craftOne(
   artifact: string,
   allowAutocraft: boolean,
   saleEnabled: boolean,
-  onCost: (cost: number) => void,
+  /** Called once per craft, auto-crafted ingredients included: each is a real craft with its own GE cost and XP. */
+  onCraft: (cost: number, xp: number) => void,
   stack: Set<string> = new Set()
 ): boolean {
   const recipe = recipeMap[artifact];
@@ -1009,7 +1023,7 @@ function craftOne(
         stack.delete(artifact);
         return false;
       }
-      const didCraftIngredient = craftOne(recipeMap, inventory, craftCounts, ingredient, true, saleEnabled, onCost, stack);
+      const didCraftIngredient = craftOne(recipeMap, inventory, craftCounts, ingredient, true, saleEnabled, onCraft, stack);
       if (!didCraftIngredient) {
         stack.delete(artifact);
         return false;
@@ -1024,7 +1038,7 @@ function craftOne(
 
   const craftCount = craftCounts[artifact] || 0;
   const { discountedCost } = getDiscountedCost(recipe.cost, craftCount, saleEnabled);
-  onCost(discountedCost);
+  onCraft(discountedCost, recipe.xp);
   craftCounts[artifact] = craftCount + 1;
   inventory[artifact] = (inventory[artifact] || 0) + 1;
   stack.delete(artifact);
