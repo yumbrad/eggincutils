@@ -1650,6 +1650,45 @@
   margin: 0;
 }
 
+.tankReadoutTitle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.tankEditedBadge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent), transparent 85%);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.tankEditLink {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tankEditLink:hover {
+  text-decoration: underline;
+}
+
+.tankEditLink:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid color-mix(in oklab, var(--accent), transparent 30%);
+  outline-offset: 2px;
+}
+
 .tankReadoutTotal {
   font: 700 13px var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -1717,6 +1756,42 @@
   overflow: hidden;
   font: 800 13px var(--font-mono);
   font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tankEggField {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  min-width: 0;
+  font: 700 12px var(--font-mono);
+  color: var(--muted);
+}
+
+.tankEggField input {
+  width: 100%;
+  min-width: 0;
+  padding: 1px 4px;
+  border: 1px solid color-mix(in oklab, var(--egg), var(--stroke) 50%);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--ink);
+  font: 800 13px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tankEggField input:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--egg), transparent 30%);
+  outline-offset: 0;
+}
+
+.tankEggBackup {
+  grid-column: 1 / -1;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

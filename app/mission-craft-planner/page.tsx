@@ -125,6 +125,8 @@ type ProfileSnapshot = {
   missionOptions: MissionOption[];
   /** Path of Virtue tank and shift state; absent on older saved sessions and backups without it. */
   virtueTank?: VirtueTankSnapshot;
+  /** The tank the plan was solved from: `virtueTank` with the card's hand edits, when there were any. */
+  plannedVirtueTank?: VirtueTankSnapshot;
 };
 
 type PlannerSourceFilters = {
@@ -1746,14 +1748,166 @@ function VirtueRouteChips({ eggs, size }: { eggs: VirtueTankEggKey[]; size?: "sm
   );
 }
 
-/** Card A's readout of what is in the tank now, Humility included (hatched, never planned). */
-function VirtueTankReadout({ tank }: { tank: VirtueTankSnapshot }) {
+/**
+ * Card A's hand edits to the tank, for planning from what it will hold rather than what the backup
+ * says (say, mid-fill on Resilience): amounts per egg that replace the backup's readings. They hold
+ * for one EID ("" for the demo tank) across newer backups, until "Use backup values".
+ */
+type VirtueTankEdits = {
+  eid: string;
+  fuels: Partial<Record<VirtueTankEggKey, number>>;
+};
+
+function parseStoredVirtueTankEdits(raw: string | null): VirtueTankEdits | null {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isPlainObject(parsed) || typeof parsed.eid !== "string" || !isPlainObject(parsed.fuels)) {
+      return null;
+    }
+    const fuels: Partial<Record<VirtueTankEggKey, number>> = {};
+    for (const egg of VIRTUE_TANK_READOUT_ORDER) {
+      const value = parsed.fuels[egg];
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+        fuels[egg] = value;
+      }
+    }
+    return Object.keys(fuels).length > 0 ? { eid: parsed.eid, fuels } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The tank with the card's hand edits in place, or as it is when they belong to another EID. */
+function applyVirtueTankEdits(
+  tank: VirtueTankSnapshot | null | undefined,
+  edits: VirtueTankEdits | null,
+  eid: string
+): VirtueTankSnapshot | null | undefined {
+  if (!tank || !edits || edits.eid !== eid) {
+    return tank;
+  }
+  return { ...tank, fuels: { ...tank.fuels, ...edits.fuels } };
+}
+
+/** Tank amounts are typed in trillions from the 10T tank up, in billions below. */
+function virtueTankEditUnit(capacity: number): { eggs: number; suffix: string } {
+  return capacity >= 1e13 ? { eggs: 1e12, suffix: "T" } : { eggs: 1e9, suffix: "B" };
+}
+
+/** An amount as the edit field shows it: in the field's unit, as precise as the readout. */
+function virtueTankEditText(amount: number, capacity: number): string {
+  const unit = virtueTankEditUnit(capacity);
+  const digits = Math.max(1, fractionDigitsForResolution(capacity / 100 / unit.eggs));
+  const scale = 10 ** digits;
+  return String(Math.round((Math.max(0, amount) / unit.eggs) * scale) / scale);
+}
+
+/**
+ * A hand-entered amount on the tank's 1% grid (the game's limit and drain sliders: 5T steps on the
+ * 500T tank), held to the room the other eggs leave. That room can be off the grid when they are.
+ */
+function snapVirtueTankEdit(amount: number, capacity: number, room: number): number {
+  const step = capacity / 100;
+  const snapped = step > 0 ? Math.round(Math.max(0, amount) / step) * step : 0;
+  return Math.max(0, Math.min(snapped, room));
+}
+
+/**
+ * Card A's readout of what is in the tank now, Humility included (hatched, never planned). With
+ * `onEdit`, "Edit" turns the amounts into fields; `tank` carries the edits and `backup` the readings.
+ */
+function VirtueTankReadout({
+  tank,
+  backup,
+  onEdit,
+  onReset,
+}: {
+  tank: VirtueTankSnapshot;
+  backup: VirtueTankSnapshot;
+  onEdit?: (egg: VirtueTankEggKey, amount: number) => void;
+  onReset: () => void;
+}) {
+  const [editOpen, setEditOpen] = useState(false);
+  const [drafts, setDrafts] = useState<Partial<Record<VirtueTankEggKey, string>>>({});
+  const editing = editOpen && Boolean(onEdit);
   const capacity = tank.capacity;
+  const unit = virtueTankEditUnit(capacity);
   const physical = VIRTUE_TANK_READOUT_ORDER.reduce((sum, egg) => sum + Math.max(0, tank.fuels[egg] || 0), 0);
+  const isEdited = (egg: VirtueTankEggKey) => Math.abs((tank.fuels[egg] || 0) - (backup.fuels[egg] || 0)) > VIRTUE_FUEL_NOISE;
+  const edited = VIRTUE_TANK_READOUT_ORDER.some(isEdited);
+
+  const setAmount = (egg: VirtueTankEggKey, amount: number) => {
+    const others = VIRTUE_TANK_READOUT_ORDER.reduce(
+      (sum, other) => (other === egg ? sum : sum + Math.max(0, tank.fuels[other] || 0)),
+      0
+    );
+    onEdit?.(egg, snapVirtueTankEdit(amount, capacity, capacity - others));
+  };
+  const dropDraft = (egg: VirtueTankEggKey) =>
+    setDrafts((current) => {
+      const next = { ...current };
+      delete next[egg];
+      return next;
+    });
+  // Only a changed field commits: an untouched one keeps its off-grid reading.
+  const commit = (egg: VirtueTankEggKey) => {
+    const draft = drafts[egg]?.trim();
+    dropDraft(egg);
+    if (draft == null || draft === "" || draft === virtueTankEditText(tank.fuels[egg] || 0, capacity)) {
+      return;
+    }
+    const value = Number(draft);
+    if (Number.isFinite(value)) {
+      setAmount(egg, value * unit.eggs);
+    }
+  };
+  // Arrow keys step along the 1% grid, as the game's sliders do.
+  const nudge = (egg: VirtueTankEggKey, direction: 1 | -1) => {
+    const step = capacity / 100;
+    const draft = Number(drafts[egg]?.trim());
+    const from = drafts[egg] != null && Number.isFinite(draft) ? draft * unit.eggs : tank.fuels[egg] || 0;
+    const steps = from / step;
+    const next = direction > 0 ? Math.floor(steps + 1e-6) + 1 : Math.ceil(steps - 1e-6) - 1;
+    dropDraft(egg);
+    setAmount(egg, next * step);
+  };
+
   return (
     <div className={styles.tankReadout}>
       <div className={styles.tankReadoutHead}>
-        <span className={styles.fieldLabel}>In your tank now</span>
+        <span className={styles.tankReadoutTitle}>
+          <span className={styles.fieldLabel}>In your tank now</span>
+          {edited && <span className={styles.tankEditedBadge}>Edited</span>}
+          {onEdit && (
+            <button
+              type="button"
+              className={styles.tankEditLink}
+              aria-expanded={editing}
+              title={editing ? undefined : "Set the amounts by hand if the tank has changed since the backup"}
+              onClick={() => {
+                setDrafts({});
+                setEditOpen(!editing);
+              }}
+            >
+              {editing ? "Done" : "Edit"}
+            </button>
+          )}
+          {edited && (
+            <button
+              type="button"
+              className={styles.tankEditLink}
+              onClick={() => {
+                setDrafts({});
+                onReset();
+              }}
+            >
+              Use backup values
+            </button>
+          )}
+        </span>
         <span className={styles.tankReadoutTotal}>
           {formatTankFuel(physical)} <span>of {formatTankFuel(capacity)}</span>
         </span>
@@ -1788,18 +1942,46 @@ function VirtueTankReadout({ tank }: { tank: VirtueTankSnapshot }) {
             >
               <VirtueEggIcon egg={egg} size={22} />
               <span className={styles.tankEggName}>{VIRTUE_EGG_DISPLAY[egg].label}</span>
-              <span className={styles.tankEggAmount}>{empty ? "Empty" : formatTankFuel(amount)}</span>
+              {editing ? (
+                <span className={styles.tankEggField}>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    aria-label={`${VIRTUE_EGG_DISPLAY[egg].label} in the tank, in ${unit.suffix}`}
+                    value={drafts[egg] ?? virtueTankEditText(amount, capacity)}
+                    onChange={(event) => {
+                      const text = event.target.value;
+                      setDrafts((current) => ({ ...current, [egg]: text }));
+                    }}
+                    onBlur={() => commit(egg)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        // The card sits in the build form: Enter sets the amount, it doesn't build.
+                        event.preventDefault();
+                        event.currentTarget.blur();
+                      } else if (event.key === "Escape") {
+                        dropDraft(egg);
+                      } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                        event.preventDefault();
+                        nudge(egg, event.key === "ArrowUp" ? 1 : -1);
+                      }
+                    }}
+                  />
+                  <span aria-hidden="true">{unit.suffix}</span>
+                </span>
+              ) : (
+                <span className={styles.tankEggAmount}>{empty ? "Empty" : formatTankFuel(amount)}</span>
+              )}
+              {isEdited(egg) && (
+                <span className={styles.tankEggBackup}>
+                  backup {(backup.fuels[egg] || 0) > VIRTUE_FUEL_NOISE ? formatTankFuel(backup.fuels[egg], capacity) : "empty"}
+                </span>
+              )}
             </li>
           );
         })}
       </ul>
-      <p className={styles.tankFootnote}>
-        <VirtueEggIcon egg="humility" size={14} />
-        <span>
-          <strong>Humility isn&apos;t planned:</strong> ships fuel it straight from the Humility farm. Drain any
-          Humility in the tank and set its limit to 0.
-        </span>
-      </p>
     </div>
   );
 }
@@ -3148,6 +3330,7 @@ export default function MissionCraftPlannerPage() {
   /** The shift cap the last "Plan with S shifts" built at, until the next build: the status region says so. */
   const [fasterOptionPlanned, setFasterOptionPlanned] = useState<number | null>(null);
   const [virtueStartTank, setVirtueStartTank] = useState<VirtueTankStartMode>("current");
+  const [virtueTankEdits, setVirtueTankEdits] = useState<VirtueTankEdits | null>(null);
   // The virtue tank card shows the tank before any plan is built, so it keeps
   // its own copy of the latest fetched tank for the EID in the field.
   const [virtueTankPreview, setVirtueTankPreview] = useState<VirtueTankPreview | null>(null);
@@ -3384,7 +3567,10 @@ export default function MissionCraftPlannerPage() {
   // Tank mode schedules launches tank by tank (the packer's schedule), so its
   // timeline replaces the heuristic one below.
   const virtueTankView = useMemo(
-    () => (response ? buildVirtueTankPlanView(response.plan, profileSnapshot?.virtueTank) : null),
+    () =>
+      response
+        ? buildVirtueTankPlanView(response.plan, profileSnapshot?.plannedVirtueTank ?? profileSnapshot?.virtueTank)
+        : null,
     [profileSnapshot, response]
   );
   const missionTimeline = useMemo(
@@ -3865,6 +4051,7 @@ export default function MissionCraftPlannerPage() {
       if (savedVirtueStartTank === "current" || savedVirtueStartTank === "ideal") {
         setVirtueStartTank(savedVirtueStartTank);
       }
+      setVirtueTankEdits(parseStoredVirtueTankEdits(readFirstStoredString([LOCAL_PREF_KEYS.plannerVirtueTankEdits])));
       const savedFastMode = readStoredBoolean([LOCAL_PREF_KEYS.plannerFastMode]);
       if (savedFastMode != null) {
         setFastMode(savedFastMode);
@@ -4047,6 +4234,17 @@ export default function MissionCraftPlannerPage() {
       // Ignore localStorage persistence errors.
     }
   }, [virtueStartTank, prefsLoaded]);
+
+  useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
+    try {
+      writeStoredString([LOCAL_PREF_KEYS.plannerVirtueTankEdits], virtueTankEdits ? JSON.stringify(virtueTankEdits) : "");
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
+  }, [virtueTankEdits, prefsLoaded]);
 
   // The virtue tank card needs the tank before the first plan: fetch the
   // profile when switching to Path of Virtue and whenever the EID settles.
@@ -4346,6 +4544,10 @@ export default function MissionCraftPlannerPage() {
         } else {
           profile = await fetchProfileSnapshot(trimmedEid, sourceFilters);
         }
+        // The card's hand edits override this backup's readings, however new it is.
+        if (inventorySource === "virtue" && profile.virtueTank && virtueTankEdits?.eid === trimmedEid) {
+          profile = { ...profile, plannedVirtueTank: applyVirtueTankEdits(profile.virtueTank, virtueTankEdits, trimmedEid) ?? undefined };
+        }
 
         setPlannerProgress({
           phase: "init",
@@ -4365,7 +4567,7 @@ export default function MissionCraftPlannerPage() {
             objectiveMode: inventorySource === "virtue" ? "virtueFuel" : "ge",
             virtueTank:
               inventorySource === "virtue"
-                ? buildVirtueTankPlannerOptions(profile.virtueTank, virtueShiftCap, virtueStartTank)
+                ? buildVirtueTankPlannerOptions(profile.plannedVirtueTank ?? profile.virtueTank, virtueShiftCap, virtueStartTank)
                 : undefined,
             fastMode,
             missionDropRarities: {
@@ -4530,8 +4732,11 @@ export default function MissionCraftPlannerPage() {
       targetAfxId: combo.targetAfxId,
     }));
     const selectedCombos: SolveSnapshotCombo[] = availableCombos.filter((combo) => compareSelected.has(comboKey(combo)));
+    // The snapshot script plans from `virtueTank`, so it gets the tank as the plan saw it.
+    const { plannedVirtueTank, ...exportedProfile } = profileSnapshot;
     const sanitizedProfile: ProfileSnapshot = {
-      ...profileSnapshot,
+      ...exportedProfile,
+      ...(plannedVirtueTank ? { virtueTank: plannedVirtueTank } : {}),
       eid: profileSnapshot.eid === "DEMO" ? "DEMO" : "REDACTED",
     };
     const payload: SolveInputSnapshotFile = {
@@ -4685,6 +4890,31 @@ export default function MissionCraftPlannerPage() {
   };
 
   const cardVirtueTank = virtueTankForCard.virtueTank;
+  const cardVirtueTankEdited = applyVirtueTankEdits(cardVirtueTank, virtueTankEdits, virtueTankForCard.eid) ?? null;
+  // Edits outlive the backup they were made on, so an egg left unedited can grow past the room they
+  // left: the edited tank then holds more than it can.
+  const cardVirtueTankOverfull =
+    cardVirtueTankEdited && cardVirtueTankEdited !== cardVirtueTank
+      ? VIRTUE_TANK_READOUT_ORDER.reduce((sum, egg) => sum + Math.max(0, cardVirtueTankEdited.fuels[egg] || 0), 0) -
+          cardVirtueTankEdited.capacity >
+        virtueFuelTolerance(cardVirtueTankEdited.capacity)
+      : false;
+  const handleVirtueTankEdit = (egg: VirtueTankEggKey, amount: number) => {
+    const backup = cardVirtueTank;
+    if (!backup) {
+      return;
+    }
+    const eidKey = virtueTankForCard.eid;
+    setVirtueTankEdits((current) => {
+      const fuels = current?.eid === eidKey ? { ...current.fuels } : {};
+      if (Math.abs(amount - (backup.fuels[egg] || 0)) <= VIRTUE_FUEL_NOISE) {
+        delete fuels[egg];
+      } else {
+        fuels[egg] = amount;
+      }
+      return Object.keys(fuels).length > 0 ? { eid: eidKey, fuels } : null;
+    });
+  };
   const planVirtueTanks = response?.plan.virtueTanks ?? null;
   // Shifts the last plan needs past its cap: the fewest that meet the goals
   // when the solve went over, or what packing took when it came out above
@@ -5139,7 +5369,7 @@ export default function MissionCraftPlannerPage() {
                   ) : (
                     <>
                       <strong>Plan as if you first fill the tank with the best mix for these goals.</strong> Use your
-                      build-up phase to match the Initial Tank.
+                      build-up phase to match the Initial Tank we&apos;ll recommend below.
                     </>
                   )}
                 </p>
@@ -5151,8 +5381,19 @@ export default function MissionCraftPlannerPage() {
                     Couldn&apos;t load your tank ({virtueTankForCard.error}). Building the plan fetches your profile again.
                   </VirtueNotice>
                 )}
-                {cardVirtueTank ? (
-                  <VirtueTankReadout tank={cardVirtueTank} />
+                {cardVirtueTankOverfull && (
+                  <VirtueNotice tone="warn">
+                    Your edits plus the newer backup&apos;s other eggs come to more than the tank holds. Lower an egg
+                    so the plan starts from a tank that fits.
+                  </VirtueNotice>
+                )}
+                {cardVirtueTank && cardVirtueTankEdited ? (
+                  <VirtueTankReadout
+                    tank={cardVirtueTankEdited}
+                    backup={cardVirtueTank}
+                    onEdit={effectiveVirtueStartTank === "current" ? handleVirtueTankEdit : undefined}
+                    onReset={() => setVirtueTankEdits(null)}
+                  />
                 ) : virtueTankForCard.status === "loading" ? (
                   <p className={styles.virtueOptHint}>Loading your tank from your latest backup…</p>
                 ) : virtueTankForCard.status === "pending" ? (
