@@ -44,6 +44,8 @@ export const CRAFT_GOAL_DEFAULT_COUNT = 400;
  *  GE-discount target, so it may be the count the player wants. */
 export const CRAFT_DISCOUNT_MAX_COUNT = 300;
 export const MAX_TARGET_ROWS = 10;
+/** Largest goal quantity, copies or crafts. */
+export const MAX_TARGET_QUANTITY = 9999;
 
 /** A craft-count goal still at a seeded default (or the older 300 seed) rather than a number the player typed. */
 export function isCraftGoalSeed(quantity: number): boolean {
@@ -68,7 +70,7 @@ export function targetTierNumber(itemKey: string, displayTierNumber?: number): n
 }
 
 export function normalizedTargetQuantity(rawValue: string): number {
-  return Math.max(1, Math.min(9999, Math.round(Number(rawValue) || 1)));
+  return Math.max(1, Math.min(MAX_TARGET_QUANTITY, Math.round(Number(rawValue) || 1)));
 }
 
 export function targetRowToPlannerTarget(row: PlannerTargetRow): PlannerTargetInput {
@@ -112,7 +114,7 @@ export function parseStoredTargetRows(raw: string | null, targetOptions: TargetO
       if (!availableTargets.has(itemId)) {
         continue;
       }
-      const storedQuantity = Math.max(1, Math.min(9999, Math.round(Number(record.quantity ?? record.quantityInput) || 1)));
+      const storedQuantity = Math.max(1, Math.min(MAX_TARGET_QUANTITY, Math.round(Number(record.quantity ?? record.quantityInput) || 1)));
       // Only artifacts take a craft-count goal. A saved goal on a stone or an
       // ingredient loads as copies, and a seeded count drops back to one copy
       // (as toggling the chip off does) rather than asking for hundreds.
@@ -210,7 +212,7 @@ export function normalizeTargetRowQuantity(rows: PlannerTargetRow[], rowId: stri
       return row;
     }
     const parsed = Number(row.quantityInput);
-    const quantity = Number.isFinite(parsed) ? Math.max(1, Math.min(9999, Math.round(parsed))) : 1;
+    const quantity = Number.isFinite(parsed) ? Math.max(1, Math.min(MAX_TARGET_QUANTITY, Math.round(parsed))) : 1;
     return { ...row, quantityInput: String(quantity) };
   });
 }
@@ -301,7 +303,7 @@ export function plannerRowsToKeepRows(rows: PlannerTargetRow[], inventory: Recor
       return row;
     }
     const owned = Math.max(0, Math.floor(Number(inventory[itemIdToCanonicalKey(row.itemId)]) || 0));
-    const total = Math.min(9999, normalizedTargetQuantity(row.quantityInput) + owned);
+    const total = Math.min(MAX_TARGET_QUANTITY, normalizedTargetQuantity(row.quantityInput) + owned);
     return { ...row, craftGoal: false, quantityInput: String(total) };
   });
 }

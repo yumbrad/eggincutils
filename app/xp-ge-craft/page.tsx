@@ -21,6 +21,7 @@ import {
 } from "../../lib/craft-reservations";
 import {
   buildTargetOptions,
+  MAX_TARGET_QUANTITY,
   MAX_TARGET_ROWS,
   newTargetRowId,
   normalizedTargetQuantity,
@@ -31,7 +32,7 @@ import {
   targetRowToPlannerTarget,
   type PlannerTargetRow,
 } from "../../lib/goal-rows";
-import { afxIdToTargetFamilyName } from "../../lib/item-utils";
+import { afxIdToTargetFamilyName, itemIdToCanonicalKey } from "../../lib/item-utils";
 import { recipes } from "../../lib/recipes";
 import {
   LOCAL_PREF_KEYS,
@@ -380,13 +381,41 @@ function goalPlanText(goal: CraftGoalReservation): string | null {
   return goal.ownedCopies > 0 ? `Keeps ${goal.ownedCopies.toLocaleString()}× ${label} you own` : null;
 }
 
+/**
+ * A copies goal is a total to end up with, not copies on top of what you own
+ * (the attainment planner's "×N" means N more), so spell out how the total splits.
+ */
+function goalCopiesBreakdownText(goal: CraftGoalReservation, owned: number, ownedFromSends: number): string | null {
+  if (goal.craftGoal || owned <= 0 || goal.quantity <= 0) {
+    return null;
+  }
+  const fromSends = ownedFromSends > 0 ? ` (incl. ${ownedFromSends.toLocaleString()} expected from pre-plan sends)` : "";
+  if (owned >= goal.quantity) {
+    const more = owned + goal.quantity;
+    const hint =
+      more <= MAX_TARGET_QUANTITY
+        ? ` Enter ${more.toLocaleString()} to end up with ${goal.quantity.toLocaleString()} more.`
+        : "";
+    return `You own ${owned.toLocaleString()}${fromSends}, so this is covered.${hint}`;
+  }
+  return `${goal.quantity.toLocaleString()} total = ${owned.toLocaleString()} owned${fromSends} + ${(
+    goal.quantity - owned
+  ).toLocaleString()} more`;
+}
+
 function GoalReservationLine({
   goal,
   blocked,
+  owned,
+  ownedFromSends,
 }: {
   goal: CraftGoalReservation | undefined;
   /** Max-craft limits stop the plan crafting it, so it holds everything it takes. */
   blocked: boolean;
+  /** Whole copies of the goal's artifact in the plan's inventory. */
+  owned: number;
+  /** How many of those are expected pre-plan send drops. */
+  ownedFromSends: number;
 }): JSX.Element | null {
   if (!goal || !goal.itemKey) {
     return null;
@@ -396,6 +425,7 @@ function GoalReservationLine({
   const holdsTitle = formatGoalItemList(holds, Number.MAX_SAFE_INTEGER);
   const planText = blocked ? null : goalPlanText(goal);
   const shortfall = goalShortfallText(goal);
+  const breakdown = goalCopiesBreakdownText(goal, owned, ownedFromSends);
   return (
     <div className={styles.goalReservation}>
       {shortfall ? (
@@ -408,6 +438,7 @@ function GoalReservationLine({
       ) : (
         <span className={styles.goalCovered}>Covered</span>
       )}
+      {breakdown && <span className={styles.goalKeeps}>{breakdown}</span>}
       {blocked && <span className={styles.goalShort}>Max-craft limits block it, so it holds its items</span>}
       {planText && <span className={styles.goalKeeps}>{planText}</span>}
       {holdsList && (
@@ -1962,6 +1993,15 @@ export default function XpGeCraftPage(): JSX.Element {
     setSendImportNote(notes.join(" · "));
   }
 
+  /** Whole copies a goal's artifact has in the plan inventory, and how many pre-plan sends added. */
+  function goalOwnedCopies(itemId: string): { owned: number; ownedFromSends: number } {
+    const itemKey = itemIdToCanonicalKey(itemId);
+    const quantity = Number(planSourceInventory?.[itemKey]) || 0;
+    const fromSends = Number(lastPrePlanResult?.addedInventory?.[itemKey]) || 0;
+    const owned = Math.max(0, Math.floor(quantity));
+    return { owned, ownedFromSends: Math.max(0, owned - Math.max(0, Math.floor(quantity - fromSends))) };
+  }
+
   function clearGoals(): void {
     updateGoalRows(() => []);
   }
@@ -2474,6 +2514,7 @@ export default function XpGeCraftPage(): JSX.Element {
                     <GoalReservationLine
                       goal={goalRowReservations?.goals[rowIndex]}
                       blocked={blockedGoalIndexes.has(goalRows.slice(0, rowIndex).filter((other) => other.itemId).length)}
+                      {...goalOwnedCopies(row.itemId)}
                     />
                   ) : null
                 }
