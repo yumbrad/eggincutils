@@ -95,12 +95,19 @@ type PrePlanSendRowResult = {
   noLootLaunches: number;
 };
 type ShipStars = { ship: string; unlocked: boolean; level: number; maxLevel: number };
+type InFlightResult = {
+  /** Ships in the air for this inventory source, counted or not. */
+  missionCount: number;
+  included: boolean;
+  addedInventory: Record<string, number>;
+};
 type InventoryResponse = {
   inventory?: Record<string, number>;
   craftCounts?: Record<string, number>;
   craftingXp?: number;
   shinyIngredientCount?: number;
   shipLevels?: ShipStars[];
+  inFlight?: InFlightResult;
   prePlanSends?: {
     addedInventory?: Record<string, number>;
     appliedLaunches?: number;
@@ -210,6 +217,7 @@ type OptimizePayload = {
   craftingXp: number;
   shinyIngredientCount: number;
   shipLevels: ShipStars[];
+  inFlight: InFlightResult | null;
   prePlanSends?: InventoryResponse["prePlanSends"];
 };
 
@@ -385,11 +393,11 @@ function goalPlanText(goal: CraftGoalReservation): string | null {
  * A copies goal is a total to end up with, not copies on top of what you own
  * (the attainment planner's "×N" means N more), so spell out how the total splits.
  */
-function goalCopiesBreakdownText(goal: CraftGoalReservation, owned: number, ownedFromSends: number): string | null {
+function goalCopiesBreakdownText(goal: CraftGoalReservation, owned: number, ownedExpected: number): string | null {
   if (goal.craftGoal || owned <= 0 || goal.quantity <= 0) {
     return null;
   }
-  const fromSends = ownedFromSends > 0 ? ` (incl. ${ownedFromSends.toLocaleString()} expected from pre-plan sends)` : "";
+  const fromSends = ownedExpected > 0 ? ` (incl. ${ownedExpected.toLocaleString()} expected mission drops)` : "";
   if (owned >= goal.quantity) {
     const more = owned + goal.quantity;
     const hint =
@@ -407,15 +415,15 @@ function GoalReservationLine({
   goal,
   blocked,
   owned,
-  ownedFromSends,
+  ownedExpected,
 }: {
   goal: CraftGoalReservation | undefined;
   /** Max-craft limits stop the plan crafting it, so it holds everything it takes. */
   blocked: boolean;
   /** Whole copies of the goal's artifact in the plan's inventory. */
   owned: number;
-  /** How many of those are expected pre-plan send drops. */
-  ownedFromSends: number;
+  /** How many of those are expected drops (ships in the air, pre-plan sends). */
+  ownedExpected: number;
 }): JSX.Element | null {
   if (!goal || !goal.itemKey) {
     return null;
@@ -425,7 +433,7 @@ function GoalReservationLine({
   const holdsTitle = formatGoalItemList(holds, Number.MAX_SAFE_INTEGER);
   const planText = blocked ? null : goalPlanText(goal);
   const shortfall = goalShortfallText(goal);
-  const breakdown = goalCopiesBreakdownText(goal, owned, ownedFromSends);
+  const breakdown = goalCopiesBreakdownText(goal, owned, ownedExpected);
   return (
     <div className={styles.goalReservation}>
       {shortfall ? (
@@ -460,6 +468,7 @@ async function getOptimalCrafts(
   inventorySource: InventorySource,
   craftLimits: CraftLimits,
   prePlanSends: PrePlanSendRow[],
+  includeInFlight: boolean,
   goals: CraftReservationGoal[]
 ): Promise<OptimizePayload> {
   const body = {
@@ -470,6 +479,7 @@ async function getOptimalCrafts(
     includeInventoryEpic: includeShiny.epic ? "true" : "false",
     includeInventoryLegendary: includeShiny.legendary ? "true" : "false",
     inventorySource,
+    includeInFlight: includeInFlight ? "true" : "false",
     // Unfiltered, so the per-row results line up with the rows on screen.
     prePlanSends: prePlanSends.map((send) => ({
       ship: send.ship,
@@ -507,6 +517,7 @@ async function getOptimalCrafts(
     craftingXp,
     shinyIngredientCount: Math.max(0, Math.floor(data.shinyIngredientCount || 0)),
     shipLevels: data.shipLevels || [],
+    inFlight: data.inFlight || null,
     prePlanSends: data.prePlanSends,
   };
 }
@@ -1518,6 +1529,9 @@ export default function XpGeCraftPage(): JSX.Element {
   const [prePlanOpen, setPrePlanOpen] = useState<boolean>(false);
   const [lastPrePlanResult, setLastPrePlanResult] = useState<InventoryResponse["prePlanSends"] | null>(null);
   const [lastSolvedPrePlanSignature, setLastSolvedPrePlanSignature] = useState<string | null>(null);
+  // Count expected loot from ships in the air (off: plan with what's in hand).
+  const [includeInFlight, setIncludeInFlight] = useState<boolean>(false);
+  const [lastInFlight, setLastInFlight] = useState<InFlightResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [prefsLoaded, setPrefsLoaded] = useState<boolean>(false);
@@ -1584,6 +1598,7 @@ export default function XpGeCraftPage(): JSX.Element {
     setAppliedCraftLimits(savedCraftLimits);
     setDraftCraftLimitInputs(craftLimitsToInputs(savedCraftLimits));
     setPrePlanSends(parseStoredPrePlanSends(readFirstStoredString([LOCAL_PREF_KEYS.craftPrePlanSends])));
+    setIncludeInFlight(readStoredBoolean([LOCAL_PREF_KEYS.craftIncludeInFlight]) ?? false);
     const savedGoalRows = parseStoredTargetRows(readFirstStoredString([LOCAL_PREF_KEYS.craftGoalRows]), GOAL_TARGET_OPTIONS) || [];
     setGoalRows(savedGoalRows);
     setAppliedGoalsKey(JSON.stringify(goalRowsToReservationGoals(savedGoalRows)));
@@ -1665,6 +1680,13 @@ export default function XpGeCraftPage(): JSX.Element {
     }
     writeStoredString([LOCAL_PREF_KEYS.craftPrePlanSends], JSON.stringify(prePlanSends));
   }, [prePlanSends, prefsLoaded]);
+
+  useEffect(() => {
+    if (!prefsLoaded) {
+      return;
+    }
+    writeStoredBoolean([LOCAL_PREF_KEYS.craftIncludeInFlight], includeInFlight);
+  }, [includeInFlight, prefsLoaded]);
 
   useEffect(() => {
     if (!prefsLoaded) {
@@ -1788,6 +1810,7 @@ export default function XpGeCraftPage(): JSX.Element {
     setPlanSourceCraftingXp(null);
     setPlanShinyIngredientCount(0);
     setLastPrePlanResult(null);
+    setLastInFlight(null);
     setIsLoading(true);
     try {
       const nextLimits = normalizeCraftLimitInputs(draftCraftLimitInputs);
@@ -1806,6 +1829,7 @@ export default function XpGeCraftPage(): JSX.Element {
         inventorySource,
         nextLimits,
         prePlanSends,
+        includeInFlight,
         nextGoals
       );
       lastSolveRef.current = {
@@ -1824,6 +1848,7 @@ export default function XpGeCraftPage(): JSX.Element {
       setPlanSourceCraftingXp(result.craftingXp);
       setLastPrePlanResult(result.prePlanSends || null);
       setLastSolvedPrePlanSignature(prePlanSendsSignature(prePlanSends));
+      setLastInFlight(result.inFlight);
       setShipStars(result.shipLevels.length > 0 ? result.shipLevels : null);
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : "Unable to load inventory.";
@@ -1869,8 +1894,11 @@ export default function XpGeCraftPage(): JSX.Element {
   const draftPrePlanShipDuration = `${draftPrePlanShip}|${draftPrePlanDuration}`;
   const currentPrePlanSignature = prePlanSendsSignature(prePlanSends);
   const prePlanAssumptionsStale = Boolean(
-    solution && lastSolvedPrePlanSignature != null && currentPrePlanSignature !== lastSolvedPrePlanSignature
+    solution &&
+      ((lastSolvedPrePlanSignature != null && currentPrePlanSignature !== lastSolvedPrePlanSignature) ||
+        (lastInFlight != null && lastInFlight.included !== includeInFlight))
   );
+  const inFlightCount = lastInFlight?.missionCount ?? null;
   // Row results only describe the rows they were calculated for.
   const prePlanRowResults =
     lastPrePlanResult && lastSolvedPrePlanSignature === currentPrePlanSignature ? lastPrePlanResult.rows || null : null;
@@ -1985,7 +2013,9 @@ export default function XpGeCraftPage(): JSX.Element {
       notes.push(`${leftOutLaunches.toLocaleString()} launches left out (${MAX_PRE_PLAN_SEND_ROWS} rows max)`);
     }
     if (plan.inAirLaunches > 0) {
-      notes.push(`${plan.inAirLaunches.toLocaleString()} in-air launches skipped`);
+      // The planner counted these ships' loot, so the XP plan should too; their stars are already in.
+      setIncludeInFlight(true);
+      notes.push(`${plan.inAirLaunches.toLocaleString()} ships in the air counted as expected loot, not sends`);
     }
     if (plan.eid && eid.trim() && plan.eid !== eid.trim()) {
       notes.push("the AAP plan is for a different EID");
@@ -1993,13 +2023,14 @@ export default function XpGeCraftPage(): JSX.Element {
     setSendImportNote(notes.join(" · "));
   }
 
-  /** Whole copies a goal's artifact has in the plan inventory, and how many pre-plan sends added. */
-  function goalOwnedCopies(itemId: string): { owned: number; ownedFromSends: number } {
+  /** Whole copies a goal's artifact has in the plan inventory, and how many are expected mission drops. */
+  function goalOwnedCopies(itemId: string): { owned: number; ownedExpected: number } {
     const itemKey = itemIdToCanonicalKey(itemId);
     const quantity = Number(planSourceInventory?.[itemKey]) || 0;
-    const fromSends = Number(lastPrePlanResult?.addedInventory?.[itemKey]) || 0;
+    const expected =
+      (Number(lastPrePlanResult?.addedInventory?.[itemKey]) || 0) + (Number(lastInFlight?.addedInventory?.[itemKey]) || 0);
     const owned = Math.max(0, Math.floor(quantity));
-    return { owned, ownedFromSends: Math.max(0, owned - Math.max(0, Math.floor(quantity - fromSends))) };
+    return { owned, ownedExpected: Math.max(0, owned - Math.max(0, Math.floor(quantity - expected))) };
   }
 
   function clearGoals(): void {
@@ -2333,6 +2364,10 @@ export default function XpGeCraftPage(): JSX.Element {
               </span>
               <span className={styles.prePlanSummaryMeta}>
                 {prePlanTotalLaunches > 0 ? `${prePlanTotalLaunches.toLocaleString()} assumed sends` : "No assumed sends"}
+                {includeInFlight &&
+                  (inFlightCount != null && !prePlanAssumptionsStale
+                    ? ` · ${inFlightCount.toLocaleString()} ${inFlightCount === 1 ? "ship" : "ships"} in the air counted`
+                    : " · counting ships in the air")}
                 {prePlanAssumptionsStale ? (
                   <span className={styles.prePlanStaleText}>
                     {" · "}
@@ -2415,6 +2450,24 @@ export default function XpGeCraftPage(): JSX.Element {
                   Add
                 </button>
               </div>
+              <label
+                className={styles.inputCheckbox}
+                title="Add the expected loot from ships already in the air to the inventory the plan crafts from, as the Artifact Attainment Planner does. Off plans with only what's in hand."
+              >
+                <input
+                  type="checkbox"
+                  checked={includeInFlight}
+                  onChange={(event) => setIncludeInFlight(event.target.checked)}
+                />
+                Count ships in the air (expected loot)
+                {inFlightCount != null && (
+                  <span className={styles.prePlanMeta}>
+                    {inFlightCount === 0
+                      ? "none in the air"
+                      : `${inFlightCount.toLocaleString()} in the air`}
+                  </span>
+                )}
+              </label>
               <div className={styles.prePlanMeta}>
                 Ships start at your current stars and level up as the sends run, top row first.
                 {prePlanSends.length > 0 && !prePlanRowResults && " Calculate to see each row's stars."}

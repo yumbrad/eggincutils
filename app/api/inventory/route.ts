@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 
 import { formatZodIssues, prePlanSendsSchema, profileQuerySchema } from "../../../lib/api-schemas";
+import { projectInFlightMissions } from "../../../lib/in-flight";
 import { applyPrePlanSendsToProfile } from "../../../lib/preplan-sends";
 import { getPlayerProfile } from "../../../lib/profile";
 
@@ -14,6 +15,7 @@ const QUERY_FIELDS = [
   "includeInventoryRare",
   "includeInventoryEpic",
   "includeInventoryLegendary",
+  "includeInFlight",
 ] as const;
 
 type InventoryQuery = Partial<Record<(typeof QUERY_FIELDS)[number], string>>;
@@ -93,6 +95,20 @@ async function inventoryResponse(query: InventoryQuery, prePlanSends: unknown): 
       includeStoneFragments: parsedQuery.data.includeInventoryFragments,
     });
     const shinyIngredientCount = profile.shinyIngredientCount || 0;
+    // Ships in the air, counted only on request: their loot isn't in hand yet.
+    // Their stars are in the profile already either way.
+    const inFlight = await projectInFlightMissions(profile.inFlightMissions || [], {
+      includeRarities,
+      includeStoneFragments: parsedQuery.data.includeInventoryFragments,
+    });
+    const includeInFlight = query.includeInFlight === "true";
+    if (includeInFlight) {
+      const inventory = { ...profile.inventory };
+      for (const [itemKey, quantity] of Object.entries(inFlight.yields)) {
+        inventory[itemKey] = (inventory[itemKey] || 0) + quantity;
+      }
+      profile = { ...profile, inventory };
+    }
     // Stars before any pre-plan sends, for the send picker.
     const shipLevels = profile.shipLevels.map((info) => ({
       ship: info.ship,
@@ -112,6 +128,11 @@ async function inventoryResponse(query: InventoryQuery, prePlanSends: unknown): 
         craftingXp: profile.craftingXp,
         shinyIngredientCount,
         shipLevels,
+        inFlight: {
+          missionCount: inFlight.missionCount,
+          included: includeInFlight,
+          addedInventory: includeInFlight ? inFlight.yields : {},
+        },
         prePlanSends: {
           addedInventory: prePlanResult.addedInventory,
           appliedLaunches: prePlanResult.appliedLaunches,
