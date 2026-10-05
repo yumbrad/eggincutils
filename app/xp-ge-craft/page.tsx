@@ -26,6 +26,7 @@ import {
   newTargetRowId,
   normalizedTargetQuantity,
   parseStoredTargetRows,
+  inHandInventory,
   plannerRowsToKeepRows,
   readPlannerSavedTargetRows,
   serializeTargetRows,
@@ -100,6 +101,7 @@ type InFlightResult = {
   missionCount: number;
   included: boolean;
   addedInventory: Record<string, number>;
+  rows: Array<{ ship: string; durationType: PrePlanDurationType; level: number; targetAfxId: number; launches: number }>;
 };
 type InventoryResponse = {
   inventory?: Record<string, number>;
@@ -601,20 +603,29 @@ function prePlanSendsSignature(sends: PrePlanSendRow[]): string {
   );
 }
 
-function formatPrePlanAdditionsTooltip(addedInventory: Record<string, number> | undefined): string {
-  if (!addedInventory) {
-    return "";
-  }
-  const rows = Object.entries(addedInventory)
+function positiveAdditions(addedInventory: Record<string, number> | undefined): Array<[string, number]> {
+  return Object.entries(addedInventory || {})
     .filter(([, quantity]) => quantity > 0)
     .sort((a, b) => b[1] - a[1] || getArtifactDisplayLabel(a[0]).localeCompare(getArtifactDisplayLabel(b[0])));
-  if (rows.length === 0) {
-    return "";
+}
+
+/** Expected drops the plan inventory includes, by where they come from. */
+function formatExpectedAdditionsTooltip(sections: Array<{ title: string; added: Record<string, number> | undefined }>): string {
+  const lines: string[] = [];
+  for (const section of sections) {
+    const rows = positiveAdditions(section.added);
+    if (rows.length === 0) {
+      continue;
+    }
+    if (lines.length > 0) {
+      lines.push("");
+    }
+    lines.push(
+      section.title,
+      ...rows.map(([itemKey, quantity]) => `${getArtifactDisplayLabel(itemKey)}: ${quantity.toFixed(quantity >= 10 ? 1 : 3)}`)
+    );
   }
-  return [
-    "Expected inventory additions:",
-    ...rows.map(([itemKey, quantity]) => `${getArtifactDisplayLabel(itemKey)}: ${quantity.toFixed(quantity >= 10 ? 1 : 3)}`),
-  ].join("\n");
+  return lines.join("\n");
 }
 
 function parseStoredPrePlanSends(raw: string | null): PrePlanSendRow[] {
@@ -1907,10 +1918,19 @@ export default function XpGeCraftPage(): JSX.Element {
   const savedPlannerPlanLaunches = savedPlannerPlan
     ? savedPlannerPlan.sends.reduce((sum, send) => sum + send.launches, 0)
     : 0;
-  const prePlanAddedItemCount = lastPrePlanResult?.addedInventory
-    ? Object.values(lastPrePlanResult.addedInventory).filter((quantity) => quantity > 0).length
-    : 0;
-  const prePlanAdditionsTooltip = formatPrePlanAdditionsTooltip(lastPrePlanResult?.addedInventory);
+  // Expected mission drops the plan inventory includes (both come from the same calculate).
+  const planExpectedDrops = [lastPrePlanResult?.addedInventory, lastInFlight?.included ? lastInFlight.addedInventory : null];
+  // Ships in the air the last calculate found; listed while the box is ticked.
+  const inAirRows = includeInFlight ? lastInFlight?.rows ?? [] : [];
+  const inFlightAdded = lastInFlight?.included ? lastInFlight.addedInventory : undefined;
+  const prePlanAddedItemCount = new Set([
+    ...positiveAdditions(lastPrePlanResult?.addedInventory).map(([itemKey]) => itemKey),
+    ...positiveAdditions(inFlightAdded).map(([itemKey]) => itemKey),
+  ]).size;
+  const prePlanAdditionsTooltip = formatExpectedAdditionsTooltip([
+    { title: "Expected from ships in the air:", added: inFlightAdded },
+    { title: "Expected from pre-plan sends:", added: lastPrePlanResult?.addedInventory },
+  ]);
 
   const shipDurationOptions = useMemo(
     () =>
@@ -2027,10 +2047,9 @@ export default function XpGeCraftPage(): JSX.Element {
   function goalOwnedCopies(itemId: string): { owned: number; ownedExpected: number } {
     const itemKey = itemIdToCanonicalKey(itemId);
     const quantity = Number(planSourceInventory?.[itemKey]) || 0;
-    const expected =
-      (Number(lastPrePlanResult?.addedInventory?.[itemKey]) || 0) + (Number(lastInFlight?.addedInventory?.[itemKey]) || 0);
+    const inHand = inHandInventory({ [itemKey]: quantity }, planExpectedDrops)[itemKey] || 0;
     const owned = Math.max(0, Math.floor(quantity));
-    return { owned, ownedExpected: Math.max(0, owned - Math.max(0, Math.floor(quantity - expected))) };
+    return { owned, ownedExpected: Math.max(0, owned - Math.floor(inHand)) };
   }
 
   function clearGoals(): void {
@@ -2223,8 +2242,8 @@ export default function XpGeCraftPage(): JSX.Element {
       setGoalImportNote(null);
       return;
     }
-    // Planner copies goals mean "N more"; here a goal means having N in total.
-    const saved = plannerRowsToKeepRows(plannerRows, planSourceInventory);
+    // Planner copies goals mean "N more" than you have in hand; here a goal means having N in total.
+    const saved = plannerRowsToKeepRows(plannerRows, inHandInventory(planSourceInventory, planExpectedDrops));
     const sameGoal = (left: PlannerTargetRow, right: PlannerTargetRow) =>
       left.itemId === right.itemId &&
       left.craftGoal === right.craftGoal &&
@@ -2502,8 +2521,18 @@ export default function XpGeCraftPage(): JSX.Element {
                   </span>
                 )}
               </div>
-              {prePlanSends.length > 0 && (
+              {(prePlanSends.length > 0 || inAirRows.length > 0) && (
                 <ol className={styles.prePlanList} aria-label="Pre-plan sends">
+                  {inAirRows.map((row, index) => (
+                    <li
+                      key={`air-${index}-${row.ship}-${row.durationType}-${row.targetAfxId}`}
+                      className={`${styles.prePlanRow} ${styles.prePlanRowInAir}`}
+                      title="Already launched: its loot counts while the box is ticked, and its stars are already yours."
+                    >
+                      <span className={styles.prePlanRowLabel}>{prePlanSendLabel({ ...row, id: "" })}</span>
+                      <span className={styles.prePlanRowAirTag}>in the air</span>
+                    </li>
+                  ))}
                   {prePlanSends.map((send, index) => {
                     const result = prePlanRowResults?.[index] ?? null;
                     const outcome = result ? prePlanRowOutcome(result) : null;
@@ -2578,7 +2607,7 @@ export default function XpGeCraftPage(): JSX.Element {
                   className={styles.goalsImportButton}
                   onClick={importPlannerGoals}
                   disabled={savedPlannerGoalCount === 0 || !planSourceInventory}
-                  title="Copy the goals saved in the Artifact Attainment Planner. Its copies goals mean N more, so they arrive as what you own + N."
+                  title="Copy the goals saved in the Artifact Attainment Planner. Its copies goals mean N more, so they arrive as what you have in hand + N; expected drops from sends and ships in the air count toward them, not on top."
                 >
                   Import my AAP goals
                 </button>

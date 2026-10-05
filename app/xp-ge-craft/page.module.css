@@ -223,6 +223,23 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Ships already launched: listed for context, not numbered or removable. */
+.prePlanRowInAir {
+  border-style: dashed;
+  background: transparent;
+  counter-increment: none;
+}
+
+.prePlanRowInAir .prePlanRowLabel::before {
+  content: "";
+}
+
+.prePlanRowAirTag {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
 .prePlanRowStars {
   color: var(--navy);
   font-weight: 650;

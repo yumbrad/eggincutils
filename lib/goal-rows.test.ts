@@ -8,6 +8,7 @@ import {
   MAX_TARGET_ROWS,
   normalizeTargetRowQuantity,
   parseStoredTargetRows,
+  inHandInventory,
   plannerRowsToKeepRows,
   plannerSavedTargetRows,
   removeTargetRow,
@@ -159,5 +160,17 @@ describe("plannerRowsToKeepRows", () => {
     expect(
       plannerRowsToKeepRows([row("a", "gusset-3", "400", true), row("b", "gold-meteorite-1", "25")], inventory)
     ).toEqual([row("a", "gusset-3", "400", true), row("b", "gold-meteorite-1", "9999")]);
+  });
+});
+
+describe("inHandInventory", () => {
+  it("takes expected drops back out, so imported goals don't count them twice", () => {
+    // 111 in hand, 26.4 expected from pre-plan sends, 5 from ships in the air.
+    const inventory = { interstellar_compass_4: 142.4, book_of_basan_4: 3 };
+    const inHand = inHandInventory(inventory, [{ interstellar_compass_4: 26.4 }, { interstellar_compass_4: 5 }, null]);
+    expect(inHand).toEqual({ interstellar_compass_4: 111, book_of_basan_4: 3 });
+    expect(plannerRowsToKeepRows([row("a", "interstellar-compass-4", "35")], inHand)).toEqual([
+      row("a", "interstellar-compass-4", "146"),
+    ]);
   });
 });

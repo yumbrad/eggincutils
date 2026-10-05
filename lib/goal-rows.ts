@@ -292,10 +292,32 @@ export function readPlannerSavedTargetRows(source: "main" | "virtue", targetOpti
 }
 
 /**
+ * The inventory without expected mission drops (pre-plan sends, ships in the
+ * air): what is in hand. Values snap to a millionth, so 142.4 - 31.4 floors
+ * to 111 rather than 110.
+ */
+export function inHandInventory(
+  inventory: Record<string, number>,
+  expectedDrops: Array<Record<string, number> | null | undefined>
+): Record<string, number> {
+  const inHand: Record<string, number> = {};
+  for (const [itemKey, quantity] of Object.entries(inventory)) {
+    let left = Number(quantity) || 0;
+    for (const drops of expectedDrops) {
+      left -= Number(drops?.[itemKey]) || 0;
+    }
+    inHand[itemKey] = Math.max(0, Math.round(left * 1e6) / 1e6);
+  }
+  return inHand;
+}
+
+/**
  * Attainment-planner goals as XP-planner keep goals. A planner copies goal
- * "×N" means N more copies; a keep goal means having N in total, so it becomes
- * owned + N (whole copies in `inventory`, the inventory the keep goals reserve
- * from). Craft-count goals already mean the same on both pages.
+ * "×N" means N more copies than you have in hand; a keep goal means having N
+ * in total, so it becomes in hand + N. Pass `inventory` without expected
+ * mission drops (inHandInventory): the drops are how the planner meant to get
+ * those N, so counting them in "in hand" too would ask for them twice.
+ * Craft-count goals already mean the same on both pages.
  */
 export function plannerRowsToKeepRows(rows: PlannerTargetRow[], inventory: Record<string, number>): PlannerTargetRow[] {
   return rows.map((row) => {

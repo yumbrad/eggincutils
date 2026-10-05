@@ -132,6 +132,14 @@ async function inventoryResponse(query: InventoryQuery, prePlanSends: unknown): 
           missionCount: inFlight.missionCount,
           included: includeInFlight,
           addedInventory: includeInFlight ? inFlight.yields : {},
+          // Listed counted or not, so the page can show which ships these are.
+          rows: inFlight.rows.map((row) => ({
+            ship: row.ship,
+            durationType: row.durationType,
+            level: row.level,
+            targetAfxId: row.targetAfxId,
+            launches: row.launches,
+          })),
         },
         prePlanSends: {
           addedInventory: prePlanResult.addedInventory,
