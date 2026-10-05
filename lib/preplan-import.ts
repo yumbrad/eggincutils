@@ -1,4 +1,4 @@
-import { LOCAL_PREF_KEYS, readFirstStoredString } from "./local-preferences";
+import { LOCAL_PREF_KEYS, readFirstStoredString, writeStoredString } from "./local-preferences";
 
 /**
  * Turning the attainment planner's saved plan into XP-planner pre-plan sends.
@@ -172,18 +172,107 @@ export function plannerPlanToPrePlanSends(plan: PlannerPlanLaunches): PlannerPla
   return { sends, inAirLaunches, droppedLaunches };
 }
 
+type PlannerInventorySource = "main" | "virtue";
+
 export type SavedPlannerPlan = PlannerPlanSends & {
   savedAt: string;
   eid: string;
-  inventorySource: "main" | "virtue" | null;
 };
 
-/** The sends in the attainment planner's last saved plan, or null when there's none. */
-export function readSavedPlannerPlan(): SavedPlannerPlan | null {
-  return savedPlannerPlanFromSession(readFirstStoredString([LOCAL_PREF_KEYS.plannerSession]));
+/** What the attainment planner saves per inventory source for the import: just the launches. */
+type StoredPlannerPlanLaunches = {
+  savedAt: string;
+  eid: string;
+  missions: PlannerPlanMission[];
+  prepLaunches: PlannerPlanPrepLaunch[];
+};
+
+const PLAN_LAUNCHES_KEYS: Record<PlannerInventorySource, string> = {
+  main: LOCAL_PREF_KEYS.plannerPlanLaunchesMain,
+  virtue: LOCAL_PREF_KEYS.plannerPlanLaunchesVirtue,
+};
+
+/**
+ * Save a plan's launches under its inventory source, so a Virtue plan doesn't
+ * replace the main-farm plan the XP planner imports (the planner's own session
+ * only keeps the latest plan).
+ */
+export function writeSavedPlannerPlanLaunches(
+  source: PlannerInventorySource,
+  saved: { savedAt: string; eid: string; plan: PlannerPlanLaunches }
+): void {
+  const stored: StoredPlannerPlanLaunches = {
+    savedAt: saved.savedAt,
+    eid: saved.eid,
+    missions: saved.plan.missions.map((mission) => ({
+      ship: mission.ship,
+      durationType: mission.durationType,
+      level: mission.level,
+      targetAfxId: mission.targetAfxId,
+      launches: mission.launches,
+      ...(mission.inAir ? { inAir: true } : {}),
+    })),
+    prepLaunches: saved.plan.progression.prepLaunches.map((prep) => ({
+      ship: prep.ship,
+      durationType: prep.durationType,
+      launches: prep.launches,
+    })),
+  };
+  writeStoredString([PLAN_LAUNCHES_KEYS[source]], JSON.stringify(stored));
 }
 
-export function savedPlannerPlanFromSession(raw: string | null): SavedPlannerPlan | null {
+/** The sends in the attainment planner's last plan for this inventory source, or null when there's none. */
+export function readSavedPlannerPlan(source: PlannerInventorySource): SavedPlannerPlan | null {
+  return (
+    savedPlannerPlanFromStorage(readFirstStoredString([PLAN_LAUNCHES_KEYS[source]])) ??
+    savedPlannerPlanFromSession(readFirstStoredString([LOCAL_PREF_KEYS.plannerSession]), source)
+  );
+}
+
+function isLaunchRow(row: unknown): boolean {
+  return (
+    Boolean(row) &&
+    typeof row === "object" &&
+    typeof (row as { ship?: unknown }).ship === "string" &&
+    typeof (row as { durationType?: unknown }).durationType === "string"
+  );
+}
+
+function savedPlannerPlan(savedAt: unknown, eid: unknown, missions: unknown, prepLaunches: unknown): SavedPlannerPlan | null {
+  if (!Array.isArray(missions)) {
+    return null;
+  }
+  const converted = plannerPlanToPrePlanSends({
+    missions: missions.filter(isLaunchRow) as PlannerPlanMission[],
+    progression: {
+      prepLaunches: (Array.isArray(prepLaunches) ? prepLaunches.filter(isLaunchRow) : []) as PlannerPlanPrepLaunch[],
+    },
+  });
+  return {
+    ...converted,
+    savedAt: typeof savedAt === "string" ? savedAt : "",
+    eid: typeof eid === "string" ? eid : "",
+  };
+}
+
+export function savedPlannerPlanFromStorage(raw: string | null): SavedPlannerPlan | null {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const stored = JSON.parse(raw) as Partial<Record<keyof StoredPlannerPlanLaunches, unknown>>;
+    return savedPlannerPlan(stored.savedAt, stored.eid, stored.missions, stored.prepLaunches);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The planner's own session, for plans saved before the per-source copies
+ * existed. It holds only the latest plan, so it counts only when that plan
+ * was for this source.
+ */
+export function savedPlannerPlanFromSession(raw: string | null, source: PlannerInventorySource): SavedPlannerPlan | null {
   if (!raw) {
     return null;
   }
@@ -193,27 +282,11 @@ export function savedPlannerPlanFromSession(raw: string | null): SavedPlannerPla
       response?: { plan?: { missions?: unknown; progression?: { prepLaunches?: unknown } } };
       lastSolveRequest?: { eid?: unknown; sourceFilters?: { inventorySource?: unknown } };
     };
-    const plan = session.response?.plan;
-    if (!plan || !Array.isArray(plan.missions)) {
+    if ((session.lastSolveRequest?.sourceFilters?.inventorySource ?? "main") !== source) {
       return null;
     }
-    const prepLaunches = Array.isArray(plan.progression?.prepLaunches) ? plan.progression.prepLaunches : [];
-    const isLaunchRow = (row: unknown): boolean =>
-      Boolean(row) &&
-      typeof row === "object" &&
-      typeof (row as { ship?: unknown }).ship === "string" &&
-      typeof (row as { durationType?: unknown }).durationType === "string";
-    const converted = plannerPlanToPrePlanSends({
-      missions: (plan.missions as unknown[]).filter(isLaunchRow) as PlannerPlanMission[],
-      progression: { prepLaunches: (prepLaunches as unknown[]).filter(isLaunchRow) as PlannerPlanPrepLaunch[] },
-    });
-    const source = session.lastSolveRequest?.sourceFilters?.inventorySource;
-    return {
-      ...converted,
-      savedAt: typeof session.savedAt === "string" ? session.savedAt : "",
-      eid: typeof session.lastSolveRequest?.eid === "string" ? session.lastSolveRequest.eid : "",
-      inventorySource: source === "main" || source === "virtue" ? source : null,
-    };
+    const plan = session.response?.plan;
+    return savedPlannerPlan(session.savedAt, session.lastSolveRequest?.eid, plan?.missions, plan?.progression?.prepLaunches);
   } catch {
     return null;
   }

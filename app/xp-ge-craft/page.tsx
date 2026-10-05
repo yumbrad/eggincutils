@@ -1759,8 +1759,10 @@ export default function XpGeCraftPage(): JSX.Element {
     if (!prePlanOpen) {
       return;
     }
-    setSavedPlannerPlan(readSavedPlannerPlan());
-  }, [prePlanOpen]);
+    // Sends apply on the next calculate, so they follow the inventory dropdown.
+    setSavedPlannerPlan(readSavedPlannerPlan(inventorySource));
+    setSendImportNote(null);
+  }, [prePlanOpen, inventorySource]);
   useEffect(() => {
     if (!goalsOpen) {
       return;
@@ -1872,6 +1874,7 @@ export default function XpGeCraftPage(): JSX.Element {
   // Row results only describe the rows they were calculated for.
   const prePlanRowResults =
     lastPrePlanResult && lastSolvedPrePlanSignature === currentPrePlanSignature ? lastPrePlanResult.rows || null : null;
+  const inventorySourceLabel = inventorySource === "virtue" ? "Virtue" : "main";
   const prePlanTotalLaunches = prePlanSends.reduce((sum, send) => sum + send.launches, 0);
   const savedPlannerPlanLaunches = savedPlannerPlan
     ? savedPlannerPlan.sends.reduce((sum, send) => sum + send.launches, 0)
@@ -1955,7 +1958,7 @@ export default function XpGeCraftPage(): JSX.Element {
   }
 
   function importPlannerSends(): void {
-    const plan = readSavedPlannerPlan();
+    const plan = readSavedPlannerPlan(inventorySource);
     setSavedPlannerPlan(plan);
     if (!plan || plan.sends.length === 0) {
       setSendImportNote(null);
@@ -1983,9 +1986,6 @@ export default function XpGeCraftPage(): JSX.Element {
     }
     if (plan.inAirLaunches > 0) {
       notes.push(`${plan.inAirLaunches.toLocaleString()} in-air launches skipped`);
-    }
-    if (plan.inventorySource && plan.inventorySource !== inventorySource) {
-      notes.push(`the AAP plan used the ${plan.inventorySource === "virtue" ? "Virtue" : "main"} inventory`);
     }
     if (plan.eid && eid.trim() && plan.eid !== eid.trim()) {
       notes.push("the AAP plan is for a different EID");
@@ -2425,7 +2425,7 @@ export default function XpGeCraftPage(): JSX.Element {
                   className={styles.goalsImportButton}
                   onClick={importPlannerSends}
                   disabled={!savedPlannerPlan || savedPlannerPlan.sends.length === 0}
-                  title="Add the launches from your last Artifact Attainment Planner plan, prep launches first. Launches already in the air are left out."
+                  title={`Add the launches from your last Artifact Attainment Planner plan for the ${inventorySourceLabel} inventory, prep launches first. Launches already in the air are left out.`}
                 >
                   Import my AAP plan sends
                 </button>
@@ -2440,10 +2440,10 @@ export default function XpGeCraftPage(): JSX.Element {
                 {sendImportNote ? (
                   <span className={styles.prePlanMeta}>{sendImportNote}</span>
                 ) : !savedPlannerPlan || savedPlannerPlan.sends.length === 0 ? (
-                  <span className={styles.prePlanMeta}>No AAP plan saved yet</span>
+                  <span className={styles.prePlanMeta}>No AAP plan saved for the {inventorySourceLabel} inventory yet</span>
                 ) : (
                   <span className={styles.prePlanMeta}>
-                    AAP plan
+                    {inventorySourceLabel} AAP plan
                     {savedPlannerPlan.savedAt ? ` from ${new Date(savedPlannerPlan.savedAt).toLocaleString()}` : ""}:{" "}
                     {savedPlannerPlanLaunches.toLocaleString()} launches
                   </span>

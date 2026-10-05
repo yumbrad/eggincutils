@@ -5,6 +5,7 @@ import {
   PRE_PLAN_UNTARGETED_TARGET_AFX_ID,
   plannerPlanToPrePlanSends,
   savedPlannerPlanFromSession,
+  savedPlannerPlanFromStorage,
   SHIP_PROGRESSION_ORDER,
 } from "./preplan-import";
 import { getShipOrder } from "./ship-data";
@@ -68,30 +69,49 @@ describe("plannerPlanToPrePlanSends", () => {
   });
 });
 
-describe("savedPlannerPlanFromSession", () => {
-  it("reads the plan, source and EID from a saved session", () => {
-    const session = {
-      schemaVersion: 1,
-      savedAt: "2026-10-04T12:00:00.000Z",
-      response: {
-        plan: {
-          missions: [mission("HENERPRISE", "EPIC", 6, 3, 2)],
-          progression: { prepLaunches: [] },
-        },
+describe("saved planner plans", () => {
+  const virtueSession = {
+    schemaVersion: 1,
+    savedAt: "2026-10-04T12:00:00.000Z",
+    response: {
+      plan: {
+        missions: [mission("HENERPRISE", "EPIC", 6, 3, 2)],
+        progression: { prepLaunches: [] },
       },
-      lastSolveRequest: { eid: "EI123", sourceFilters: { inventorySource: "virtue" } },
-    };
-    expect(savedPlannerPlanFromSession(JSON.stringify(session))).toMatchObject({
-      savedAt: "2026-10-04T12:00:00.000Z",
+    },
+    lastSolveRequest: { eid: "EI123", sourceFilters: { inventorySource: "virtue" } },
+  };
+
+  it("reads a per-source copy of the plan launches", () => {
+    const stored = {
+      savedAt: "2026-10-05T09:00:00.000Z",
       eid: "EI123",
-      inventorySource: "virtue",
-      sends: [{ ship: "HENERPRISE", durationType: "EPIC", targetAfxId: 3, launches: 2 }],
+      missions: [mission("ATREGGIES", "LONG", 3, 9, 5)],
+      prepLaunches: [{ ship: "VOYEGGER", durationType: "SHORT", launches: 2 }],
+    };
+    expect(savedPlannerPlanFromStorage(JSON.stringify(stored))).toMatchObject({
+      savedAt: "2026-10-05T09:00:00.000Z",
+      eid: "EI123",
+      sends: [
+        { ship: "VOYEGGER", durationType: "SHORT", targetAfxId: PRE_PLAN_UNTARGETED_TARGET_AFX_ID, launches: 2 },
+        { ship: "ATREGGIES", durationType: "LONG", targetAfxId: 9, launches: 5 },
+      ],
     });
   });
 
-  it("returns null for missing or malformed sessions", () => {
-    expect(savedPlannerPlanFromSession(null)).toBeNull();
-    expect(savedPlannerPlanFromSession("{not json")).toBeNull();
-    expect(savedPlannerPlanFromSession(JSON.stringify({ response: {} }))).toBeNull();
+  it("only takes the planner's session plan for the source it was made for", () => {
+    const raw = JSON.stringify(virtueSession);
+    expect(savedPlannerPlanFromSession(raw, "virtue")).toMatchObject({
+      eid: "EI123",
+      sends: [{ ship: "HENERPRISE", durationType: "EPIC", targetAfxId: 3, launches: 2 }],
+    });
+    expect(savedPlannerPlanFromSession(raw, "main")).toBeNull();
+  });
+
+  it("returns null for missing or malformed saves", () => {
+    expect(savedPlannerPlanFromStorage(null)).toBeNull();
+    expect(savedPlannerPlanFromStorage("{not json")).toBeNull();
+    expect(savedPlannerPlanFromSession(null, "main")).toBeNull();
+    expect(savedPlannerPlanFromSession(JSON.stringify({ response: {} }), "main")).toBeNull();
   });
 });

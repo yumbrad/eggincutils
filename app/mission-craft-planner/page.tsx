@@ -44,6 +44,7 @@ import {
   writeStoredBoolean,
   writeStoredString,
 } from "../../lib/local-preferences";
+import { writeSavedPlannerPlanLaunches } from "../../lib/preplan-import";
 import useHighsWorker from "../../lib/use-highs-worker";
 import { planForTarget, computeMonolithicPaths, type PlannerProgressEvent } from "../../lib/planner";
 import { createDemoProfile, isBlankEid } from "../../lib/demo-profile";
@@ -4620,6 +4621,13 @@ export default function MissionCraftPlannerPage() {
           setVirtueTankPreview({ eid: trimmedEid, status: "ready", virtueTank: profile.virtueTank ?? null, error: null });
         }
         writePersistedPlannerSession(planResponse, profile, snapshotRequest);
+        if (!isDemoMode) {
+          writeSavedPlannerPlanLaunches(snapshotRequest.sourceFilters.inventorySource, {
+            savedAt: new Date().toISOString(),
+            eid: snapshotRequest.eid,
+            plan: result,
+          });
+        }
         if (baselineProfile && baselineProfile.eid === profile.eid) {
           const deltas = buildReplanDeltas(baselineProfile, profile);
           const totalLaunches = deltas.missionLaunches.reduce((sum, launch) => sum + launch.launches, 0);

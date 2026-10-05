@@ -36,6 +36,9 @@ export const LOCAL_PREF_KEYS = {
   plannerDemoNoticeDismissed: "eggincutils-planner-demo-notice-dismissed",
   plannerShipDurations: "eggincutils-planner-ship-durations",
   plannerSession: "eggincutils-planner-session-v1",
+  // The planner's last plan launches per inventory source, for the XP planner's import.
+  plannerPlanLaunchesMain: "eggincutils-planner-plan-launches-main",
+  plannerPlanLaunchesVirtue: "eggincutils-planner-plan-launches-virtue",
 } as const;
 
 export function readFirstStoredString(keys: readonly string[]): string | null {
