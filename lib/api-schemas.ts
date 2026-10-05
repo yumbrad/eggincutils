@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { MAX_PRE_PLAN_LAUNCHES_PER_ROW, MAX_PRE_PLAN_SEND_ROWS } from "./preplan-import";
+
 const DURATION_TYPES = ["TUTORIAL", "SHORT", "LONG", "EPIC"] as const;
 const INVENTORY_SOURCES = ["main", "virtue"] as const;
 const VIRTUE_TANK_EGGS = ["curiosity", "integrity", "humility", "resilience", "kindness"] as const;
@@ -98,10 +100,10 @@ export const prePlanSendSchema = z.object({
     .number()
     .finite()
     .transform((value) => Math.max(0, Math.round(value)))
-    .pipe(nonNegativeIntSchema.max(10_000)),
+    .pipe(nonNegativeIntSchema.max(MAX_PRE_PLAN_LAUNCHES_PER_ROW)),
 });
 
-export const prePlanSendsSchema = z.array(prePlanSendSchema).max(20);
+export const prePlanSendsSchema = z.array(prePlanSendSchema).max(MAX_PRE_PLAN_SEND_ROWS);
 
 export type PrePlanSendRequest = z.infer<typeof prePlanSendSchema>;
 

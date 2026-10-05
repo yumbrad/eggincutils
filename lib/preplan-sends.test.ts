@@ -80,4 +80,25 @@ describe("applyPrePlanSendsToProfile", () => {
     expect(result.skippedLaunches).toBe(1);
     expect(result.addedInventory).toEqual({});
   });
+
+  it("reports each row's stars in request order, carrying progression between rows", async () => {
+    // Enough Chicken One launches to unlock the Chicken Nine (stars at 4 and 4 + 10 launch points).
+    const shipLevels = computeShipLevelsFromLaunchCounts({ CHICKEN_ONE: { TUTORIAL: 0, SHORT: 1_000, LONG: 0, EPIC: 0 } });
+    const profile = { ...makeProfile(), shipLevels, missionOptions: buildMissionOptions(shipLevels, 0, 0) };
+    const result = await applyPrePlanSendsToProfile(
+      profile,
+      [
+        { ship: "CHICKEN_NINE", durationType: "SHORT", targetAfxId: 10000, launches: 4 },
+        { ship: "NOT_A_SHIP", durationType: "SHORT", targetAfxId: 10000, launches: 5 },
+        { ship: "CHICKEN_NINE", durationType: "SHORT", targetAfxId: 10000, launches: 10 },
+      ],
+      { lootData: { missions: [] } }
+    );
+
+    expect(result.rows).toHaveLength(3);
+    expect(result.rows[1]).toBeNull();
+    expect(result.rows[0]).toMatchObject({ startLevel: 0, endLevel: 1, maxLevel: 2, appliedLaunches: 4, noLootLaunches: 4 });
+    expect(result.rows[2]).toMatchObject({ startLevel: 1, endLevel: 2, maxLevel: 2, appliedLaunches: 10 });
+    expect(result.noLootLaunches).toBe(14);
+  });
 });

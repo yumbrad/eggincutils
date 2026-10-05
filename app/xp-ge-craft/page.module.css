@@ -188,27 +188,57 @@
 
 .prePlanList {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 340px;
+  margin: 0;
+  padding: 0 4px 0 0;
+  overflow-y: auto;
+  list-style: none;
+  counter-reset: pre-plan-row;
 }
 
-.prePlanChip {
-  display: inline-flex;
+.prePlanRow {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 2px 8px;
   min-height: 28px;
   padding: 3px 4px 3px 8px;
   border: 1px solid var(--stroke);
-  border-radius: 999px;
+  border-radius: 8px;
   background: color-mix(in oklab, var(--accent), transparent 91%);
   color: var(--navy);
   font-size: 12px;
   font-weight: 750;
+  counter-increment: pre-plan-row;
 }
 
-.prePlanChip button {
+.prePlanRowLabel::before {
+  content: counter(pre-plan-row) ".";
+  display: inline-block;
+  min-width: 2.2em;
+  color: var(--muted);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.prePlanRowStars {
+  color: var(--navy);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.prePlanRowWarn {
+  color: var(--error-ink);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.prePlanRow button {
   width: 20px;
   height: 20px;
+  margin-left: auto;
   padding: 0;
   border: 1px solid color-mix(in oklab, var(--stroke), black 4%);
   border-radius: 999px;
@@ -220,7 +250,7 @@
   line-height: 1;
 }
 
-.prePlanChip button:hover {
+.prePlanRow button:hover {
   color: var(--error-ink);
   border-color: var(--error-border);
   background: var(--error-bg);

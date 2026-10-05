@@ -1,4 +1,5 @@
 import { isUntargetedTargetAfxId } from "./item-utils";
+import { MAX_PRE_PLAN_LAUNCHES_PER_ROW } from "./preplan-import";
 import { loadLootData, type LootJson, type MissionTargetLootStore } from "./loot-data";
 import {
   expectedInventoryFromTarget,
@@ -13,6 +14,7 @@ import {
   getNominalMissionCapacity,
   getShipOrder,
   type MissionOption,
+  type ShipLevelInfo,
   shipLevelsToLaunchCounts,
 } from "./ship-data";
 
@@ -23,11 +25,26 @@ export type PrePlanSend = {
   launches: number;
 };
 
+/** How one requested send row played out; stars are the ship's before and after the row. */
+export type PrePlanSendRowResult = {
+  startLevel: number;
+  endLevel: number;
+  maxLevel: number;
+  appliedLaunches: number;
+  /** Launches the ship couldn't make (locked, or no such mission/target). */
+  skippedLaunches: number;
+  /** Applied launches the loot data has too few samples for: they add stars but no items. */
+  noLootLaunches: number;
+};
+
 export type AppliedPrePlanSends = {
   profile: PlayerProfile;
   addedInventory: Record<string, number>;
   appliedLaunches: number;
   skippedLaunches: number;
+  noLootLaunches: number;
+  /** One entry per requested send, in request order; null for a row that was invalid. */
+  rows: Array<PrePlanSendRowResult | null>;
 };
 
 const UNTARGETED_ONLY_SHIPS = new Set(["CHICKEN_ONE", "CHICKEN_NINE", "CHICKEN_HEAVY", "BCR"]);
@@ -51,21 +68,28 @@ function canMissionOptionUseLootTarget(option: MissionOption, targetAfxId: numbe
   return !UNTARGETED_ONLY_SHIPS.has(option.ship) || isUntargetedTargetAfxId(targetAfxId);
 }
 
-function sanitizePrePlanSends(sends: PrePlanSend[]): PrePlanSend[] {
+/** The sends with each invalid row nulled, so results stay aligned with the request. */
+function sanitizePrePlanSends(sends: PrePlanSend[]): Array<PrePlanSend | null> {
   const shipOrder = new Set(getShipOrder());
-  return sends
-    .map((send) => ({
-      ship: String(send.ship || ""),
-      durationType: send.durationType,
-      targetAfxId: Math.round(Number(send.targetAfxId)),
-      launches: Math.max(0, Math.min(10_000, Math.round(Number(send.launches) || 0))),
-    }))
-    .filter((send) =>
-      shipOrder.has(send.ship) &&
+  return sends.map((raw) => {
+    const send = {
+      ship: String(raw.ship || ""),
+      durationType: raw.durationType,
+      targetAfxId: Math.round(Number(raw.targetAfxId)),
+      launches: Math.max(0, Math.min(MAX_PRE_PLAN_LAUNCHES_PER_ROW, Math.round(Number(raw.launches) || 0))),
+    };
+    return shipOrder.has(send.ship) &&
       ["SHORT", "LONG", "EPIC"].includes(send.durationType) &&
       Number.isFinite(send.targetAfxId) &&
       send.launches > 0
-    );
+      ? send
+      : null;
+  });
+}
+
+function shipLevelInfo(shipLevels: ShipLevelInfo[], ship: string): { level: number; maxLevel: number } {
+  const info = shipLevels.find((entry) => entry.ship === ship);
+  return { level: info?.level ?? 0, maxLevel: info?.maxLevel ?? 0 };
 }
 
 export async function applyPrePlanSendsToProfile(
@@ -78,12 +102,14 @@ export async function applyPrePlanSendsToProfile(
   } = {}
 ): Promise<AppliedPrePlanSends> {
   const sanitizedSends = sanitizePrePlanSends(sends);
-  if (sanitizedSends.length === 0) {
+  if (sanitizedSends.every((send) => send === null)) {
     return {
       profile,
       addedInventory: {},
       appliedLaunches: 0,
       skippedLaunches: 0,
+      noLootLaunches: 0,
+      rows: sanitizedSends.map(() => null),
     };
   }
 
@@ -96,6 +122,8 @@ export async function applyPrePlanSendsToProfile(
   const addedInventory: Record<string, number> = {};
   let appliedLaunches = 0;
   let skippedLaunches = 0;
+  let noLootLaunches = 0;
+  const rows: Array<PrePlanSendRowResult | null> = [];
 
   const addYield = (itemKey: string, quantity: number): void => {
     if (quantity <= 0) {
@@ -106,6 +134,19 @@ export async function applyPrePlanSendsToProfile(
   };
 
   for (const send of sanitizedSends) {
+    if (!send) {
+      rows.push(null);
+      continue;
+    }
+    const start = shipLevelInfo(computeShipLevelsFromLaunchCounts(launchCounts), send.ship);
+    const row: PrePlanSendRowResult = {
+      startLevel: start.level,
+      endLevel: start.level,
+      maxLevel: start.maxLevel,
+      appliedLaunches: 0,
+      skippedLaunches: 0,
+      noLootLaunches: 0,
+    };
     for (let launch = 0; launch < send.launches; launch += 1) {
       const currentShipLevels = computeShipLevelsFromLaunchCounts(launchCounts);
       const missionOptions = buildMissionOptions(
@@ -117,7 +158,7 @@ export async function applyPrePlanSendsToProfile(
         (candidate) => candidate.ship === send.ship && candidate.durationType === send.durationType
       );
       if (!option || !canMissionOptionUseLootTarget(option, send.targetAfxId)) {
-        skippedLaunches += 1;
+        row.skippedLaunches += 1;
         continue;
       }
 
@@ -134,11 +175,20 @@ export async function applyPrePlanSendsToProfile(
         for (const [itemKey, quantity] of Object.entries(yields)) {
           addYield(itemKey, quantity);
         }
+      } else {
+        row.noLootLaunches += 1;
       }
 
       launchCounts[send.ship][send.durationType] += 1;
-      appliedLaunches += 1;
+      row.appliedLaunches += 1;
     }
+    const end = shipLevelInfo(computeShipLevelsFromLaunchCounts(launchCounts), send.ship);
+    row.endLevel = end.level;
+    row.maxLevel = end.maxLevel;
+    appliedLaunches += row.appliedLaunches;
+    skippedLaunches += row.skippedLaunches;
+    noLootLaunches += row.noLootLaunches;
+    rows.push(row);
   }
 
   const shipLevels = computeShipLevelsFromLaunchCounts(launchCounts);
@@ -152,5 +202,7 @@ export async function applyPrePlanSendsToProfile(
     addedInventory,
     appliedLaunches,
     skippedLaunches,
+    noLootLaunches,
+    rows,
   };
 }

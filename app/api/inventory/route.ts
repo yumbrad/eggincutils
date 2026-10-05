@@ -6,52 +6,79 @@ import { getPlayerProfile } from "../../../lib/profile";
 
 export const runtime = "nodejs";
 
+const QUERY_FIELDS = [
+  "eid",
+  "includeSlotted",
+  "inventorySource",
+  "includeInventoryFragments",
+  "includeInventoryRare",
+  "includeInventoryEpic",
+  "includeInventoryLegendary",
+] as const;
+
+type InventoryQuery = Partial<Record<(typeof QUERY_FIELDS)[number], string>>;
+
+function invalidRequest(details: string[]): Response {
+  return new Response(JSON.stringify({ error: "invalid query parameters", details }), { status: 400 });
+}
+
+// GET serves the diagnostics page; the craft planner POSTs, since its pre-plan
+// sends can outgrow a query string.
 export async function GET(request: NextRequest): Promise<Response> {
-  let prePlanSends: unknown[] = [];
+  let prePlanSends: unknown = [];
   const prePlanSendsRaw = request.nextUrl.searchParams.get("prePlanSends");
   if (prePlanSendsRaw) {
     try {
-      prePlanSends = JSON.parse(prePlanSendsRaw) as unknown[];
+      prePlanSends = JSON.parse(prePlanSendsRaw);
     } catch {
-      return new Response(
-        JSON.stringify({
-          error: "invalid query parameters",
-          details: ["prePlanSends: expected JSON array"],
-        }),
-        { status: 400 }
-      );
+      return invalidRequest(["prePlanSends: expected JSON array"]);
     }
   }
+  const query: InventoryQuery = {};
+  for (const field of QUERY_FIELDS) {
+    query[field] = request.nextUrl.searchParams.get(field) ?? undefined;
+  }
+  return inventoryResponse(query, prePlanSends);
+}
+
+export async function POST(request: Request): Promise<Response> {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return invalidRequest(["body: expected JSON object"]);
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return invalidRequest(["body: expected JSON object"]);
+  }
+  const record = body as Record<string, unknown>;
+  const query: InventoryQuery = {};
+  for (const field of QUERY_FIELDS) {
+    const value = record[field];
+    query[field] = typeof value === "string" ? value : typeof value === "boolean" ? String(value) : undefined;
+  }
+  return inventoryResponse(query, record.prePlanSends ?? []);
+}
+
+async function inventoryResponse(query: InventoryQuery, prePlanSends: unknown): Promise<Response> {
   const parsedPrePlanSends = prePlanSendsSchema.safeParse(prePlanSends);
   if (!parsedPrePlanSends.success) {
-    return new Response(
-      JSON.stringify({
-        error: "invalid query parameters",
-        details: formatZodIssues(parsedPrePlanSends.error),
-      }),
-      { status: 400 }
-    );
+    return invalidRequest(formatZodIssues(parsedPrePlanSends.error));
   }
 
   const parsedQuery = profileQuerySchema.safeParse({
-    eid: request.nextUrl.searchParams.get("eid") ?? "",
-    includeSlotted: request.nextUrl.searchParams.get("includeSlotted") ?? undefined,
-    inventorySource: request.nextUrl.searchParams.get("inventorySource") ?? undefined,
-    includeInventoryFragments: request.nextUrl.searchParams.get("includeInventoryFragments") ?? undefined,
+    eid: query.eid ?? "",
+    includeSlotted: query.includeSlotted,
+    inventorySource: query.inventorySource,
+    includeInventoryFragments: query.includeInventoryFragments,
     // The craft planner defaults shiny artifacts to "skip" (unlike /api/profile) so results match
     // the in-game auto-craft counts unless the player explicitly opts in.
-    includeInventoryRare: request.nextUrl.searchParams.get("includeInventoryRare") ?? "false",
-    includeInventoryEpic: request.nextUrl.searchParams.get("includeInventoryEpic") ?? "false",
-    includeInventoryLegendary: request.nextUrl.searchParams.get("includeInventoryLegendary") ?? "false",
+    includeInventoryRare: query.includeInventoryRare ?? "false",
+    includeInventoryEpic: query.includeInventoryEpic ?? "false",
+    includeInventoryLegendary: query.includeInventoryLegendary ?? "false",
   });
   if (!parsedQuery.success) {
-    return new Response(
-      JSON.stringify({
-        error: "invalid query parameters",
-        details: formatZodIssues(parsedQuery.error),
-      }),
-      { status: 400 }
-    );
+    return invalidRequest(formatZodIssues(parsedQuery.error));
   }
 
   try {
@@ -66,6 +93,13 @@ export async function GET(request: NextRequest): Promise<Response> {
       includeStoneFragments: parsedQuery.data.includeInventoryFragments,
     });
     const shinyIngredientCount = profile.shinyIngredientCount || 0;
+    // Stars before any pre-plan sends, for the send picker.
+    const shipLevels = profile.shipLevels.map((info) => ({
+      ship: info.ship,
+      unlocked: info.unlocked,
+      level: info.level,
+      maxLevel: info.maxLevel,
+    }));
     const prePlanResult = await applyPrePlanSendsToProfile(profile, parsedPrePlanSends.data, {
       includeRarities,
       includeStoneFragments: parsedQuery.data.includeInventoryFragments,
@@ -77,10 +111,13 @@ export async function GET(request: NextRequest): Promise<Response> {
         craftCounts: profile.craftCounts,
         craftingXp: profile.craftingXp,
         shinyIngredientCount,
+        shipLevels,
         prePlanSends: {
           addedInventory: prePlanResult.addedInventory,
           appliedLaunches: prePlanResult.appliedLaunches,
           skippedLaunches: prePlanResult.skippedLaunches,
+          noLootLaunches: prePlanResult.noLootLaunches,
+          rows: prePlanResult.rows,
         },
       }),
       { status: 200 }

@@ -40,6 +40,13 @@ import {
   writeStoredBoolean,
   writeStoredString,
 } from "../../lib/local-preferences";
+import {
+  MAX_PRE_PLAN_LAUNCHES_PER_ROW,
+  MAX_PRE_PLAN_SEND_ROWS,
+  PRE_PLAN_UNTARGETED_TARGET_AFX_ID,
+  readSavedPlannerPlan,
+  type SavedPlannerPlan,
+} from "../../lib/preplan-import";
 import useHighsClient from "../../lib/use-highs-client";
 import {
   buildMaxXpExecutionPlan,
@@ -78,15 +85,28 @@ type PrePlanSendRow = {
   targetAfxId: number;
   launches: number;
 };
+type PrePlanSendRowResult = {
+  startLevel: number;
+  endLevel: number;
+  maxLevel: number;
+  appliedLaunches: number;
+  skippedLaunches: number;
+  noLootLaunches: number;
+};
+type ShipStars = { ship: string; unlocked: boolean; level: number; maxLevel: number };
 type InventoryResponse = {
   inventory?: Record<string, number>;
   craftCounts?: Record<string, number>;
   craftingXp?: number;
   shinyIngredientCount?: number;
+  shipLevels?: ShipStars[];
   prePlanSends?: {
     addedInventory?: Record<string, number>;
     appliedLaunches?: number;
     skippedLaunches?: number;
+    noLootLaunches?: number;
+    /** Per requested send, in order. */
+    rows?: Array<PrePlanSendRowResult | null>;
   };
   error?: string;
   details?: string;
@@ -188,13 +208,13 @@ type OptimizePayload = {
   craftCounts: Record<string, number>;
   craftingXp: number;
   shinyIngredientCount: number;
+  shipLevels: ShipStars[];
   prePlanSends?: InventoryResponse["prePlanSends"];
 };
 
 const SHARED_EID_KEYS = [LOCAL_PREF_KEYS.sharedEid, LOCAL_PREF_KEYS.legacyEid] as const;
 const SHARED_INCLUDE_SLOTTED_KEYS = [LOCAL_PREF_KEYS.sharedIncludeSlotted, LOCAL_PREF_KEYS.legacyIncludeSlotted] as const;
 const SHARED_CRAFTING_SALE_KEYS = [LOCAL_PREF_KEYS.sharedCraftingSale] as const;
-const PRE_PLAN_UNTARGETED_TARGET_AFX_ID = 10000;
 // Goal edits reach the solver after a short pause: a solve can block the page for up to a second.
 const GOAL_APPLY_DELAY_MS = 600;
 const GOAL_TARGET_OPTIONS = buildTargetOptions();
@@ -411,7 +431,7 @@ async function getOptimalCrafts(
   prePlanSends: PrePlanSendRow[],
   goals: CraftReservationGoal[]
 ): Promise<OptimizePayload> {
-  const params = new URLSearchParams({
+  const body = {
     eid,
     includeSlotted: includeSlotted ? "true" : "false",
     includeInventoryFragments: includeFragments ? "true" : "false",
@@ -419,19 +439,19 @@ async function getOptimalCrafts(
     includeInventoryEpic: includeShiny.epic ? "true" : "false",
     includeInventoryLegendary: includeShiny.legendary ? "true" : "false",
     inventorySource,
-  });
-  const normalizedPrePlanSends = prePlanSends
-    .map((send) => ({
+    // Unfiltered, so the per-row results line up with the rows on screen.
+    prePlanSends: prePlanSends.map((send) => ({
       ship: send.ship,
       durationType: send.durationType,
       targetAfxId: send.targetAfxId,
       launches: send.launches,
-    }))
-    .filter((send) => send.launches > 0);
-  if (normalizedPrePlanSends.length > 0) {
-    params.set("prePlanSends", JSON.stringify(normalizedPrePlanSends));
-  }
-  const response = await fetch(`/api/inventory?${params.toString()}`);
+    })),
+  };
+  const response = await fetch("/api/inventory", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   let data: InventoryResponse | null = null;
   try {
     data = (await response.json()) as InventoryResponse;
@@ -455,6 +475,7 @@ async function getOptimalCrafts(
     craftCounts,
     craftingXp,
     shinyIngredientCount: Math.max(0, Math.floor(data.shinyIngredientCount || 0)),
+    shipLevels: data.shipLevels || [],
     prePlanSends: data.prePlanSends,
   };
 }
@@ -483,6 +504,48 @@ function durationTypeLabel(durationType: PrePlanDurationType): string {
 
 function prePlanSendLabel(send: PrePlanSendRow): string {
   return `${send.launches.toLocaleString()}x ${titleCaseShip(send.ship)} ${durationTypeLabel(send.durationType)} / ${afxIdToTargetFamilyName(send.targetAfxId)}`;
+}
+
+/** Where a send row leaves its ship, and the launches that didn't play out as asked. */
+function prePlanRowOutcome(result: PrePlanSendRowResult): { stars: string | null; warnings: string[] } {
+  let stars: string | null = null;
+  if (result.appliedLaunches > 0) {
+    const max = result.maxLevel > 0 && result.endLevel >= result.maxLevel ? " (max)" : "";
+    stars =
+      result.startLevel === result.endLevel
+        ? `${result.endLevel}⭐${max}`
+        : `${result.startLevel}⭐ → ${result.endLevel}⭐${max}`;
+  }
+  const warnings: string[] = [];
+  if (result.skippedLaunches > 0) {
+    warnings.push(`${result.skippedLaunches.toLocaleString()} skipped: ship not unlocked yet`);
+  }
+  if (result.noLootLaunches > 0) {
+    warnings.push(`${result.noLootLaunches.toLocaleString()} add stars but no items (too little loot data)`);
+  }
+  return { stars, warnings };
+}
+
+function sameSend(left: Omit<PrePlanSendRow, "id">, right: Omit<PrePlanSendRow, "id">): boolean {
+  return (
+    left.ship === right.ship &&
+    left.durationType === right.durationType &&
+    left.targetAfxId === right.targetAfxId &&
+    left.launches === right.launches
+  );
+}
+
+/** Whether `run` already sits in `sends` as consecutive rows. */
+function containsSendRun(sends: PrePlanSendRow[], run: Array<Omit<PrePlanSendRow, "id">>): boolean {
+  if (run.length === 0 || run.length > sends.length) {
+    return false;
+  }
+  for (let start = 0; start + run.length <= sends.length; start += 1) {
+    if (run.every((send, offset) => sameSend(sends[start + offset], send))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function prePlanSendsSignature(sends: PrePlanSendRow[]): string {
@@ -535,7 +598,7 @@ function parseStoredPrePlanSends(raw: string | null): PrePlanSendRow[] {
         ) {
           return null;
         }
-        const launches = Math.max(1, Math.min(10_000, Math.round(Number(record.launches) || 1)));
+        const launches = Math.max(1, Math.min(MAX_PRE_PLAN_LAUNCHES_PER_ROW, Math.round(Number(record.launches) || 1)));
         const targetAfxId = PRE_PLAN_UNTARGETED_ONLY_SHIPS.has(record.ship)
           ? PRE_PLAN_UNTARGETED_TARGET_AFX_ID
           : Math.round(Number(record.targetAfxId) || PRE_PLAN_UNTARGETED_TARGET_AFX_ID);
@@ -548,7 +611,7 @@ function parseStoredPrePlanSends(raw: string | null): PrePlanSendRow[] {
         };
       })
       .filter((row): row is PrePlanSendRow => row !== null)
-      .slice(0, 20);
+      .slice(0, MAX_PRE_PLAN_SEND_ROWS);
   } catch {
     return [];
   }
@@ -1439,6 +1502,10 @@ export default function XpGeCraftPage(): JSX.Element {
   const [planBaseline, setPlanBaseline] = useState<PlanBaseline | null>(null);
   const [savedPlannerGoalCount, setSavedPlannerGoalCount] = useState<number>(0);
   const [goalImportNote, setGoalImportNote] = useState<string | null>(null);
+  // Stars before any pre-plan sends, from the last calculate.
+  const [shipStars, setShipStars] = useState<ShipStars[] | null>(null);
+  const [savedPlannerPlan, setSavedPlannerPlan] = useState<SavedPlannerPlan | null>(null);
+  const [sendImportNote, setSendImportNote] = useState<string | null>(null);
   const lastSolveRef = useRef<SolveInputs | null>(null);
 
   useEffect(() => {
@@ -1658,6 +1725,12 @@ export default function XpGeCraftPage(): JSX.Element {
   const goalImportSource = planSourceInventory ? planInventorySource : inventorySource;
 
   useEffect(() => {
+    if (!prePlanOpen) {
+      return;
+    }
+    setSavedPlannerPlan(readSavedPlannerPlan());
+  }, [prePlanOpen]);
+  useEffect(() => {
     if (!goalsOpen) {
       return;
     }
@@ -1718,6 +1791,7 @@ export default function XpGeCraftPage(): JSX.Element {
       setPlanSourceCraftingXp(result.craftingXp);
       setLastPrePlanResult(result.prePlanSends || null);
       setLastSolvedPrePlanSignature(prePlanSendsSignature(prePlanSends));
+      setShipStars(result.shipLevels.length > 0 ? result.shipLevels : null);
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : "Unable to load inventory.";
       setError(message);
@@ -1764,7 +1838,13 @@ export default function XpGeCraftPage(): JSX.Element {
   const prePlanAssumptionsStale = Boolean(
     solution && lastSolvedPrePlanSignature != null && currentPrePlanSignature !== lastSolvedPrePlanSignature
   );
+  // Row results only describe the rows they were calculated for.
+  const prePlanRowResults =
+    lastPrePlanResult && lastSolvedPrePlanSignature === currentPrePlanSignature ? lastPrePlanResult.rows || null : null;
   const prePlanTotalLaunches = prePlanSends.reduce((sum, send) => sum + send.launches, 0);
+  const savedPlannerPlanLaunches = savedPlannerPlan
+    ? savedPlannerPlan.sends.reduce((sum, send) => sum + send.launches, 0)
+    : 0;
   const prePlanAddedItemCount = lastPrePlanResult?.addedInventory
     ? Object.values(lastPrePlanResult.addedInventory).filter((quantity) => quantity > 0).length
     : 0;
@@ -1772,15 +1852,17 @@ export default function XpGeCraftPage(): JSX.Element {
 
   const shipDurationOptions = useMemo(
     () =>
-      PRE_PLAN_SHIPS.flatMap((ship) =>
-        PRE_PLAN_DURATIONS.map((duration) => ({
+      PRE_PLAN_SHIPS.flatMap((ship) => {
+        const stars = shipStars?.find((entry) => entry.ship === ship);
+        const starsLabel = !stars ? "" : stars.unlocked ? ` ${stars.level}/${stars.maxLevel}⭐` : " (locked)";
+        return PRE_PLAN_DURATIONS.map((duration) => ({
           value: `${ship}|${duration.value}`,
           ship,
           durationType: duration.value,
-          label: `${titleCaseShip(ship)} · ${duration.label}`,
-        }))
-      ),
-    []
+          label: `${titleCaseShip(ship)}${starsLabel} · ${duration.label}`,
+        }));
+      }),
+    [shipStars]
   );
 
   function applyCraftLimitDrafts(): void {
@@ -1815,7 +1897,7 @@ export default function XpGeCraftPage(): JSX.Element {
   }
 
   function addPrePlanSend(): void {
-    const launches = Math.max(1, Math.min(10_000, Math.round(Number(draftPrePlanLaunches) || 1)));
+    const launches = Math.max(1, Math.min(MAX_PRE_PLAN_LAUNCHES_PER_ROW, Math.round(Number(draftPrePlanLaunches) || 1)));
     const targetAfxId = selectedDraftShipIsUntargetedOnly
       ? PRE_PLAN_UNTARGETED_TARGET_AFX_ID
       : draftPrePlanTargetAfxId;
@@ -1828,12 +1910,60 @@ export default function XpGeCraftPage(): JSX.Element {
         targetAfxId,
         launches,
       },
-    ].slice(0, 20));
+    ].slice(0, MAX_PRE_PLAN_SEND_ROWS));
     setDraftPrePlanLaunches("1");
   }
 
   function removePrePlanSend(id: string): void {
     setPrePlanSends((previous) => previous.filter((send) => send.id !== id));
+  }
+
+  function clearPrePlanSends(): void {
+    setPrePlanSends([]);
+    setSendImportNote(null);
+  }
+
+  function importPlannerSends(): void {
+    const plan = readSavedPlannerPlan();
+    setSavedPlannerPlan(plan);
+    if (!plan || plan.sends.length === 0) {
+      setSendImportNote(null);
+      return;
+    }
+    if (containsSendRun(prePlanSends, plan.sends)) {
+      setSendImportNote("Already here");
+      return;
+    }
+    const stamp = Date.now();
+    const room = Math.max(0, MAX_PRE_PLAN_SEND_ROWS - prePlanSends.length);
+    const added = plan.sends.slice(0, room);
+    setPrePlanSends([
+      ...prePlanSends,
+      ...added.map((send, index) => ({ ...send, id: `aap-${stamp}-${index}-${send.ship}-${send.durationType}` })),
+    ]);
+    const addedLaunches = added.reduce((sum, send) => sum + send.launches, 0);
+    const leftOutLaunches =
+      plan.droppedLaunches + plan.sends.slice(room).reduce((sum, send) => sum + send.launches, 0);
+    const notes = [
+      `Imported ${added.length.toLocaleString()} ${added.length === 1 ? "row" : "rows"} (${addedLaunches.toLocaleString()} launches)`,
+    ];
+    if (leftOutLaunches > 0) {
+      notes.push(`${leftOutLaunches.toLocaleString()} launches left out (${MAX_PRE_PLAN_SEND_ROWS} rows max)`);
+    }
+    if (plan.inAirLaunches > 0) {
+      notes.push(`${plan.inAirLaunches.toLocaleString()} in-air launches skipped`);
+    }
+    if (plan.inventorySource && plan.inventorySource !== inventorySource) {
+      notes.push(`the AAP plan used the ${plan.inventorySource === "virtue" ? "Virtue" : "main"} inventory`);
+    }
+    if (plan.eid && eid.trim() && plan.eid !== eid.trim()) {
+      notes.push("the AAP plan is for a different EID");
+    }
+    setSendImportNote(notes.join(" · "));
+  }
+
+  function clearGoals(): void {
+    updateGoalRows(() => []);
   }
 
   function updateDraftPrePlanShipDuration(value: string): void {
@@ -2173,6 +2303,9 @@ export default function XpGeCraftPage(): JSX.Element {
                     {" · "}
                     {Math.max(0, lastPrePlanResult.appliedLaunches || 0).toLocaleString()} applied
                     {lastPrePlanResult.skippedLaunches ? `, ${lastPrePlanResult.skippedLaunches.toLocaleString()} skipped` : ""}
+                    {lastPrePlanResult.noLootLaunches
+                      ? `, ${lastPrePlanResult.noLootLaunches.toLocaleString()} without loot data`
+                      : ""}
                     {prePlanAddedItemCount > 0 && (
                       <>
                         {" · "}
@@ -2225,24 +2358,82 @@ export default function XpGeCraftPage(): JSX.Element {
                     inputMode="numeric"
                     value={draftPrePlanLaunches}
                     onChange={(event) => setDraftPrePlanLaunches(event.target.value.replace(/[^\d]/g, ""))}
-                    onBlur={() => setDraftPrePlanLaunches(String(Math.max(1, Math.min(10_000, Math.round(Number(draftPrePlanLaunches) || 1)))))}
+                    onBlur={() =>
+                      setDraftPrePlanLaunches(
+                        String(Math.max(1, Math.min(MAX_PRE_PLAN_LAUNCHES_PER_ROW, Math.round(Number(draftPrePlanLaunches) || 1))))
+                      )
+                    }
                   />
                 </div>
-                <button type="button" className={styles.prePlanAddButton} onClick={addPrePlanSend} disabled={prePlanSends.length >= 20}>
+                <button
+                  type="button"
+                  className={styles.prePlanAddButton}
+                  onClick={addPrePlanSend}
+                  disabled={prePlanSends.length >= MAX_PRE_PLAN_SEND_ROWS}
+                  title={prePlanSends.length >= MAX_PRE_PLAN_SEND_ROWS ? `${MAX_PRE_PLAN_SEND_ROWS} rows max` : undefined}
+                >
                   Add
                 </button>
               </div>
+              <div className={styles.prePlanMeta}>
+                Ships start at your current stars and level up as the sends run, top row first.
+                {prePlanSends.length > 0 && !prePlanRowResults && " Calculate to see each row's stars."}
+              </div>
+              <div className={styles.goalsActions}>
+                <button
+                  type="button"
+                  className={styles.goalsImportButton}
+                  onClick={importPlannerSends}
+                  disabled={!savedPlannerPlan || savedPlannerPlan.sends.length === 0}
+                  title="Add the launches from your last Artifact Attainment Planner plan, prep launches first. Launches already in the air are left out."
+                >
+                  Import my AAP plan sends
+                </button>
+                <button
+                  type="button"
+                  className={styles.goalsImportButton}
+                  onClick={clearPrePlanSends}
+                  disabled={prePlanSends.length === 0}
+                >
+                  Clear sends
+                </button>
+                {sendImportNote ? (
+                  <span className={styles.prePlanMeta}>{sendImportNote}</span>
+                ) : !savedPlannerPlan || savedPlannerPlan.sends.length === 0 ? (
+                  <span className={styles.prePlanMeta}>No AAP plan saved yet</span>
+                ) : (
+                  <span className={styles.prePlanMeta}>
+                    AAP plan
+                    {savedPlannerPlan.savedAt ? ` from ${new Date(savedPlannerPlan.savedAt).toLocaleString()}` : ""}:{" "}
+                    {savedPlannerPlanLaunches.toLocaleString()} launches
+                  </span>
+                )}
+              </div>
               {prePlanSends.length > 0 && (
-                <div className={styles.prePlanList} aria-label="Pre-plan sends">
-                  {prePlanSends.map((send) => (
-                    <span key={send.id} className={styles.prePlanChip}>
-                      {prePlanSendLabel(send)}
-                      <button type="button" onClick={() => removePrePlanSend(send.id)} aria-label={`Remove ${prePlanSendLabel(send)}`}>
-                        x
-                      </button>
-                    </span>
-                  ))}
-                </div>
+                <ol className={styles.prePlanList} aria-label="Pre-plan sends">
+                  {prePlanSends.map((send, index) => {
+                    const result = prePlanRowResults?.[index] ?? null;
+                    const outcome = result ? prePlanRowOutcome(result) : null;
+                    return (
+                      <li key={send.id} className={styles.prePlanRow}>
+                        <span className={styles.prePlanRowLabel}>{prePlanSendLabel(send)}</span>
+                        {outcome?.stars && <span className={styles.prePlanRowStars}>{outcome.stars}</span>}
+                        {outcome?.warnings.map((warning) => (
+                          <span key={warning} className={styles.prePlanRowWarn}>
+                            {warning}
+                          </span>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => removePrePlanSend(send.id)}
+                          aria-label={`Remove ${prePlanSendLabel(send)}`}
+                        >
+                          x
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ol>
               )}
             </div>
           </details>
@@ -2296,6 +2487,9 @@ export default function XpGeCraftPage(): JSX.Element {
                   title="Copy the goals saved in the Artifact Attainment Planner. Its copies goals mean N more, so they arrive as what you own + N."
                 >
                   Import my AAP goals
+                </button>
+                <button type="button" className={styles.goalsImportButton} onClick={clearGoals} disabled={goalRows.length === 0}>
+                  Clear goals
                 </button>
                 {savedPlannerGoalCount === 0 ? (
                   <span className={styles.prePlanMeta}>No AAP goals saved yet</span>
