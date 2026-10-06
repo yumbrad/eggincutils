@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { MAX_PRE_PLAN_LAUNCHES_PER_ROW, MAX_PRE_PLAN_SEND_ROWS } from "./preplan-import";
+import { SHINY_RARITIES } from "./shiny-odds";
 
 const DURATION_TYPES = ["TUTORIAL", "SHORT", "LONG", "EPIC"] as const;
 const INVENTORY_SOURCES = ["main", "virtue"] as const;
@@ -116,6 +117,17 @@ const plannerTargetSchema = z.object({
     .transform((value) => Math.max(1, Math.round(value)))
     .pipe(nonNegativeIntSchema.max(1_000_000)),
   craftGoal: z.boolean().optional(),
+  // Quantity is then a percent chance (the planner turns it into a craft-count goal).
+  shinyRarity: z.enum(SHINY_RARITIES).optional(),
+});
+
+const shinyGoalPlanSchema = z.object({
+  itemId: z.string().min(1),
+  rarity: z.enum(SHINY_RARITIES),
+  targetChance: z.number().finite().min(0).max(1),
+  craftedBefore: nonNegativeIntSchema,
+  crafts: nonNegativeIntSchema,
+  reached: z.boolean(),
 });
 
 export const planRequestSchema = z
@@ -537,6 +549,7 @@ export const plannerResultSchema = z.object({
   targetItemId: z.string().min(1),
   quantity: nonNegativeIntSchema,
   targets: z.array(plannerTargetSchema),
+  shinyGoals: z.array(shinyGoalPlanSchema).optional(),
   priorityTime: z.number().finite().min(0).max(1),
   objectiveMode: z.enum(["ge", "virtueFuel"]).default("ge"),
   geCost: nonNegativeFiniteSchema,

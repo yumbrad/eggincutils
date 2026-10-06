@@ -7,6 +7,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import { playerProfileSchema, virtueShiftCapSchema, virtueStartTankSchema } from "../lib/api-schemas";
+import { SHINY_RARITIES, type ShinyRarity } from "../lib/shiny-odds";
 import { afxIdToDisplayName, itemIdToKey, itemKeyToDisplayName } from "../lib/item-utils";
 import {
   computeMonolithicPaths,
@@ -33,6 +34,8 @@ const solveInputSnapshotSchema = z.object({
           targetItemId: z.string().min(1),
           quantity: z.number().int().min(1),
           craftGoal: z.boolean().optional(),
+          // A shiny goal: quantity is the percent chance (the planner turns it into crafts).
+          shinyRarity: z.enum(SHINY_RARITIES).optional(),
         })
       )
       .optional(),
@@ -84,7 +87,7 @@ type SolveInputSnapshotFile = z.infer<typeof solveInputSnapshotSchema>;
  *  targetItemId/quantity are just the primary row kept for older readers. */
 function snapshotTargets(
   snapshot: Pick<SolveInputSnapshotFile, "request">
-): Array<{ targetItemId: string; quantity: number; craftGoal?: boolean }> {
+): Array<{ targetItemId: string; quantity: number; craftGoal?: boolean; shinyRarity?: ShinyRarity }> {
   return snapshot.request.targets && snapshot.request.targets.length > 0
     ? snapshot.request.targets
     : [{ targetItemId: snapshot.request.targetItemId, quantity: snapshot.request.quantity }];

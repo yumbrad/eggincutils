@@ -12,6 +12,7 @@ import {
   itemKeyToId,
 } from "./item-utils";
 import { getRecipe, recipes } from "./recipes";
+import { resolveShinyGoalTargets, type ShinyGoalPlan, type ShinyRarity } from "./shiny-odds";
 import {
   buildMissionOptions,
   computeShipLevelsFromLaunchCounts,
@@ -163,6 +164,10 @@ export type PlannerTarget = {
    *  count the profile already carries, and copies eaten by a higher tier
    *  still count toward it. Ignored for items with no recipe. */
   craftGoal?: boolean;
+  /** Read `quantity` as a percent chance of ending with at least one copy of
+   *  this rarity or better. planForTarget and computeMonolithicPaths turn it
+   *  into a craft-count goal (resolveShinyGoalTargets) before anything else. */
+  shinyRarity?: ShinyRarity;
 };
 
 type TargetBreakdownRow = TargetBreakdown & {
@@ -186,6 +191,8 @@ export type PlannerResult = {
   targetItemId: string;
   quantity: number;
   targets: PlannerTarget[];
+  /** What each shiny goal asked for, as the craft-count goal it became in `targets`. */
+  shinyGoals?: ShinyGoalPlan[];
   priorityTime: number;
   objectiveMode: MissionObjectiveMode;
   geCost: number;
@@ -5573,8 +5580,16 @@ export async function planForTarget(
   targetItemId: string,
   quantity: number,
   priorityTimeRaw: number,
-  plannerOptions: PlannerOptions = {}
+  rawPlannerOptions: PlannerOptions = {}
 ): Promise<PlannerResult> {
+  // Shiny goals reach the solver as the craft-count goals that give their chance.
+  const shiny = resolveShinyGoalTargets(rawPlannerOptions.targets || [], profile);
+  const plannerOptions: PlannerOptions =
+    shiny.shinyGoals.length > 0 ? { ...rawPlannerOptions, targets: shiny.targets } : rawPlannerOptions;
+  if (shiny.shinyGoals.length > 0 && shiny.targets[0]) {
+    targetItemId = shiny.targets[0].targetItemId;
+    quantity = shiny.targets[0].quantity;
+  }
   const missionDropRarities = normalizeShinyRaritySelection(plannerOptions.missionDropRarities);
   const inFlight = await projectInFlightMissions(profile.inFlightMissions || [], {
     lootData: plannerOptions.lootData,
@@ -5606,7 +5621,8 @@ export async function planForTarget(
         plannerOptions
       );
 
-  return withInFlightSchedule(result, inFlight);
+  const scheduled = withInFlightSchedule(result, inFlight);
+  return shiny.shinyGoals.length > 0 ? { ...scheduled, shinyGoals: shiny.shinyGoals } : scheduled;
 }
 
 /**
@@ -8880,8 +8896,6 @@ export async function computeMonolithicPaths(options: {
   const {
     profile,
     targetItemId,
-    targets,
-    quantity,
     priorityTime,
     selectedCombos,
     missionDropRarities,
@@ -8890,6 +8904,8 @@ export async function computeMonolithicPaths(options: {
     solverFn: solverFnOption,
     lootData: injectedLootData,
   } = options;
+  const { targets } = resolveShinyGoalTargets(options.targets || [], profile);
+  const quantity = options.targets?.[0]?.shinyRarity && targets[0] ? targets[0].quantity : options.quantity;
   const normalizedTargets = normalizePlannerTargets(targetItemId, quantity, targets, profile.craftCounts);
   const targetKey = normalizedTargets.primaryTargetKey;
   const quantityInt = normalizedTargets.primaryQuantity;

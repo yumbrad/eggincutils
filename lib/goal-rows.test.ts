@@ -13,11 +13,16 @@ import {
   plannerSavedCraftedOnly,
   plannerSavedTargetRows,
   removeTargetRow,
+  goalRowMode,
   selectTargetRowOption,
   serializeTargetRows,
+  setTargetRowGoalMode,
+  setTargetRowShinyRarity,
+  targetRowToPlannerTarget,
   toggleTargetRowCraftGoal,
   type PlannerTargetRow,
 } from "./goal-rows";
+import { getCraftingLevelTotalXpForLevel } from "./crafting-levels";
 
 const options = buildTargetOptions();
 const option = (itemId: string) => {
@@ -202,7 +207,7 @@ describe("plannerRowsToKeepRows with only crafted on", () => {
           row("d", "book-of-basan-4", "2"),
         ],
         inventory,
-        { craftCounts }
+        { craftCounts, craftedOnly: true }
       )
     ).toEqual([
       row("a", "interstellar-compass-4", "333", true),
@@ -210,5 +215,75 @@ describe("plannerRowsToKeepRows with only crafted on", () => {
       row("c", "gusset-3", "400", true),
       row("d", "book-of-basan-4", "2", true),
     ]);
+  });
+});
+
+describe("shiny goal rows", () => {
+  const shinyRow = (id: string, itemId: string, percent: string, rarity: "rare" | "epic" | "legendary"): PlannerTargetRow => ({
+    id,
+    itemId,
+    quantityInput: percent,
+    craftGoal: false,
+    shinyRarity: rarity,
+  });
+
+  it("switches modes with each mode's default and the item's best rarity", () => {
+    const shiny = setTargetRowGoalMode([row("a", "interstellar-compass-4", "7")], "a", "shiny")[0];
+    expect(shiny).toEqual(shinyRow("a", "interstellar-compass-4", "50", "legendary"));
+    expect(goalRowMode(shiny)).toBe("shiny");
+    expect(setTargetRowGoalMode([shiny], "a", "copies")[0]).toEqual(row("a", "interstellar-compass-4", "1"));
+    expect(setTargetRowGoalMode([shiny], "a", "crafts")[0]).toEqual(
+      row("a", "interstellar-compass-4", String(CRAFT_GOAL_DEFAULT_COUNT), true)
+    );
+    // Stones can't be shiny.
+    expect(setTargetRowGoalMode([row("a", "soul-stone-2")], "a", "shiny")[0]).toEqual(row("a", "soul-stone-2"));
+  });
+
+  it("only picks rarities the item comes in", () => {
+    const ankh = shinyRow("a", "tungsten-ankh-3", "50", "legendary");
+    expect(setTargetRowShinyRarity([ankh], "a", "epic")[0].shinyRarity).toBe("legendary");
+    expect(setTargetRowShinyRarity([ankh], "a", "rare")[0].shinyRarity).toBe("rare");
+  });
+
+  it("follows a new item to its nearest rarity, or becomes one copy", () => {
+    const epicCompass = [shinyRow("a", "interstellar-compass-4", "40", "epic")];
+    expect(selectTargetRowOption(epicCompass, "a", option("tungsten-ankh-3"))[0]).toEqual(
+      shinyRow("a", "tungsten-ankh-3", "40", "legendary")
+    );
+    expect(selectTargetRowOption(epicCompass, "a", option("soul-stone-2"))[0]).toEqual(row("a", "soul-stone-2"));
+  });
+
+  it("stores the percent and rarity, and clamps the percent on load", () => {
+    const rows = [shinyRow("a", "interstellar-compass-4", "50", "epic")];
+    expect(targetRowToPlannerTarget(rows[0])).toEqual({
+      targetItemId: "interstellar-compass-4",
+      quantity: 50,
+      shinyRarity: "epic",
+    });
+    expect(parseStoredTargetRows(serializeTargetRows(rows), options)).toEqual([
+      shinyRow("target-1", "interstellar-compass-4", "50", "epic"),
+    ]);
+    const raw = JSON.stringify([
+      { targetItemId: "interstellar-compass-4", quantity: 400, shinyRarity: "legendary" },
+      { targetItemId: "soul-stone-2", quantity: 50, shinyRarity: "legendary" },
+    ]);
+    expect(parseStoredTargetRows(raw, options)).toEqual([
+      shinyRow("target-1", "interstellar-compass-4", "99", "legendary"),
+      row("target-2", "soul-stone-2", "1"),
+    ]);
+    expect(normalizeTargetRowQuantity([shinyRow("a", "interstellar-compass-4", "0", "rare")], "a")[0].quantityInput).toBe(
+      "50"
+    );
+  });
+
+  it("imports into the XP planner as the craft count that gives the chance", () => {
+    const steady = 0.01 ** 0.7;
+    const crafts = Math.ceil(Math.log(0.5) / Math.log(1 - steady));
+    expect(
+      plannerRowsToKeepRows([shinyRow("a", "interstellar-compass-4", "50", "legendary")], {}, {
+        craftCounts: { interstellar_compass_4: 400 },
+        craftingXp: getCraftingLevelTotalXpForLevel(30),
+      })
+    ).toEqual([row("a", "interstellar-compass-4", String(400 + crafts), true)]);
   });
 });

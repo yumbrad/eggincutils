@@ -86,7 +86,15 @@ import {
   type VirtueLastTankTopUp,
   type VirtueTopUpFamily,
 } from "../../lib/virtue-top-up";
-import GoalRowsEditor, { type GoalRowsChange } from "../goal-rows-editor";
+import GoalRowsEditor, { formatShinyPercent, type GoalRowsChange } from "../goal-rows-editor";
+import {
+  MAX_SHINY_GOAL_CRAFTS,
+  SHINY_RARITY_LABELS,
+  shinyOddsForPlan,
+  type ShinyGoalPlan,
+  type ShinyOdds,
+  type ShinyRarity,
+} from "../../lib/shiny-odds";
 import styles from "./page.module.css";
 
 type ShipLevelInfo = {
@@ -156,6 +164,8 @@ type PlanResponse = {
     targetItemId: string;
     quantity: number;
     targets: Array<{ targetItemId: string; quantity: number; craftGoal?: boolean }>;
+    /** What each shiny goal became: the crafts that give its chance. */
+    shinyGoals?: ShinyGoalPlan[];
     priorityTime: number;
     objectiveMode: "ge" | "virtueFuel";
     geCost: number;
@@ -376,6 +386,12 @@ type SolveSnapshotCombo = {
   targetAfxId: number;
 };
 
+/**
+ * The download: the solve's inputs (what scripts/mission-craft-run-snapshot.ts
+ * replays) and, under `output`, the plan they produced. `kind` stays
+ * "solve-input" because the replay script checks it; readers skip sections
+ * they don't use.
+ */
 type SolveInputSnapshotFile = {
   schemaVersion: 1;
   kind: "mission-craft-planner-solve-input";
@@ -386,6 +402,13 @@ type SolveInputSnapshotFile = {
   advancedCompare: {
     availableCombos: SolveSnapshotCombo[];
     selectedCombos: SolveSnapshotCombo[];
+  };
+  output: {
+    /** When the plan was solved (or restored from the saved session). */
+    plannedAt: string | null;
+    /** The plan response as the planner returned it, EID redacted. */
+    profile: PlanResponse["profile"];
+    plan: PlanResponse["plan"];
   };
 };
 
@@ -444,10 +467,20 @@ type TimelineLaneBlock = {
   endSeconds: number;
 };
 
+type ShinyOddsPill = {
+  rarity: ShinyRarity;
+  chance: number;
+  /** The shiny goal's chance, on the rarity it aims for. */
+  goalChance: number | null;
+  title: string;
+};
+
 type CraftPlanDetailRow = {
   itemId: string;
   /** Set when a craft-count goal put this row in the table. */
   craftGoalLabel: string | null;
+  /** A goal artifact's odds of ending with each shiny rarity, when there's any chance. */
+  shinyOdds: ShinyOddsPill[] | null;
   plannedCraftCount: number;
   have: number | null;
   requiredForChain: number;
@@ -460,6 +493,71 @@ type CraftPlanDetailRow = {
   fromConsumptionTooltip: string | null;
   consumedTooltip: string | null;
 };
+
+/** A plan's chance as a whole percent, without rounding to a certain 0% or 100%. */
+function formatOddsPercent(chance: number): string {
+  const percent = chance * 100;
+  if (percent <= 0) {
+    return "0%";
+  }
+  if (percent < 0.5) {
+    return "<1%";
+  }
+  if (percent >= 99.5 && percent < 100) {
+    return ">99%";
+  }
+  return `${Math.round(percent)}%`;
+}
+
+/**
+ * The odds pills for a goal artifact: each of its shiny rarities' chance of at
+ * least one by the end of the plan, with where it comes from in the tooltip.
+ * Null when nothing in the plan can make it shiny and no shiny goal asks.
+ */
+function buildShinyOddsPills(odds: ShinyOdds[], goal: ShinyGoalPlan | undefined, itemLabel: string): ShinyOddsPill[] | null {
+  if (odds.length === 0 || (!goal && odds.every((entry) => entry.chance <= 0))) {
+    return null;
+  }
+  return odds.map((entry) => {
+    const name = SHINY_RARITY_LABELS[entry.rarity];
+    const rolls = entry.crafts;
+    const lines = [
+      `${name}: ${formatOddsPercent(entry.chance)} chance of at least one ${itemLabel} ${
+        entry.rarity === "legendary" ? "" : "of this rarity or better "
+      }by the end of the plan.`,
+    ];
+    if (rolls.crafts > 0) {
+      const each =
+        rolls.firstChance === rolls.lastChance
+          ? formatShinyPercent(rolls.firstChance)
+          : `${formatShinyPercent(rolls.firstChance)} → ${formatShinyPercent(rolls.lastChance)}`;
+      const levels =
+        rolls.startLevel === rolls.endLevel
+          ? `crafting level ${rolls.startLevel}`
+          : `crafting level ${rolls.startLevel} → ${rolls.endLevel}`;
+      lines.push(
+        `From ${rolls.crafts.toLocaleString()} planned ${rolls.crafts === 1 ? "craft" : "crafts"}: ${each} each (crafted ${rolls.craftedBefore.toLocaleString()} → ${(rolls.craftedBefore + rolls.crafts).toLocaleString()}, ${levels}).`
+      );
+    } else {
+      lines.push("No planned crafts.");
+    }
+    if (entry.drops > 0) {
+      lines.push(`From drops: ${entry.drops.toLocaleString(undefined, { maximumFractionDigits: 3 })} expected from the planned missions.`);
+    }
+    const goalChance = goal && goal.rarity === entry.rarity ? goal.targetChance : null;
+    if (goalChance != null && goal) {
+      lines.push(
+        goal.reached
+          ? `Goal: ${Math.round(goalChance * 100)}%. The plan crafts enough to reach it from crafting alone; drops and ingredient crafts' XP add the rest.`
+          : `Goal: ${Math.round(goalChance * 100)}%, more than ${MAX_SHINY_GOAL_CRAFTS.toLocaleString()} crafts can reach.`
+      );
+    }
+    if (entry.rarity === "rare" && rolls.crafts > 0 && entry.lastExactChance < 0.0005) {
+      lines.push("An exactly-rare craft has no chance now: epic and legendary take its share at this crafting level and craft count.");
+    }
+    return { rarity: entry.rarity, chance: entry.chance, goalChance, title: lines.join("\n") };
+  });
+}
 
 type MissionTimeline = {
   lanes: TimelineLaneBlock[][];
@@ -3715,9 +3813,16 @@ export default function MissionCraftPlannerPage() {
     }
 
     const plannedCraftCountByItemId = new Map<string, number>();
+    const plannedCraftsByKey: Record<string, number> = {};
     response.plan.crafts.forEach((craft) => {
       plannedCraftCountByItemId.set(craft.itemId, Math.max(0, craft.count));
+      plannedCraftsByKey[itemIdToCanonicalKey(craft.itemId)] = Math.max(0, craft.count);
     });
+    // Every goal artifact shows its shiny odds; a shiny goal also marks the rarity it aims for.
+    const goalItemKeys = new Set(planTargets.map((target) => itemIdToCanonicalKey(target.targetItemId)));
+    const shinyGoalByItemKey = new Map(
+      (response.plan.shinyGoals || []).map((goal) => [itemIdToCanonicalKey(goal.itemId), goal])
+    );
 
     const rowItemKeys = new Set<string>([
       ...Object.keys(requiredByItemKey),
@@ -3748,7 +3853,10 @@ export default function MissionCraftPlannerPage() {
           return null;
         }
         let craftGoalLabel: string | null = null;
-        if (craftGoalTotal > 0) {
+        const shinyGoal = shinyGoalByItemKey.get(itemKey);
+        if (shinyGoal) {
+          craftGoalLabel = `shiny goal: ${SHINY_RARITY_LABELS[shinyGoal.rarity]} ${Math.round(shinyGoal.targetChance * 100)}% · ${shinyGoal.crafts.toLocaleString()} ${shinyGoal.crafts === 1 ? "craft" : "crafts"}`;
+        } else if (craftGoalTotal > 0) {
           const craftedBefore = profileSnapshot
             ? Math.max(0, Math.round(profileSnapshot.craftCounts[itemKey] || 0))
             : null;
@@ -3757,6 +3865,22 @@ export default function MissionCraftPlannerPage() {
               ? `craft goal ${craftGoalTotal.toLocaleString()}`
               : `craft goal ${craftGoalTotal.toLocaleString()} · ${craftedBefore.toLocaleString()} → ${(craftedBefore + plannedCraftCount).toLocaleString()}`;
         }
+        const shinyOdds =
+          goalItemKeys.has(itemKey) && profileSnapshot
+            ? buildShinyOddsPills(
+                shinyOddsForPlan({
+                  itemKey,
+                  craftedBefore: Math.max(0, Math.round(profileSnapshot.craftCounts[itemKey] || 0)),
+                  craftingXp: profileSnapshot.craftingXp || 0,
+                  plannedCrafts: plannedCraftsByKey,
+                  missions: response.plan.missions,
+                  loot: lootData,
+                  zerogLevel: response.profile.epicResearchZerogLevel,
+                }),
+                shinyGoal,
+                itemIdToLabel(itemId)
+              )
+            : null;
         const have = profileSnapshot ? Math.max(0, profileSnapshot.inventory[itemKey] || 0) : null;
         const expectedMission =
           planTargetCraftedOnly && targetKeys.has(itemKey) && isCraftedOnlyEligibleGoalKey(itemKey)
@@ -3846,6 +3970,7 @@ export default function MissionCraftPlannerPage() {
         return {
           itemId,
           craftGoalLabel,
+          shinyOdds,
           plannedCraftCount,
           have,
           requiredForChain,
@@ -3877,7 +4002,7 @@ export default function MissionCraftPlannerPage() {
     });
 
     return rows;
-  }, [lastSolveRequest?.targetCraftedOnly, profileSnapshot, response]);
+  }, [lastSolveRequest?.targetCraftedOnly, lootData, profileSnapshot, response]);
   const missionPrepTargetOverrideByIndex = useMemo(() => {
     const overrides = new Map<number, string>();
     if (!response) {
@@ -4693,7 +4818,7 @@ export default function MissionCraftPlannerPage() {
             }
           }
           break;
-        case "toggleCraftGoal":
+        case "goalMode":
           if (primary?.id === change.rowId) {
             const primaryQuantity = normalizedTargetQuantity(primary.quantityInput);
             setQuantity(primaryQuantity);
@@ -4769,9 +4894,14 @@ export default function MissionCraftPlannerPage() {
         availableCombos,
         selectedCombos,
       },
+      output: {
+        plannedAt: planReceivedAtMs == null ? null : new Date(planReceivedAtMs).toISOString(),
+        profile: { ...response.profile, eid: sanitizedProfile.eid },
+        plan: response.plan,
+      },
     };
     const capturedDate = payload.capturedAt.slice(0, 19).replaceAll(":", "-").replace("T", "_");
-    const fileName = `mission-craft-solve-input-${capturedDate}.json`;
+    const fileName = `mission-craft-solve-${capturedDate}.json`;
     const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -5322,6 +5452,8 @@ export default function MissionCraftPlannerPage() {
                 onRowsChange={handleTargetRowsChange}
                 options={targetOptions}
                 craftCounts={profileSnapshot ? profileSnapshot.craftCounts : null}
+                craftingXp={profileSnapshot ? profileSnapshot.craftingXp : null}
+                allowShinyGoals
                 newRowItemId={targetItemId}
               />
             </div>
@@ -5840,6 +5972,25 @@ export default function MissionCraftPlannerPage() {
                                 {craft.craftGoalLabel && (
                                   <div className={styles.craftGoalTag}>{craft.craftGoalLabel}</div>
                                 )}
+                                {craft.shinyOdds && (
+                                  <div className={styles.shinyOdds} aria-label="Shiny odds by the end of the plan">
+                                    {craft.shinyOdds.map((pill) => (
+                                      <span
+                                        key={pill.rarity}
+                                        className={styles.shinyOddsPill}
+                                        data-rarity={pill.rarity}
+                                        data-goal={pill.goalChance != null ? "1" : "0"}
+                                        data-none={pill.chance <= 0 ? "1" : "0"}
+                                        title={pill.title}
+                                      >
+                                        {SHINY_RARITY_LABELS[pill.rarity]} {formatOddsPercent(pill.chance)}
+                                        {pill.goalChance != null && (
+                                          <span className={styles.shinyOddsGoal}>goal {Math.round(pill.goalChance * 100)}%</span>
+                                        )}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
                               </div>
                             </div>
                           </td>
@@ -6201,7 +6352,7 @@ export default function MissionCraftPlannerPage() {
                   className={styles.compareSnapshotButton}
                   onClick={downloadSolveSnapshot}
                   disabled={!profileSnapshot || !lastSolveRequest}
-                  title="Download a reproducible input snapshot (settings + profile state)"
+                  title="Download the solve: its inputs (settings and profile state, replayable) and the plan they produced"
                 >
                   Download solve snapshot
                 </button>

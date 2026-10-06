@@ -1,6 +1,17 @@
 import { artifactDisplayMap, itemIdToCanonicalKey, itemKeyToDisplayName, itemKeyToIconUrl, itemKeyToId } from "./item-utils";
 import { LOCAL_PREF_KEYS, readFirstStoredString } from "./local-preferences";
 import { itemIdTakesCraftCountGoal, recipes } from "./recipes";
+import {
+  craftsForShinyChance,
+  DEFAULT_SHINY_GOAL_PERCENT,
+  defaultShinyRarity,
+  itemIdTakesShinyGoal,
+  MAX_SHINY_GOAL_PERCENT,
+  MIN_SHINY_GOAL_PERCENT,
+  SHINY_RARITIES,
+  shinyRaritiesFor,
+  type ShinyRarity,
+} from "./shiny-odds";
 
 /**
  * Goal rows ("Soul stone (T2) ×1", "Gusset (T3), craft count 400"): the row
@@ -24,6 +35,9 @@ export type PlannerTargetRow = {
   quantityInput: string;
   /** Read the quantity as an all-time craft-count goal rather than copies. */
   craftGoal: boolean;
+  /** Read the quantity as a percent chance of at least one copy of this
+   *  rarity or better (a shiny goal); craftGoal is then false. */
+  shinyRarity?: ShinyRarity;
 };
 
 /** A goal row as stored and as sent to the planners. */
@@ -31,7 +45,31 @@ export type PlannerTargetInput = {
   targetItemId: string;
   quantity: number;
   craftGoal?: boolean;
+  shinyRarity?: ShinyRarity;
 };
+
+export type GoalMode = "copies" | "crafts" | "shiny";
+
+/** What a row's quantity means. */
+export function goalRowMode(row: PlannerTargetRow): GoalMode {
+  if (row.shinyRarity && itemIdTakesShinyGoal(row.itemId)) {
+    return "shiny";
+  }
+  return row.craftGoal && itemIdTakesCraftCountGoal(row.itemId) ? "crafts" : "copies";
+}
+
+export function normalizedShinyGoalPercent(rawValue: string): number {
+  return Math.max(MIN_SHINY_GOAL_PERCENT, Math.min(MAX_SHINY_GOAL_PERCENT, Math.round(Number(rawValue) || DEFAULT_SHINY_GOAL_PERCENT)));
+}
+
+/** The rarity a row keeps on a new item: the same one when the item has it, else the item's best. */
+function shinyRarityFor(itemId: string, wanted: ShinyRarity | undefined): ShinyRarity | undefined {
+  const itemKey = itemIdToCanonicalKey(itemId);
+  if (wanted && shinyRaritiesFor(itemKey).includes(wanted)) {
+    return wanted;
+  }
+  return defaultShinyRarity(itemKey) ?? undefined;
+}
 
 /** Craft count a new craft-count goal starts at: where an artifact's shiny
  *  (rarity) luck from crafting stops improving. Only artifacts take the goal
@@ -74,6 +112,13 @@ export function normalizedTargetQuantity(rawValue: string): number {
 }
 
 export function targetRowToPlannerTarget(row: PlannerTargetRow): PlannerTargetInput {
+  if (goalRowMode(row) === "shiny") {
+    return {
+      targetItemId: row.itemId,
+      quantity: normalizedShinyGoalPercent(row.quantityInput),
+      shinyRarity: row.shinyRarity,
+    };
+  }
   const target: PlannerTargetInput = {
     targetItemId: row.itemId,
     quantity: normalizedTargetQuantity(row.quantityInput),
@@ -105,6 +150,7 @@ export function parseStoredTargetRows(raw: string | null, targetOptions: TargetO
         quantity?: unknown;
         quantityInput?: unknown;
         craftGoal?: unknown;
+        shinyRarity?: unknown;
       };
       const itemId = typeof record.targetItemId === "string"
         ? record.targetItemId
@@ -114,7 +160,28 @@ export function parseStoredTargetRows(raw: string | null, targetOptions: TargetO
       if (!availableTargets.has(itemId)) {
         continue;
       }
-      const storedQuantity = Math.max(1, Math.min(MAX_TARGET_QUANTITY, Math.round(Number(record.quantity ?? record.quantityInput) || 1)));
+      const shinyRarity =
+        typeof record.shinyRarity === "string" &&
+        (SHINY_RARITIES as readonly string[]).includes(record.shinyRarity) &&
+        itemIdTakesShinyGoal(itemId) &&
+        shinyRaritiesFor(itemIdToCanonicalKey(itemId)).includes(record.shinyRarity as ShinyRarity)
+          ? (record.shinyRarity as ShinyRarity)
+          : undefined;
+      if (shinyRarity) {
+        rows.push({
+          id: `target-${rows.length + 1}`,
+          itemId,
+          quantityInput: String(normalizedShinyGoalPercent(String(record.quantity ?? record.quantityInput))),
+          craftGoal: false,
+          shinyRarity,
+        });
+        continue;
+      }
+      // A shiny goal on an item that can't take one loads as one copy.
+      const storedQuantity =
+        record.shinyRarity != null
+          ? 1
+          : Math.max(1, Math.min(MAX_TARGET_QUANTITY, Math.round(Number(record.quantity ?? record.quantityInput) || 1)));
       // Only artifacts take a craft-count goal. A saved goal on a stone or an
       // ingredient loads as copies, and a seeded count drops back to one copy
       // (as toggling the chip off does) rather than asking for hundreds.
@@ -189,6 +256,13 @@ export function selectTargetRowOption(rows: PlannerTargetRow[], rowId: string, o
     if (row.id !== rowId) {
       return row;
     }
+    if (goalRowMode(row) === "shiny") {
+      // A shiny goal follows the new item to its nearest rarity, or becomes one copy.
+      const shinyRarity = itemIdTakesShinyGoal(option.itemId) ? shinyRarityFor(option.itemId, row.shinyRarity) : undefined;
+      return shinyRarity
+        ? { ...row, itemId: option.itemId, shinyRarity }
+        : { id: row.id, itemId: option.itemId, quantityInput: "1", craftGoal: false };
+    }
     const craftGoal = row.craftGoal && itemIdTakesCraftCountGoal(option.itemId);
     // A seeded craft count drops back to one copy when the new item can't
     // take a craft-count goal (a stone, an ingredient or a tier-1 artifact),
@@ -211,10 +285,53 @@ export function normalizeTargetRowQuantity(rows: PlannerTargetRow[], rowId: stri
     if (row.id !== rowId) {
       return row;
     }
+    if (goalRowMode(row) === "shiny") {
+      return { ...row, quantityInput: String(normalizedShinyGoalPercent(row.quantityInput)) };
+    }
     const parsed = Number(row.quantityInput);
     const quantity = Number.isFinite(parsed) ? Math.max(1, Math.min(MAX_TARGET_QUANTITY, Math.round(parsed))) : 1;
     return { ...row, quantityInput: String(quantity) };
   });
+}
+
+/**
+ * Switch what a row's quantity means. Copies, craft counts and percents live
+ * on different scales, so a quantity still at the mode's default moves to the
+ * new mode's default (one copy, CRAFT_GOAL_DEFAULT_COUNT crafts, 50%) and a
+ * number the player typed carries over where it fits.
+ */
+export function setTargetRowGoalMode(rows: PlannerTargetRow[], rowId: string, mode: GoalMode): PlannerTargetRow[] {
+  return rows.map((row) => {
+    const current = goalRowMode(row);
+    if (row.id !== rowId || current === mode) {
+      return row;
+    }
+    if (mode === "shiny") {
+      const shinyRarity = itemIdTakesShinyGoal(row.itemId) ? shinyRarityFor(row.itemId, row.shinyRarity) : undefined;
+      return shinyRarity
+        ? { ...row, craftGoal: false, shinyRarity, quantityInput: String(DEFAULT_SHINY_GOAL_PERCENT) }
+        : row;
+    }
+    if (mode === "crafts" && !itemIdTakesCraftCountGoal(row.itemId)) {
+      return row;
+    }
+    const base: PlannerTargetRow = { id: row.id, itemId: row.itemId, quantityInput: row.quantityInput, craftGoal: false };
+    if (current === "shiny") {
+      // A percent means nothing as copies or crafts.
+      return mode === "crafts"
+        ? { ...base, craftGoal: true, quantityInput: String(CRAFT_GOAL_DEFAULT_COUNT) }
+        : { ...base, quantityInput: "1" };
+    }
+    return toggleTargetRowCraftGoal([row], rowId)[0];
+  });
+}
+
+export function setTargetRowShinyRarity(rows: PlannerTargetRow[], rowId: string, rarity: ShinyRarity): PlannerTargetRow[] {
+  return rows.map((row) =>
+    row.id === rowId && goalRowMode(row) === "shiny" && shinyRaritiesFor(itemIdToCanonicalKey(row.itemId)).includes(rarity)
+      ? { ...row, shinyRarity: rarity }
+      : row
+  );
 }
 
 export function toggleTargetRowCraftGoal(rows: PlannerTargetRow[], rowId: string): PlannerTargetRow[] {
@@ -356,14 +473,29 @@ export function inHandInventory(
 export function plannerRowsToKeepRows(
   rows: PlannerTargetRow[],
   inventory: Record<string, number>,
-  craftedOnly: { craftCounts: Record<string, number> } | null = null
+  options: { craftCounts?: Record<string, number>; craftingXp?: number; craftedOnly?: boolean } = {}
 ): PlannerTargetRow[] {
+  const craftedSoFar = (itemId: string) =>
+    Math.max(0, Math.round(Number(options.craftCounts?.[itemIdToCanonicalKey(itemId)]) || 0));
   return rows.map((row) => {
-    if (row.craftGoal && itemIdTakesCraftCountGoal(row.itemId)) {
+    const mode = goalRowMode(row);
+    if (mode === "shiny") {
+      // A shiny goal is the crafts that give its chance: crafted so far + those crafts.
+      const crafted = craftedSoFar(row.itemId);
+      const needed = craftsForShinyChance({
+        itemKey: itemIdToCanonicalKey(row.itemId),
+        rarity: row.shinyRarity!,
+        targetChance: normalizedShinyGoalPercent(row.quantityInput) / 100,
+        craftedBefore: crafted,
+        craftingXp: options.craftingXp || 0,
+      });
+      return { id: row.id, itemId: row.itemId, craftGoal: true, quantityInput: String(crafted + needed.crafts) };
+    }
+    if (mode === "crafts") {
       return row;
     }
-    if (craftedOnly && itemIdTakesCraftCountGoal(row.itemId)) {
-      const crafted = Math.max(0, Math.round(Number(craftedOnly.craftCounts[itemIdToCanonicalKey(row.itemId)]) || 0));
+    if (options.craftedOnly && itemIdTakesCraftCountGoal(row.itemId)) {
+      const crafted = craftedSoFar(row.itemId);
       const total = Math.min(MAX_TARGET_QUANTITY, normalizedTargetQuantity(row.quantityInput) + crafted);
       return { ...row, craftGoal: true, quantityInput: String(total) };
     }

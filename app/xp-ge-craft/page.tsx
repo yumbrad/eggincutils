@@ -1611,7 +1611,10 @@ export default function XpGeCraftPage(): JSX.Element {
     setDraftCraftLimitInputs(craftLimitsToInputs(savedCraftLimits));
     setPrePlanSends(parseStoredPrePlanSends(readFirstStoredString([LOCAL_PREF_KEYS.craftPrePlanSends])));
     setIncludeInFlight(readStoredBoolean([LOCAL_PREF_KEYS.craftIncludeInFlight]) ?? false);
-    const savedGoalRows = parseStoredTargetRows(readFirstStoredString([LOCAL_PREF_KEYS.craftGoalRows]), GOAL_TARGET_OPTIONS) || [];
+    // Shiny goals arrive here only as the craft counts the import turns them into.
+    const savedGoalRows = (
+      parseStoredTargetRows(readFirstStoredString([LOCAL_PREF_KEYS.craftGoalRows]), GOAL_TARGET_OPTIONS) || []
+    ).map((row) => (row.shinyRarity ? { id: row.id, itemId: row.itemId, quantityInput: "1", craftGoal: false } : row));
     setGoalRows(savedGoalRows);
     setAppliedGoalsKey(JSON.stringify(goalRowsToReservationGoals(savedGoalRows)));
     setPrefsLoaded(true);
@@ -2249,9 +2252,13 @@ export default function XpGeCraftPage(): JSX.Element {
     const saved = plannerRowsToKeepRows(
       plannerRows,
       inHandInventory(planSourceInventory, planExpectedDrops),
-      craftedOnly ? { craftCounts: planSourceCraftCounts } : null
+      { craftCounts: planSourceCraftCounts, craftingXp: planSourceCraftingXp ?? 0, craftedOnly }
     );
-    const convertedRows = new Set(saved.filter((row, index) => row.craftGoal && !plannerRows[index].craftGoal));
+    // Craft counts the "only crafted" setting made (shiny goals always come in as craft counts).
+    const convertedRows = new Set(
+      saved.filter((row, index) => row.craftGoal && !plannerRows[index].craftGoal && !plannerRows[index].shinyRarity)
+    );
+    const shinyRows = new Set(saved.filter((_, index) => Boolean(plannerRows[index].shinyRarity)));
     const sameGoal = (left: PlannerTargetRow, right: PlannerTargetRow) =>
       left.itemId === right.itemId &&
       left.craftGoal === right.craftGoal &&
@@ -2262,8 +2269,10 @@ export default function XpGeCraftPage(): JSX.Element {
     const imported = added.slice(0, room);
     setGoalRows([...current, ...imported.map((row) => ({ ...row, id: newTargetRowId() }))]);
     const converted = imported.filter((row) => convertedRows.has(row)).length;
+    const shiny = imported.filter((row) => shinyRows.has(row)).length;
     const convertedNote =
-      converted > 0 ? ` · ${converted} as craft counts (AAP "only crafted" is on)` : "";
+      (converted > 0 ? ` · ${converted} as craft counts (AAP "only crafted" is on)` : "") +
+      (shiny > 0 ? ` · ${shiny} shiny ${shiny === 1 ? "goal" : "goals"} as the crafts that give their chance` : "");
     setGoalImportNote(
       added.length === 0
         ? "Already here"
@@ -2619,7 +2628,7 @@ export default function XpGeCraftPage(): JSX.Element {
                   className={styles.goalsImportButton}
                   onClick={importPlannerGoals}
                   disabled={savedPlannerGoalCount === 0 || !planSourceInventory}
-                  title={'Copy the goals saved in the Artifact Attainment Planner. Its copies goals mean N more, so they arrive as what you have in hand + N; expected drops from sends and ships in the air count toward them, not on top. With its "Artifacts: only crafted" on, artifact goals mean N more crafts instead, so they arrive as craft counts: crafted so far + N.'}
+                  title={'Copy the goals saved in the Artifact Attainment Planner. Its copies goals mean N more, so they arrive as what you have in hand + N; expected drops from sends and ships in the air count toward them, not on top. With its "Artifacts: only crafted" on, artifact goals mean N more crafts instead, so they arrive as craft counts: crafted so far + N. Shiny goals arrive as the craft count that gives their chance from crafting alone.'}
                 >
                   Import my AAP goals
                 </button>

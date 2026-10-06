@@ -7,19 +7,34 @@ import {
   CRAFT_DISCOUNT_MAX_COUNT,
   CRAFT_GOAL_DEFAULT_COUNT,
   filterTargetOptions,
+  goalRowMode,
   MAX_TARGET_ROWS,
+  MAX_TARGET_QUANTITY,
   newTargetRowId,
+  normalizedShinyGoalPercent,
   normalizedTargetQuantity,
   normalizeTargetRowQuantity,
   removeTargetRow,
   selectTargetRowOption,
+  setTargetRowGoalMode,
   setTargetRowQuantityInput,
-  toggleTargetRowCraftGoal,
+  setTargetRowShinyRarity,
+  type GoalMode,
   type PlannerTargetRow,
   type TargetOption,
 } from "../lib/goal-rows";
 import { itemIdToCanonicalKey } from "../lib/item-utils";
 import { itemIdTakesCraftCountGoal } from "../lib/recipes";
+import {
+  craftsForShinyChance,
+  itemIdTakesShinyGoal,
+  MAX_SHINY_GOAL_CRAFTS,
+  MAX_SHINY_GOAL_PERCENT,
+  MIN_SHINY_GOAL_PERCENT,
+  SHINY_RARITY_LABELS,
+  shinyRaritiesFor,
+  type ShinyRarity,
+} from "../lib/shiny-odds";
 import styles from "./goal-rows-editor.module.css";
 
 /** What a row update did, for pages that mirror the first row elsewhere. */
@@ -27,12 +42,23 @@ export type GoalRowsChange =
   | { kind: "select"; rowId: string }
   | { kind: "quantity"; rowId: string; rawValue: string }
   | { kind: "normalizeQuantity"; rowId: string }
-  | { kind: "toggleCraftGoal"; rowId: string }
+  | { kind: "goalMode"; rowId: string; mode: GoalMode }
+  | { kind: "shinyRarity"; rowId: string; rarity: ShinyRarity }
   | { kind: "add"; rowId: string }
   | { kind: "remove"; rowId: string };
 
 const DEFAULT_CRAFT_COUNT_TITLE = `Aiming for an all-time craft count instead of new copies: ${CRAFT_GOAL_DEFAULT_COUNT} crafts maxes this artifact's shiny luck; ${CRAFT_DISCOUNT_MAX_COUNT} already maxes its GE discount. The count comes from your save, so it is the same on every device. Mission drops do not raise it, and copies a higher tier consumes still do, so the plan crafts exactly the difference.`;
 const DEFAULT_COPIES_TITLE = "Read this number as copies to add to what you already have.";
+const SHINY_TITLE =
+  "Aim for a chance of ending with at least one copy of this rarity or better. The plan crafts enough to reach it from crafting alone, counting your craft count and crafting level rising as you craft; shiny drops from the planned missions add to it.";
+
+/** A per-craft or overall chance: two decimals under 1%, one above. */
+export function formatShinyPercent(chance: number): string {
+  const percent = chance * 100;
+  return `${percent > 0 && percent < 1 ? percent.toFixed(2) : percent.toFixed(1)}%`;
+}
+
+const GOAL_MODE_LABELS: Record<GoalMode, string> = { copies: "copies", crafts: "craft count", shiny: "shiny" };
 
 type GoalRowsEditorProps = {
   rows: PlannerTargetRow[];
@@ -58,6 +84,10 @@ type GoalRowsEditorProps = {
   idPrefix?: string;
   /** Extra content under a row (the XP planner's keeps / status lines). */
   renderRowFooter?: (row: PlannerTargetRow, rowIndex: number) => ReactNode;
+  /** Offer shiny-chance goals (the attainment planner); the XP planner imports them as craft counts. */
+  allowShinyGoals?: boolean;
+  /** Lifetime crafting XP for the shiny goals' crafts estimate, or null until a profile loads. */
+  craftingXp?: number | null;
 };
 
 /**
@@ -79,6 +109,8 @@ export default function GoalRowsEditor({
   craftCountPendingText = "craft count loads with your profile",
   idPrefix = "targetItem",
   renderRowFooter,
+  allowShinyGoals = false,
+  craftingXp = null,
 }: GoalRowsEditorProps) {
   const [activeRowId, setActiveRowId] = useState(rows[0]?.id || "target-1");
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -208,8 +240,22 @@ export default function GoalRowsEditor({
     onRowsChange((current) => normalizeTargetRowQuantity(current, rowId), { kind: "normalizeQuantity", rowId });
   }
 
-  function toggleCraftGoal(rowId: string): void {
-    onRowsChange((current) => toggleTargetRowCraftGoal(current, rowId), { kind: "toggleCraftGoal", rowId });
+  function setGoalMode(rowId: string, mode: GoalMode): void {
+    onRowsChange((current) => setTargetRowGoalMode(current, rowId, mode), { kind: "goalMode", rowId, mode });
+  }
+
+  function setShinyRarity(rowId: string, rarity: ShinyRarity): void {
+    onRowsChange((current) => setTargetRowShinyRarity(current, rowId, rarity), { kind: "shinyRarity", rowId, rarity });
+  }
+
+  // Percents step by 5 (snapping to the nearest 5), copies and crafts by 1.
+  function steppedQuantity(row: PlannerTargetRow, direction: 1 | -1): string {
+    const current = Number(row.quantityInput) || 1;
+    if (goalRowMode(row) === "shiny") {
+      const snapped = direction > 0 ? Math.floor(current / 5) * 5 + 5 : Math.ceil(current / 5) * 5 - 5;
+      return String(Math.max(MIN_SHINY_GOAL_PERCENT, Math.min(MAX_SHINY_GOAL_PERCENT, snapped)));
+    }
+    return String(Math.max(1, Math.min(MAX_TARGET_QUANTITY, current + direction)));
   }
 
   function addRow(): void {
@@ -292,13 +338,28 @@ export default function GoalRowsEditor({
       {rows.map((row, rowIndex) => {
         const option = options.find((candidate) => candidate.itemId === row.itemId) || null;
         const rowActive = row.id === activeRowId;
-        // The copies / craft-count chip is only for artifacts that can be crafted.
+        // The goal modes are only for artifacts that can be crafted.
         const takesCraftGoal = itemIdTakesCraftCountGoal(row.itemId);
-        const craftedSoFar = craftCounts
-          ? Math.max(0, Math.round(craftCounts[itemIdToCanonicalKey(row.itemId)] || 0))
-          : null;
+        const takesShinyGoal = allowShinyGoals && itemIdTakesShinyGoal(row.itemId);
+        const mode = goalRowMode(row);
+        const modes: GoalMode[] = takesShinyGoal ? ["copies", "crafts", "shiny"] : ["copies", "crafts"];
+        const itemKey = itemIdToCanonicalKey(row.itemId);
+        const craftedSoFar = craftCounts ? Math.max(0, Math.round(craftCounts[itemKey] || 0)) : null;
         const craftsToGo =
           craftedSoFar == null ? null : Math.max(0, normalizedTargetQuantity(row.quantityInput) - craftedSoFar);
+        const shinyRarities = mode === "shiny" ? shinyRaritiesFor(itemKey) : [];
+        const shinyPercent = normalizedShinyGoalPercent(row.quantityInput);
+        const shinyEstimate =
+          mode === "shiny" && row.shinyRarity && craftedSoFar != null && craftingXp != null
+            ? craftsForShinyChance({
+                itemKey,
+                rarity: row.shinyRarity,
+                targetChance: shinyPercent / 100,
+                craftedBefore: craftedSoFar,
+                craftingXp,
+              })
+            : null;
+        const quantityLabel = `${option?.label || "Target"} ${mode === "shiny" ? "chance in percent" : "quantity"}`;
         return (
           <div key={row.id} className={styles.targetRowGroup}>
           <div className={styles.targetRow} data-target-row-id={row.id}>
@@ -320,24 +381,27 @@ export default function GoalRowsEditor({
             <div className={styles.targetStepper}>
               <button
                 type="button"
-                aria-label={`Decrease ${option?.label || "target"} quantity`}
-                onClick={() => updateQuantity(row.id, String(Math.max(1, (Number(row.quantityInput) || 1) - 1)))}
+                aria-label={`Decrease ${quantityLabel}`}
+                onClick={() => updateQuantity(row.id, steppedQuantity(row, -1))}
               >
                 -
               </button>
-              <input
-                aria-label={`${option?.label || "Target"} quantity`}
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={row.quantityInput}
-                onChange={(event) => updateQuantity(row.id, event.target.value)}
-                onBlur={() => normalizeQuantity(row.id)}
-              />
+              <span className={styles.targetStepperField} data-percent={mode === "shiny" ? "1" : "0"}>
+                <input
+                  aria-label={quantityLabel}
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={row.quantityInput}
+                  onChange={(event) => updateQuantity(row.id, event.target.value)}
+                  onBlur={() => normalizeQuantity(row.id)}
+                />
+                {mode === "shiny" && <span aria-hidden="true">%</span>}
+              </span>
               <button
                 type="button"
-                aria-label={`Increase ${option?.label || "target"} quantity`}
-                onClick={() => updateQuantity(row.id, String(Math.min(9999, (Number(row.quantityInput) || 1) + 1)))}
+                aria-label={`Increase ${quantityLabel}`}
+                onClick={() => updateQuantity(row.id, steppedQuantity(row, 1))}
               >
                 +
               </button>
@@ -410,17 +474,52 @@ export default function GoalRowsEditor({
           </div>
           {takesCraftGoal && (
             <div className={styles.targetRowMeta}>
-              <button
-                type="button"
-                className={styles.targetGoalChip}
-                data-on={row.craftGoal ? "1" : "0"}
-                onClick={() => toggleCraftGoal(row.id)}
-                aria-pressed={row.craftGoal}
-                title={row.craftGoal ? craftCountTitle : copiesTitle}
-              >
-                {row.craftGoal ? "craft count" : "copies"}
-              </button>
-              {row.craftGoal ? (
+              <span className={styles.targetGoalModes} role="group" aria-label={`${option?.label || "Goal"} goal type`}>
+                {modes.map((candidate) => (
+                  <button
+                    key={candidate}
+                    type="button"
+                    className={styles.targetGoalMode}
+                    data-on={mode === candidate ? "1" : "0"}
+                    aria-pressed={mode === candidate}
+                    onClick={() => setGoalMode(row.id, candidate)}
+                    title={candidate === "shiny" ? SHINY_TITLE : candidate === "crafts" ? craftCountTitle : copiesTitle}
+                  >
+                    {GOAL_MODE_LABELS[candidate]}
+                  </button>
+                ))}
+              </span>
+              {mode === "shiny" ? (
+                <>
+                  <span className={styles.targetRarities} role="group" aria-label="Rarity">
+                    {shinyRarities.map((rarity) => (
+                      <button
+                        key={rarity}
+                        type="button"
+                        className={styles.targetRarity}
+                        data-rarity={rarity}
+                        data-on={row.shinyRarity === rarity ? "1" : "0"}
+                        aria-pressed={row.shinyRarity === rarity}
+                        disabled={shinyRarities.length === 1}
+                        onClick={() => setShinyRarity(row.id, rarity)}
+                      >
+                        {SHINY_RARITY_LABELS[rarity]}
+                      </button>
+                    ))}
+                  </span>
+                  <span className={styles.targetRowMetaText}>
+                    {shinyEstimate == null
+                      ? "crafts needed load with your profile"
+                      : !shinyEstimate.reached
+                        ? `can't reach ${shinyPercent}% within ${MAX_SHINY_GOAL_CRAFTS.toLocaleString()} crafts`
+                        : `≈ ${shinyEstimate.crafts.toLocaleString()} ${shinyEstimate.crafts === 1 ? "craft" : "crafts"} from crafting alone · ${
+                            shinyEstimate.firstChance === shinyEstimate.lastChance
+                              ? formatShinyPercent(shinyEstimate.firstChance)
+                              : `${formatShinyPercent(shinyEstimate.firstChance)} → ${formatShinyPercent(shinyEstimate.lastChance)}`
+                          } each`}
+                  </span>
+                </>
+              ) : mode === "crafts" ? (
                 <span className={styles.targetRowMetaText}>
                   {craftedSoFar == null
                     ? craftCountPendingText

@@ -57,6 +57,10 @@
   --info: #58aeff;
   --tank-marker: #e5edff;
   --sleep-bad-bg: color-mix(in oklab, #f58ca0, transparent 72%);
+  /* Shiny rarities, in the game's colors. */
+  --rarity-rare: #4aa3ff;
+  --rarity-epic: #b78cff;
+  --rarity-legendary: #ffa860;
 }
 
 :root[data-theme="light"] {
@@ -111,6 +115,9 @@
   --info: #2f6fb6;
   --tank-marker: #213754;
   --sleep-bad-bg: color-mix(in oklab, #b9a1f1, transparent 64%);
+  --rarity-rare: #1d68c4;
+  --rarity-epic: #7448c9;
+  --rarity-legendary: #b45f0d;
 }
 
 :root[data-theme="dim"] {
