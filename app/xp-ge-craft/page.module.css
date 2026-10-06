@@ -1246,6 +1246,13 @@
   cursor: help;
 }
 
+/* Odds for auto-crafted rows if crafted by hand instead: quieter than the plan's own. */
+.shinyOddsInline[data-by-hand="1"] {
+  font-style: italic;
+  font-weight: 600;
+  opacity: 0.6;
+}
+
 .shinyOddsInline [data-rarity="rare"] {
   color: var(--rarity-rare);
 }

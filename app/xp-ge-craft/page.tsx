@@ -1404,7 +1404,7 @@ function getInventoryMatrixRows(inventory: Record<string, number> | null | undef
   return rows;
 }
 
-type ShinyRunOdds = Array<{ rarity: ShinyRarity; chance: number; detail: string }>;
+type ShinyRunOdds = Array<{ rarity: ShinyRarity; chance: number; detail: string; ifByHand?: boolean }>;
 
 const SHINY_SHORT_LABELS: Record<ShinyRarity, string> = { rare: "R+", epic: "E+", legendary: "L" };
 
@@ -1432,12 +1432,15 @@ function ShinyOddsInline({
   if (!odds || odds.length === 0) {
     return null;
   }
+  const byHand = odds.some((entry) => entry.ifByHand);
   const title = [
-    `${intro} at least one shiny ${getArtifactDisplayLabel(artifact)} (auto-crafted ingredients can't be shiny):`,
+    byHand
+      ? `Auto-crafts can't be shiny. Crafted by hand instead (before the row above), these would give at least one shiny ${getArtifactDisplayLabel(artifact)}:`
+      : `${intro} at least one shiny ${getArtifactDisplayLabel(artifact)} (auto-crafted ingredients can't be shiny):`,
     ...odds.map((entry) => `${SHINY_RARITY_LABELS[entry.rarity]}: ${formatRunPercent(entry.chance)} (${entry.detail})`),
   ].join("\n");
   return (
-    <span className={styles.shinyOddsInline} title={title}>
+    <span className={styles.shinyOddsInline} data-by-hand={byHand ? "1" : "0"} title={title}>
       {odds.map((entry) => (
         <span key={entry.rarity} data-rarity={entry.rarity}>
           {SHINY_SHORT_LABELS[entry.rarity]} {formatRunPercent(entry.chance)}
@@ -2344,7 +2347,7 @@ export default function XpGeCraftPage(): JSX.Element {
     const runCounts = new Map<string, number>();
     for (const row of maxXpExecutionRows) {
       const craftedBefore = Math.max(0, Math.round(crafted[row.artifact] || 0));
-      if (row.mode === "click" && row.count > 0) {
+      if (row.count > 0) {
         const run = craftRunOdds({ itemKey: row.artifact, craftedBefore, craftingXp: xp, crafts: row.count });
         if (run.length > 0) {
           const each = (entry: (typeof run)[number]) =>
@@ -2357,8 +2360,13 @@ export default function XpGeCraftPage(): JSX.Element {
               rarity: entry.rarity,
               chance: 1 - entry.miss,
               detail: `${row.count.toLocaleString()} crafts, ${each(entry)}`,
+              // Auto-crafts can't be shiny; these odds are for crafting the row by hand instead.
+              ifByHand: row.mode === "auto",
             }))
           );
+        }
+        // The flat view describes the plan as written: only its manual crafts roll.
+        if (run.length > 0 && row.mode === "click") {
           const artifactMisses = misses.get(row.artifact) || new Map<ShinyRarity, number>();
           for (const entry of run) {
             artifactMisses.set(entry.rarity, (artifactMisses.get(entry.rarity) ?? 1) * entry.miss);
@@ -3092,7 +3100,7 @@ export default function XpGeCraftPage(): JSX.Element {
                           </button>
                           <label
                             className={styles.shinyOddsToggle}
-                            title="Show each manual craft row's chance of at least one shiny copy, by rarity. Auto-crafts can't be shiny."
+                            title="Show each row's chance of at least one shiny copy, by rarity. Auto-crafts can't be shiny, so indented rows (in grey italics) show what crafting them by hand instead would give."
                           >
                             <input type="checkbox" checked={showShinyOdds} onChange={(event) => setShowShinyOdds(event.target.checked)} />
                             Shiny odds
