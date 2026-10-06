@@ -482,6 +482,8 @@ type CraftPlanDetailRow = {
   craftGoalLabel: string | null;
   /** A goal artifact's odds of ending with each shiny rarity, when there's any chance. */
   shinyOdds: ShinyOddsPill[] | null;
+  /** One of the goals you entered (copies, craft count or shiny). */
+  isGoal: boolean;
   plannedCraftCount: number;
   have: number | null;
   requiredForChain: number;
@@ -3981,6 +3983,7 @@ export default function MissionCraftPlannerPage() {
           itemId,
           craftGoalLabel,
           shinyOdds,
+          isGoal: goalItemKeys.has(itemKey),
           plannedCraftCount,
           have,
           requiredForChain,
@@ -5978,9 +5981,10 @@ export default function MissionCraftPlannerPage() {
                     {craftPlanDetailRows.map((craft) => {
                       const iconUrl = itemIdToIconUrl(craft.itemId);
                       return (
-                        <tr key={craft.itemId}>
+                        <tr key={craft.itemId} className={craft.isGoal ? styles.craftGoalRow : undefined}>
                           <td>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              {craft.isGoal && <span className={styles.srOnly}>Goal:</span>}
                               {iconUrl && (
                                 <img
                                   src={iconUrl}
