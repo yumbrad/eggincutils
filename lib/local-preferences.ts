@@ -36,6 +36,7 @@ export const LOCAL_PREF_KEYS = {
   plannerIncludeDropFragments: "eggincutils-planner-include-drop-fragments",
   plannerDemoNoticeDismissed: "eggincutils-planner-demo-notice-dismissed",
   plannerShipDurations: "eggincutils-planner-ship-durations",
+  plannerShowAllShinyOdds: "eggincutils-planner-show-all-shiny-odds",
   plannerSession: "eggincutils-planner-session-v1",
   // The planner's last plan launches per inventory source, for the XP planner's import.
   plannerPlanLaunchesMain: "eggincutils-planner-plan-launches-main",

@@ -91,6 +91,7 @@ import {
   MAX_SHINY_GOAL_CRAFTS,
   SHINY_RARITY_LABELS,
   shinyOddsForPlan,
+  shinyRaritiesFor,
   type ShinyGoalPlan,
   type ShinyOdds,
   type ShinyRarity,
@@ -494,7 +495,7 @@ type CraftPlanDetailRow = {
   consumedTooltip: string | null;
 };
 
-/** A plan's chance as a whole percent, without rounding to a certain 0% or 100%. */
+/** A plan's chance as a whole percent, never rounded to a certain 100% (or to 0% when there's any chance). */
 function formatOddsPercent(chance: number): string {
   const percent = chance * 100;
   if (percent <= 0) {
@@ -503,7 +504,8 @@ function formatOddsPercent(chance: number): string {
   if (percent < 0.5) {
     return "<1%";
   }
-  if (percent >= 99.5 && percent < 100) {
+  // Never certain: hundreds of crafts round to exactly 1 in floating point.
+  if (percent >= 99.5) {
     return ">99%";
   }
   return `${Math.round(percent)}%`;
@@ -548,7 +550,7 @@ function buildShinyOddsPills(odds: ShinyOdds[], goal: ShinyGoalPlan | undefined,
     if (goalChance != null && goal) {
       lines.push(
         goal.reached
-          ? `Goal: ${Math.round(goalChance * 100)}%. The plan crafts enough to reach it from crafting alone; drops and ingredient crafts' XP add the rest.`
+          ? `Goal: ${Math.round(goalChance * 100)}%, which takes ${goal.crafts.toLocaleString()} ${goal.crafts === 1 ? "craft" : "crafts"} from crafting alone; drops and ingredient crafts' XP add the rest.`
           : `Goal: ${Math.round(goalChance * 100)}%, more than ${MAX_SHINY_GOAL_CRAFTS.toLocaleString()} crafts can reach.`
       );
     }
@@ -3468,6 +3470,15 @@ export default function MissionCraftPlannerPage() {
   const [consumptionDrawerOpen, setConsumptionDrawerOpen] = useState(false);
   const [selectedConsumptionItemIds, setSelectedConsumptionItemIds] = useState<string[]>(DEFAULT_CONSUMPTION_ITEM_IDS);
   const [lootData, setLootData] = useState<LootJson | null>(null);
+  // Off: only goal artifacts show shiny odds in the craft plan.
+  const [showAllShinyOdds, setShowAllShinyOdds] = useState(false);
+  useEffect(() => {
+    setShowAllShinyOdds(readStoredBoolean([LOCAL_PREF_KEYS.plannerShowAllShinyOdds]) ?? false);
+  }, []);
+  function updateShowAllShinyOdds(next: boolean): void {
+    setShowAllShinyOdds(next);
+    writeStoredBoolean([LOCAL_PREF_KEYS.plannerShowAllShinyOdds], next);
+  }
   const lootDataRef = useRef<LootJson | null>(null);
   const skipNextScopedPreferenceSaveRef = useRef(false);
   const highs = useHighsWorker();
@@ -3854,9 +3865,8 @@ export default function MissionCraftPlannerPage() {
         }
         let craftGoalLabel: string | null = null;
         const shinyGoal = shinyGoalByItemKey.get(itemKey);
-        if (shinyGoal) {
-          craftGoalLabel = `shiny goal: ${SHINY_RARITY_LABELS[shinyGoal.rarity]} ${Math.round(shinyGoal.targetChance * 100)}% · ${shinyGoal.crafts.toLocaleString()} ${shinyGoal.crafts === 1 ? "craft" : "crafts"}`;
-        } else if (craftGoalTotal > 0) {
+        // A shiny goal shows on its odds pill instead.
+        if (!shinyGoal && craftGoalTotal > 0) {
           const craftedBefore = profileSnapshot
             ? Math.max(0, Math.round(profileSnapshot.craftCounts[itemKey] || 0))
             : null;
@@ -3866,7 +3876,7 @@ export default function MissionCraftPlannerPage() {
               : `craft goal ${craftGoalTotal.toLocaleString()} · ${craftedBefore.toLocaleString()} → ${(craftedBefore + plannedCraftCount).toLocaleString()}`;
         }
         const shinyOdds =
-          goalItemKeys.has(itemKey) && profileSnapshot
+          (goalItemKeys.has(itemKey) || (showAllShinyOdds && shinyRaritiesFor(itemKey).length > 0)) && profileSnapshot
             ? buildShinyOddsPills(
                 shinyOddsForPlan({
                   itemKey,
@@ -4002,7 +4012,7 @@ export default function MissionCraftPlannerPage() {
     });
 
     return rows;
-  }, [lastSolveRequest?.targetCraftedOnly, lootData, profileSnapshot, response]);
+  }, [lastSolveRequest?.targetCraftedOnly, lootData, profileSnapshot, response, showAllShinyOdds]);
   const missionPrepTargetOverrideByIndex = useMemo(() => {
     const overrides = new Map<number, string>();
     if (!response) {
@@ -5934,7 +5944,20 @@ export default function MissionCraftPlannerPage() {
           </div>
 
           <div className="panel">
-            <h2 style={{ marginTop: 0 }}>Craft plan</h2>
+            <div className={styles.craftPlanHeader}>
+              <h2 style={{ marginTop: 0 }}>Craft plan</h2>
+              <label
+                className={styles.craftPlanOption}
+                title="Show the chance of each shiny rarity by the end of the plan on every artifact the plan crafts or drops, not just your goals."
+              >
+                <input
+                  type="checkbox"
+                  checked={showAllShinyOdds}
+                  onChange={(event) => updateShowAllShinyOdds(event.target.checked)}
+                />
+                Shiny odds for all artifacts
+              </label>
+            </div>
             {craftPlanDetailRows.length === 0 ? (
               <p className="muted" style={{ margin: 0 }}>No crafting needed.</p>
             ) : (

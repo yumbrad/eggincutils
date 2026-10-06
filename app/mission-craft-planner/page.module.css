@@ -210,6 +210,24 @@
   letter-spacing: 0.01em;
 }
 
+.craftPlanHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.craftPlanOption {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 /* A goal artifact's chance of each shiny rarity by the end of the plan. */
 .shinyOdds {
   display: flex;
