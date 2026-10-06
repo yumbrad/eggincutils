@@ -249,7 +249,21 @@ export function removeTargetRow(rows: PlannerTargetRow[], rowId: string, minRows
   return next.length >= minRows ? next : rows;
 }
 
-type StoredPlannerSourcePreferences = Partial<Record<"main" | "virtue", { targetRows?: unknown } | undefined>>;
+type StoredPlannerSourcePreferences = Partial<
+  Record<"main" | "virtue", { targetRows?: unknown; targetCraftedOnly?: unknown } | undefined>
+>;
+
+function parseSourcePreferences(raw: string | null): StoredPlannerSourcePreferences {
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as StoredPlannerSourcePreferences) : {};
+  } catch {
+    return {};
+  }
+}
 
 /**
  * The goal rows the attainment planner would load for an inventory source:
@@ -261,18 +275,7 @@ export function plannerSavedTargetRows(
   source: "main" | "virtue",
   targetOptions: TargetOption[]
 ): PlannerTargetRow[] {
-  let sourcePreferences: StoredPlannerSourcePreferences = {};
-  if (stored.sourcePreferences) {
-    try {
-      const parsed = JSON.parse(stored.sourcePreferences) as unknown;
-      if (parsed && typeof parsed === "object") {
-        sourcePreferences = parsed as StoredPlannerSourcePreferences;
-      }
-    } catch {
-      sourcePreferences = {};
-    }
-  }
-  const scoped = sourcePreferences[source];
+  const scoped = parseSourcePreferences(stored.sourcePreferences)[source];
   if (scoped && typeof scoped === "object") {
     return scoped.targetRows ? parseStoredTargetRows(JSON.stringify(scoped.targetRows), targetOptions) || [] : [];
   }
@@ -288,6 +291,33 @@ export function readPlannerSavedTargetRows(source: "main" | "virtue", targetOpti
     },
     source,
     targetOptions
+  );
+}
+
+/**
+ * Whether the attainment planner's "Artifacts: only crafted" box is on for a
+ * source: its per-source saved preferences, or the shared legacy flag before
+ * it saved any for that source.
+ */
+export function plannerSavedCraftedOnly(
+  stored: { sourcePreferences: string | null; craftedOnly: string | null },
+  source: "main" | "virtue"
+): boolean {
+  const scoped = parseSourcePreferences(stored.sourcePreferences)[source];
+  if (scoped && typeof scoped === "object") {
+    return scoped.targetCraftedOnly === true;
+  }
+  return stored.craftedOnly === "true";
+}
+
+/** Read the attainment planner's "only crafted" setting for a source from localStorage. */
+export function readPlannerSavedCraftedOnly(source: "main" | "virtue"): boolean {
+  return plannerSavedCraftedOnly(
+    {
+      sourcePreferences: readFirstStoredString([LOCAL_PREF_KEYS.plannerSourcePreferences]),
+      craftedOnly: readFirstStoredString([LOCAL_PREF_KEYS.plannerTargetCraftedOnly]),
+    },
+    source
   );
 }
 
@@ -317,12 +347,25 @@ export function inHandInventory(
  * in total, so it becomes in hand + N. Pass `inventory` without expected
  * mission drops (inHandInventory): the drops are how the planner meant to get
  * those N, so counting them in "in hand" too would ask for them twice.
- * Craft-count goals already mean the same on both pages.
+ *
+ * With the planner's "only crafted" on, "×N" means N more crafted (neither
+ * owned copies nor drops count), which is an XP-planner craft-count goal of
+ * crafted so far + N, for every artifact that takes one; other items stay
+ * copies goals. Craft-count goals already mean the same on both pages.
  */
-export function plannerRowsToKeepRows(rows: PlannerTargetRow[], inventory: Record<string, number>): PlannerTargetRow[] {
+export function plannerRowsToKeepRows(
+  rows: PlannerTargetRow[],
+  inventory: Record<string, number>,
+  craftedOnly: { craftCounts: Record<string, number> } | null = null
+): PlannerTargetRow[] {
   return rows.map((row) => {
     if (row.craftGoal && itemIdTakesCraftCountGoal(row.itemId)) {
       return row;
+    }
+    if (craftedOnly && itemIdTakesCraftCountGoal(row.itemId)) {
+      const crafted = Math.max(0, Math.round(Number(craftedOnly.craftCounts[itemIdToCanonicalKey(row.itemId)]) || 0));
+      const total = Math.min(MAX_TARGET_QUANTITY, normalizedTargetQuantity(row.quantityInput) + crafted);
+      return { ...row, craftGoal: true, quantityInput: String(total) };
     }
     const owned = Math.max(0, Math.floor(Number(inventory[itemIdToCanonicalKey(row.itemId)]) || 0));
     const total = Math.min(MAX_TARGET_QUANTITY, normalizedTargetQuantity(row.quantityInput) + owned);

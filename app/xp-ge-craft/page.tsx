@@ -28,6 +28,7 @@ import {
   parseStoredTargetRows,
   inHandInventory,
   plannerRowsToKeepRows,
+  readPlannerSavedCraftedOnly,
   readPlannerSavedTargetRows,
   serializeTargetRows,
   targetRowToPlannerTarget,
@@ -2243,7 +2244,14 @@ export default function XpGeCraftPage(): JSX.Element {
       return;
     }
     // Planner copies goals mean "N more" than you have in hand; here a goal means having N in total.
-    const saved = plannerRowsToKeepRows(plannerRows, inHandInventory(planSourceInventory, planExpectedDrops));
+    // With its "only crafted" on they mean N more crafts, which become craft-count goals.
+    const craftedOnly = readPlannerSavedCraftedOnly(goalImportSource);
+    const saved = plannerRowsToKeepRows(
+      plannerRows,
+      inHandInventory(planSourceInventory, planExpectedDrops),
+      craftedOnly ? { craftCounts: planSourceCraftCounts } : null
+    );
+    const convertedRows = new Set(saved.filter((row, index) => row.craftGoal && !plannerRows[index].craftGoal));
     const sameGoal = (left: PlannerTargetRow, right: PlannerTargetRow) =>
       left.itemId === right.itemId &&
       left.craftGoal === right.craftGoal &&
@@ -2251,13 +2259,17 @@ export default function XpGeCraftPage(): JSX.Element {
     const current = goalRows.filter((row) => row.itemId);
     const added = saved.filter((row) => !current.some((existing) => sameGoal(existing, row)));
     const room = Math.max(0, MAX_TARGET_ROWS - current.length);
-    setGoalRows([...current, ...added.slice(0, room).map((row) => ({ ...row, id: newTargetRowId() }))]);
+    const imported = added.slice(0, room);
+    setGoalRows([...current, ...imported.map((row) => ({ ...row, id: newTargetRowId() }))]);
+    const converted = imported.filter((row) => convertedRows.has(row)).length;
+    const convertedNote =
+      converted > 0 ? ` · ${converted} as craft counts (AAP "only crafted" is on)` : "";
     setGoalImportNote(
       added.length === 0
         ? "Already here"
         : added.length > room
-          ? `Imported ${room} (${MAX_TARGET_ROWS} max)`
-          : `Imported ${added.length}`
+          ? `Imported ${room} (${MAX_TARGET_ROWS} max)${convertedNote}`
+          : `Imported ${added.length}${convertedNote}`
     );
   }
 
@@ -2607,7 +2619,7 @@ export default function XpGeCraftPage(): JSX.Element {
                   className={styles.goalsImportButton}
                   onClick={importPlannerGoals}
                   disabled={savedPlannerGoalCount === 0 || !planSourceInventory}
-                  title="Copy the goals saved in the Artifact Attainment Planner. Its copies goals mean N more, so they arrive as what you have in hand + N; expected drops from sends and ships in the air count toward them, not on top."
+                  title={'Copy the goals saved in the Artifact Attainment Planner. Its copies goals mean N more, so they arrive as what you have in hand + N; expected drops from sends and ships in the air count toward them, not on top. With its "Artifacts: only crafted" on, artifact goals mean N more crafts instead, so they arrive as craft counts: crafted so far + N.'}
                 >
                   Import my AAP goals
                 </button>

@@ -10,6 +10,7 @@ import {
   parseStoredTargetRows,
   inHandInventory,
   plannerRowsToKeepRows,
+  plannerSavedCraftedOnly,
   plannerSavedTargetRows,
   removeTargetRow,
   selectTargetRowOption,
@@ -171,6 +172,43 @@ describe("inHandInventory", () => {
     expect(inHand).toEqual({ interstellar_compass_4: 111, book_of_basan_4: 3 });
     expect(plannerRowsToKeepRows([row("a", "interstellar-compass-4", "35")], inHand)).toEqual([
       row("a", "interstellar-compass-4", "146"),
+    ]);
+  });
+});
+
+describe("plannerSavedCraftedOnly", () => {
+  it("reads the per-source setting, falling back to the legacy flag", () => {
+    const sourcePreferences = JSON.stringify({ main: { targetCraftedOnly: true }, virtue: { targetRows: [] } });
+    expect(plannerSavedCraftedOnly({ sourcePreferences, craftedOnly: null }, "main")).toBe(true);
+    // A source with saved preferences but no flag is off, whatever the legacy flag says.
+    expect(plannerSavedCraftedOnly({ sourcePreferences, craftedOnly: "true" }, "virtue")).toBe(false);
+    expect(plannerSavedCraftedOnly({ sourcePreferences: null, craftedOnly: "true" }, "virtue")).toBe(true);
+    expect(plannerSavedCraftedOnly({ sourcePreferences: "garbage", craftedOnly: null }, "main")).toBe(false);
+  });
+});
+
+describe("plannerRowsToKeepRows with only crafted on", () => {
+  it("turns artifact copies goals into craft counts of crafted so far + N", () => {
+    const inventory = { interstellar_compass_4: 116, soul_stone_2: 4 };
+    const craftCounts = { interstellar_compass_4: 298 };
+    expect(
+      plannerRowsToKeepRows(
+        [
+          row("a", "interstellar-compass-4", "35"),
+          // Stones take no craft-count goal, so they stay copies (in hand + N).
+          row("b", "soul-stone-2", "3"),
+          // Craft-count goals carry over unchanged.
+          row("c", "gusset-3", "400", true),
+          row("d", "book-of-basan-4", "2"),
+        ],
+        inventory,
+        { craftCounts }
+      )
+    ).toEqual([
+      row("a", "interstellar-compass-4", "333", true),
+      row("b", "soul-stone-2", "7"),
+      row("c", "gusset-3", "400", true),
+      row("d", "book-of-basan-4", "2", true),
     ]);
   });
 });
