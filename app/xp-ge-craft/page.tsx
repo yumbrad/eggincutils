@@ -71,6 +71,7 @@ import {
   type GoalPlanSolve,
 } from "../../lib/xp-goal-plan";
 import { XP_GE_CRAFT_COPY } from "../../lib/xp-ge-craft-copy";
+import { craftRunOdds, resolveShinyGoalTargets, SHINY_RARITY_LABELS, type ShinyRarity } from "../../lib/shiny-odds";
 import GoalRowsEditor from "../goal-rows-editor";
 import styles from "./page.module.css";
 
@@ -300,7 +301,35 @@ const INVENTORY_MATRIX_FAMILIES: InventoryMatrixFamily[] = [
 
 function goalRowToReservationGoal(row: PlannerTargetRow): CraftReservationGoal {
   const target = targetRowToPlannerTarget(row);
-  return { itemId: target.targetItemId, quantity: target.quantity, craftGoal: target.craftGoal };
+  return target.shinyRarity
+    ? { itemId: target.targetItemId, quantity: target.quantity, shinyRarity: target.shinyRarity }
+    : { itemId: target.targetItemId, quantity: target.quantity, craftGoal: target.craftGoal };
+}
+
+/**
+ * Shiny goals as the craft counts that give their chance from crafting alone,
+ * counted from this profile's craft counts and crafting XP: the chance runs
+ * from now, so each calculate aims for it afresh. Other goals pass through,
+ * one for one, so results still line up with the rows.
+ */
+function resolveShinyGoals(
+  goals: CraftReservationGoal[],
+  craftCounts: Record<string, number>,
+  craftingXp: number
+): CraftReservationGoal[] {
+  if (!goals.some((goal) => goal.shinyRarity)) {
+    return goals;
+  }
+  const { targets } = resolveShinyGoalTargets(
+    goals.map((goal) => ({
+      targetItemId: goal.itemId,
+      quantity: goal.quantity,
+      craftGoal: goal.craftGoal,
+      shinyRarity: goal.shinyRarity,
+    })),
+    { craftCounts, craftingXp }
+  );
+  return targets.map((target) => ({ itemId: target.targetItemId, quantity: target.quantity, craftGoal: target.craftGoal }));
 }
 
 /** Goal rows with an item picked, as reservation goals. */
@@ -321,12 +350,13 @@ function parseGoalsKey(key: string): CraftReservationGoal[] {
 function reservationsFor(
   inventory: Record<string, number>,
   craftCounts: Record<string, number>,
+  craftingXp: number,
   goals: CraftReservationGoal[]
 ): CraftReservations | null {
   if (goals.length === 0) {
     return null;
   }
-  const reservations = reserveInventoryForGoals(inventory, craftCounts, goals);
+  const reservations = reserveInventoryForGoals(inventory, craftCounts, resolveShinyGoals(goals, craftCounts, craftingXp));
   return reservations.totalReserved > 0 ? reservations : null;
 }
 
@@ -334,11 +364,19 @@ function solveForGoals(
   highs: Highs,
   inventory: Record<string, number>,
   craftCounts: Record<string, number>,
+  craftingXp: number,
   saleEnabled: boolean,
   craftLimits: CraftLimits,
   goals: CraftReservationGoal[]
 ): { solution: Solution; goalPlan: SolvedGoalPlan } {
-  const { solution, ...goalPlan } = optimizeCraftsForGoals(highs, inventory, craftCounts, saleEnabled, craftLimits, goals);
+  const { solution, ...goalPlan } = optimizeCraftsForGoals(
+    highs,
+    inventory,
+    craftCounts,
+    saleEnabled,
+    craftLimits,
+    resolveShinyGoals(goals, craftCounts, craftingXp)
+  );
   return { solution, goalPlan: { ...goalPlan, goalKey: goalPlanKey(goalPlan.reservations) } };
 }
 
@@ -514,7 +552,7 @@ async function getOptimalCrafts(
   const craftingXp = Math.max(0, Math.floor(data.craftingXp || 0));
   // Goals are crafted in the plan as far as inventory allows; their unfinishable remainders are held back.
   return {
-    ...solveForGoals(highs, inventory, craftCounts, saleEnabled, craftLimits, goals),
+    ...solveForGoals(highs, inventory, craftCounts, craftingXp, saleEnabled, craftLimits, goals),
     inventory,
     craftCounts,
     craftingXp,
@@ -1366,6 +1404,49 @@ function getInventoryMatrixRows(inventory: Record<string, number> | null | undef
   return rows;
 }
 
+type ShinyRunOdds = Array<{ rarity: ShinyRarity; chance: number; detail: string }>;
+
+const SHINY_SHORT_LABELS: Record<ShinyRarity, string> = { rare: "R+", epic: "E+", legendary: "L" };
+
+function formatRunPercent(chance: number): string {
+  const percent = chance * 100;
+  if (percent <= 0) {
+    return "0%";
+  }
+  if (percent < 0.5) {
+    return "<1%";
+  }
+  return percent >= 99.5 ? ">99%" : `${Math.round(percent)}%`;
+}
+
+/** Compact shiny odds after an artifact name: "R+ 41% · L 3%", details in the tooltip. */
+function ShinyOddsInline({
+  odds,
+  artifact,
+  intro = "Chance these manual crafts give",
+}: {
+  odds: ShinyRunOdds | undefined;
+  artifact: string;
+  intro?: string;
+}): JSX.Element | null {
+  if (!odds || odds.length === 0) {
+    return null;
+  }
+  const title = [
+    `${intro} at least one shiny ${getArtifactDisplayLabel(artifact)} (auto-crafted ingredients can't be shiny):`,
+    ...odds.map((entry) => `${SHINY_RARITY_LABELS[entry.rarity]}: ${formatRunPercent(entry.chance)} (${entry.detail})`),
+  ].join("\n");
+  return (
+    <span className={styles.shinyOddsInline} title={title}>
+      {odds.map((entry) => (
+        <span key={entry.rarity} data-rarity={entry.rarity}>
+          {SHINY_SHORT_LABELS[entry.rarity]} {formatRunPercent(entry.chance)}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function ArtifactCell({
   artifact,
   modeLabel,
@@ -1524,12 +1605,13 @@ export default function XpGeCraftPage(): JSX.Element {
   const [planInventorySource, setPlanInventorySource] = useState<InventorySource>("main");
   const [solution, setSolution] = useState<Solution | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("xpPerGe");
-  const [hideUncraftable, setHideUncraftable] = useState<boolean>(true);
   const [minEfficiencyXpPerGe, setMinEfficiencyXpPerGe] = useState<number>(0);
   const [maxXpPlanView, setMaxXpPlanView] = useState<MaxXpPlanView>("tree");
   const [maxXpFlatSortKey, setMaxXpFlatSortKey] = useState<MaxXpFlatSortKey>("manualCrafts");
   const [maxXpFlatSortDirection, setMaxXpFlatSortDirection] = useState<SortDirection>("desc");
   const [craftingXpZoomMode, setCraftingXpZoomMode] = useState<CraftingXpZoomMode>("level");
+  // Off: the craft order shows no shiny odds (they'd crowd every row).
+  const [showShinyOdds, setShowShinyOdds] = useState<boolean>(false);
   const [standaloneOpen, setStandaloneOpen] = useState<boolean>(true);
   const [appliedCraftLimits, setAppliedCraftLimits] = useState<CraftLimits>({});
   const [draftCraftLimitInputs, setDraftCraftLimitInputs] = useState<Record<string, string>>({});
@@ -1598,6 +1680,7 @@ export default function XpGeCraftPage(): JSX.Element {
     if (savedInventorySource === "main" || savedInventorySource === "virtue") {
       setInventorySource(savedInventorySource);
     }
+    setShowShinyOdds(readStoredBoolean([LOCAL_PREF_KEYS.craftShowShinyOdds]) ?? false);
     const savedPlanView = readFirstStoredString([LOCAL_PREF_KEYS.craftMaxXpPlanView]);
     if (savedPlanView === "tree" || savedPlanView === "flat") {
       setMaxXpPlanView(savedPlanView);
@@ -1611,10 +1694,7 @@ export default function XpGeCraftPage(): JSX.Element {
     setDraftCraftLimitInputs(craftLimitsToInputs(savedCraftLimits));
     setPrePlanSends(parseStoredPrePlanSends(readFirstStoredString([LOCAL_PREF_KEYS.craftPrePlanSends])));
     setIncludeInFlight(readStoredBoolean([LOCAL_PREF_KEYS.craftIncludeInFlight]) ?? false);
-    // Shiny goals arrive here only as the craft counts the import turns them into.
-    const savedGoalRows = (
-      parseStoredTargetRows(readFirstStoredString([LOCAL_PREF_KEYS.craftGoalRows]), GOAL_TARGET_OPTIONS) || []
-    ).map((row) => (row.shinyRarity ? { id: row.id, itemId: row.itemId, quantityInput: "1", craftGoal: false } : row));
+    const savedGoalRows = parseStoredTargetRows(readFirstStoredString([LOCAL_PREF_KEYS.craftGoalRows]), GOAL_TARGET_OPTIONS) || [];
     setGoalRows(savedGoalRows);
     setAppliedGoalsKey(JSON.stringify(goalRowsToReservationGoals(savedGoalRows)));
     setPrefsLoaded(true);
@@ -1673,7 +1753,8 @@ export default function XpGeCraftPage(): JSX.Element {
       return;
     }
     writeStoredString([LOCAL_PREF_KEYS.craftMaxXpPlanView], maxXpPlanView);
-  }, [maxXpPlanView, prefsLoaded]);
+    writeStoredBoolean([LOCAL_PREF_KEYS.craftShowShinyOdds], showShinyOdds);
+  }, [maxXpPlanView, showShinyOdds, prefsLoaded]);
 
   useEffect(() => {
     if (!prefsLoaded) {
@@ -1723,17 +1804,24 @@ export default function XpGeCraftPage(): JSX.Element {
   const appliedGoals = useMemo(() => parseGoalsKey(appliedGoalsKey), [appliedGoalsKey]);
   // What goals ask of the plan, from exactly the inventory it optimizes over.
   const planReservations = useMemo(
-    () => (planSourceInventory ? reservationsFor(planSourceInventory, planSourceCraftCounts, appliedGoals) : null),
-    [planSourceInventory, planSourceCraftCounts, appliedGoals]
+    () =>
+      planSourceInventory
+        ? reservationsFor(planSourceInventory, planSourceCraftCounts, planSourceCraftingXp ?? 0, appliedGoals)
+        : null,
+    [planSourceInventory, planSourceCraftCounts, planSourceCraftingXp, appliedGoals]
   );
   const planGoalKey = useMemo(() => goalPlanKey(planReservations), [planReservations]);
   // Per-row keeps and status for the goal rows as they are now (no solve needed).
   const goalRowReservations = useMemo(
     () =>
       planSourceInventory && goalRows.length > 0
-        ? reserveInventoryForGoals(planSourceInventory, planSourceCraftCounts, goalRows.map(goalRowToReservationGoal))
+        ? reserveInventoryForGoals(
+            planSourceInventory,
+            planSourceCraftCounts,
+            resolveShinyGoals(goalRows.map(goalRowToReservationGoal), planSourceCraftCounts, planSourceCraftingXp ?? 0)
+          )
         : null,
-    [goalRows, planSourceInventory, planSourceCraftCounts]
+    [goalRows, planSourceInventory, planSourceCraftCounts, planSourceCraftingXp]
   );
 
   useEffect(() => {
@@ -1759,10 +1847,18 @@ export default function XpGeCraftPage(): JSX.Element {
       limits: appliedCraftLimits,
       goalKey: planGoalKey,
     };
-    const solved = solveForGoals(highs, planSourceInventory, planSourceCraftCounts, craftingSale, appliedCraftLimits, appliedGoals);
+    const solved = solveForGoals(
+      highs,
+      planSourceInventory,
+      planSourceCraftCounts,
+      planSourceCraftingXp ?? 0,
+      craftingSale,
+      appliedCraftLimits,
+      appliedGoals
+    );
     setSolution(solved.solution);
     setSolvedGoalPlan(solved.goalPlan);
-  }, [highs, planSourceCraftCounts, planSourceInventory, craftingSale, appliedCraftLimits, planGoalKey, appliedGoals]);
+  }, [highs, planSourceCraftCounts, planSourceCraftingXp, planSourceInventory, craftingSale, appliedCraftLimits, planGoalKey, appliedGoals]);
 
   const keepsForGoals = planReservations != null;
   const baselineCurrent =
@@ -1893,7 +1989,48 @@ export default function XpGeCraftPage(): JSX.Element {
   );
   const sortedArtifacts = solution ? getSortedArtifacts(solution, sortKey) : [];
   const sortedModeRows = standaloneSolution ? getModeComparisonRows(standaloneSolution, sortKey) : [];
-  const visibleModeRows = hideUncraftable ? sortedModeRows.filter((row) => row.count > 0) : sortedModeRows;
+  const visibleModeRows = sortedModeRows.filter((row) => row.count > 0);
+  // Each standalone row is an alternative, so its odds start from where the
+  // goal crafts leave the craft counts; the "beyond direct" row starts after
+  // that artifact's direct crafts, which come first.
+  const standaloneOddsKey = showShinyOdds
+    ? JSON.stringify([visibleModeRows.map((row) => [row.key, row.artifact, row.mode, row.count]), planSourceCraftingXp])
+    : "";
+  const standaloneCraftCounts = goalCrafts?.craftCounts ?? planSourceCraftCounts;
+  const standaloneShinyOdds = useMemo(() => {
+    const byRow = new Map<string, ShinyRunOdds>();
+    if (!standaloneOddsKey) {
+      return byRow;
+    }
+    const directCounts = new Map(
+      visibleModeRows.filter((row) => row.mode === "direct").map((row) => [row.artifact, row.count])
+    );
+    for (const row of visibleModeRows) {
+      const after = row.mode === "auto" ? directCounts.get(row.artifact) || 0 : 0;
+      const craftedBefore = Math.max(0, Math.round(standaloneCraftCounts[row.artifact] || 0)) + after;
+      const run = craftRunOdds({ itemKey: row.artifact, craftedBefore, craftingXp: planSourceCraftingXp ?? 0, crafts: row.count });
+      if (run.length === 0) {
+        continue;
+      }
+      byRow.set(
+        row.key,
+        run.map((entry) => ({
+          rarity: entry.rarity,
+          chance: 1 - entry.miss,
+          detail: `${row.count.toLocaleString()} crafts from ${craftedBefore.toLocaleString()} crafted${
+            after > 0 ? " (after the direct crafts)" : ""
+          }, ${
+            entry.firstChance === entry.lastChance
+              ? `${(entry.firstChance * 100).toFixed(2)}% each`
+              : `${(entry.firstChance * 100).toFixed(2)}% → ${(entry.lastChance * 100).toFixed(2)}% each`
+          }`,
+        }))
+      );
+    }
+    return byRow;
+    // The key holds the rows and XP; craft counts change only with a new calculate or goal crafts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [standaloneOddsKey, standaloneCraftCounts]);
   const xpPerGeModeRows = standaloneSolution ? getModeComparisonRows(standaloneSolution, "xpPerGe") : [];
   const efficiencySliderMax = xpPerGeModeRows.length > 0 ? Math.max(0, xpPerGeModeRows[0].xpPerGe) : 0;
   const efficiencySliderStep = efficiencySliderMax > 100 ? 1 : efficiencySliderMax > 10 ? 0.1 : 0.01;
@@ -2190,6 +2327,64 @@ export default function XpGeCraftPage(): JSX.Element {
         maxXpFlatSortDirection
       )
     : [];
+  // Walking the order: each manual row's odds start from the craft count and
+  // crafting XP the rows above it reach. Flat rows combine an artifact's runs.
+  const shinyOddsKey = showShinyOdds
+    ? JSON.stringify([maxXpExecutionRows.map((row) => [row.artifact, row.mode, row.count, row.xp]), planSourceCraftingXp])
+    : "";
+  const shinyOdds = useMemo(() => {
+    const byRow = new Map<string, ShinyRunOdds>();
+    const byArtifact = new Map<string, ShinyRunOdds>();
+    if (!shinyOddsKey) {
+      return { byRow, byArtifact };
+    }
+    const crafted: Record<string, number> = { ...planSourceCraftCounts };
+    let xp = planSourceCraftingXp ?? 0;
+    const misses = new Map<string, Map<ShinyRarity, number>>();
+    const runCounts = new Map<string, number>();
+    for (const row of maxXpExecutionRows) {
+      const craftedBefore = Math.max(0, Math.round(crafted[row.artifact] || 0));
+      if (row.mode === "click" && row.count > 0) {
+        const run = craftRunOdds({ itemKey: row.artifact, craftedBefore, craftingXp: xp, crafts: row.count });
+        if (run.length > 0) {
+          const each = (entry: (typeof run)[number]) =>
+            entry.firstChance === entry.lastChance
+              ? `${(entry.firstChance * 100).toFixed(2)}% each`
+              : `${(entry.firstChance * 100).toFixed(2)}% → ${(entry.lastChance * 100).toFixed(2)}% each`;
+          byRow.set(
+            row.key,
+            run.map((entry) => ({
+              rarity: entry.rarity,
+              chance: 1 - entry.miss,
+              detail: `${row.count.toLocaleString()} crafts, ${each(entry)}`,
+            }))
+          );
+          const artifactMisses = misses.get(row.artifact) || new Map<ShinyRarity, number>();
+          for (const entry of run) {
+            artifactMisses.set(entry.rarity, (artifactMisses.get(entry.rarity) ?? 1) * entry.miss);
+          }
+          misses.set(row.artifact, artifactMisses);
+          runCounts.set(row.artifact, (runCounts.get(row.artifact) || 0) + row.count);
+        }
+      }
+      crafted[row.artifact] = craftedBefore + row.count;
+      xp += row.xp;
+    }
+    for (const [artifact, artifactMisses] of misses) {
+      const crafts = runCounts.get(artifact) || 0;
+      byArtifact.set(
+        artifact,
+        Array.from(artifactMisses.entries()).map(([rarity, miss]) => ({
+          rarity,
+          chance: 1 - miss,
+          detail: `${crafts.toLocaleString()} manual crafts in all`,
+        }))
+      );
+    }
+    return { byRow, byArtifact };
+    // The key holds every input the walk reads (rows, counts, XP); craft counts change only with a new calculate.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shinyOddsKey, planSourceCraftCounts]);
   const maxXpConsumedIngredientRows = maxXpExecutionPlan
     ? getSortedConsumedIngredientRows(
         getConsumedIngredientRows(maxXpExecutionPlan.usage),
@@ -2252,13 +2447,10 @@ export default function XpGeCraftPage(): JSX.Element {
     const saved = plannerRowsToKeepRows(
       plannerRows,
       inHandInventory(planSourceInventory, planExpectedDrops),
-      { craftCounts: planSourceCraftCounts, craftingXp: planSourceCraftingXp ?? 0, craftedOnly }
+      { craftCounts: planSourceCraftCounts, craftedOnly }
     );
-    // Craft counts the "only crafted" setting made (shiny goals always come in as craft counts).
-    const convertedRows = new Set(
-      saved.filter((row, index) => row.craftGoal && !plannerRows[index].craftGoal && !plannerRows[index].shinyRarity)
-    );
-    const shinyRows = new Set(saved.filter((_, index) => Boolean(plannerRows[index].shinyRarity)));
+    // Craft counts the "only crafted" setting made.
+    const convertedRows = new Set(saved.filter((row, index) => row.craftGoal && !plannerRows[index].craftGoal));
     const sameGoal = (left: PlannerTargetRow, right: PlannerTargetRow) =>
       left.itemId === right.itemId &&
       left.craftGoal === right.craftGoal &&
@@ -2269,10 +2461,7 @@ export default function XpGeCraftPage(): JSX.Element {
     const imported = added.slice(0, room);
     setGoalRows([...current, ...imported.map((row) => ({ ...row, id: newTargetRowId() }))]);
     const converted = imported.filter((row) => convertedRows.has(row)).length;
-    const shiny = imported.filter((row) => shinyRows.has(row)).length;
-    const convertedNote =
-      (converted > 0 ? ` · ${converted} as craft counts (AAP "only crafted" is on)` : "") +
-      (shiny > 0 ? ` · ${shiny} shiny ${shiny === 1 ? "goal" : "goals"} as the crafts that give their chance` : "");
+    const convertedNote = converted > 0 ? ` · ${converted} as craft counts (AAP "only crafted" is on)` : "";
     setGoalImportNote(
       added.length === 0
         ? "Already here"
@@ -2603,6 +2792,8 @@ export default function XpGeCraftPage(): JSX.Element {
                 onRowsChange={updateGoalRows}
                 options={GOAL_TARGET_OPTIONS}
                 craftCounts={planSourceInventory ? planSourceCraftCounts : null}
+                craftingXp={planSourceInventory ? planSourceCraftingXp : null}
+                allowShinyGoals
                 minRows={0}
                 newRowItemId=""
                 copyLastRowItem={false}
@@ -2628,7 +2819,7 @@ export default function XpGeCraftPage(): JSX.Element {
                   className={styles.goalsImportButton}
                   onClick={importPlannerGoals}
                   disabled={savedPlannerGoalCount === 0 || !planSourceInventory}
-                  title={'Copy the goals saved in the Artifact Attainment Planner. Its copies goals mean N more, so they arrive as what you have in hand + N; expected drops from sends and ships in the air count toward them, not on top. With its "Artifacts: only crafted" on, artifact goals mean N more crafts instead, so they arrive as craft counts: crafted so far + N. Shiny goals arrive as the craft count that gives their chance from crafting alone.'}
+                  title={'Copy the goals saved in the Artifact Attainment Planner. Its copies goals mean N more, so they arrive as what you have in hand + N; expected drops from sends and ships in the air count toward them, not on top. With its "Artifacts: only crafted" on, artifact goals mean N more crafts instead, so they arrive as craft counts: crafted so far + N. Shiny goals stay shiny goals.'}
                 >
                   Import my AAP goals
                 </button>
@@ -2792,11 +2983,14 @@ export default function XpGeCraftPage(): JSX.Element {
                       >
                         Name
                       </button>
+                      <label
+                        className={styles.shinyOddsToggle}
+                        title="Show each row's chance of at least one shiny copy, by rarity. Same setting as the craft order's."
+                      >
+                        <input type="checkbox" checked={showShinyOdds} onChange={(event) => setShowShinyOdds(event.target.checked)} />
+                        Shiny odds
+                      </label>
                     </div>
-                    <label className={`${styles.sortCheckbox} ${styles.standaloneCraftableToggle}`}>
-                      <input type="checkbox" checked={hideUncraftable} onChange={(event) => setHideUncraftable(event.target.checked)} />
-                      Don&apos;t show uncraftable
-                    </label>
                   </div>
                 </div>
                 <div className={styles.standaloneTopBox} onClick={(event) => event.stopPropagation()}>
@@ -2847,6 +3041,11 @@ export default function XpGeCraftPage(): JSX.Element {
                             <span className={styles.statusArtifactCell}>
                               {status && <StatusDot status={status} />}
                               <ArtifactCell artifact={row.artifact} modeLabel={row.modeLabel} />
+                              <ShinyOddsInline
+                                odds={standaloneShinyOdds.get(row.key)}
+                                artifact={row.artifact}
+                                intro="Chance crafting just these gives"
+                              />
                             </span>
                           </td>
                           <td className={styles.num}>{getModeRowCountLabel(row, status)}</td>
@@ -2891,6 +3090,13 @@ export default function XpGeCraftPage(): JSX.Element {
                           >
                             Flat
                           </button>
+                          <label
+                            className={styles.shinyOddsToggle}
+                            title="Show each manual craft row's chance of at least one shiny copy, by rarity. Auto-crafts can't be shiny."
+                          >
+                            <input type="checkbox" checked={showShinyOdds} onChange={(event) => setShowShinyOdds(event.target.checked)} />
+                            Shiny odds
+                          </label>
                       </div>
                       <div className={styles.summaryMeta}>
                         {maxXpPlanView === "tree" ? (
@@ -2902,8 +3108,7 @@ export default function XpGeCraftPage(): JSX.Element {
                           </>
                         ) : (
                           <>
-                            Flat view shows the same Max XP plan as one row per crafted artifact, useful for sorting by family, tier,
-                            manual or auto-craft count, XP, GE cost, remaining inventory, and ingredient usage.
+                            Flat view shows the same Max XP plan as one row per crafted artifact, for sorting by any column.
                           </>
                         )}
                       </div>
@@ -2944,6 +3149,7 @@ export default function XpGeCraftPage(): JSX.Element {
                               <span className={styles.executionArtifactCell}>
                                 {row.prefix && <span className={styles.executionPrefix}>{row.prefix}</span>}
                                 <ArtifactCell artifact={row.artifact} />
+                                <ShinyOddsInline odds={shinyOdds.byRow.get(row.key)} artifact={row.artifact} />
                               </span>
                             </td>
                             <td className={styles.num}>
@@ -2992,7 +3198,10 @@ export default function XpGeCraftPage(): JSX.Element {
                       <tbody>
                         {maxXpFlatRows.map((row) => (
                           <tr key={`flat-${row.artifact}`}>
-                            <td><ArtifactCell artifact={row.artifact} hideTier /></td>
+                            <td>
+                              <ArtifactCell artifact={row.artifact} hideTier />
+                              <ShinyOddsInline odds={shinyOdds.byArtifact.get(row.artifact)} artifact={row.artifact} />
+                            </td>
                             <td className={styles.num}>T{row.tier}</td>
                             <td className={styles.num}><span className={styles.valueTooltip} title={getUsageTooltip(row.usage)}>{row.manualCrafts.toLocaleString()}</span></td>
                             <td className={styles.num}><span className={styles.valueTooltip} title={getUsageTooltip(row.usage)}>{row.autoCrafts.toLocaleString()}</span></td>

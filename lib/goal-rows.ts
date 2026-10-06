@@ -2,7 +2,6 @@ import { artifactDisplayMap, itemIdToCanonicalKey, itemKeyToDisplayName, itemKey
 import { LOCAL_PREF_KEYS, readFirstStoredString } from "./local-preferences";
 import { itemIdTakesCraftCountGoal, recipes } from "./recipes";
 import {
-  craftsForShinyChance,
   DEFAULT_SHINY_GOAL_PERCENT,
   defaultShinyRarity,
   itemIdTakesShinyGoal,
@@ -473,25 +472,15 @@ export function inHandInventory(
 export function plannerRowsToKeepRows(
   rows: PlannerTargetRow[],
   inventory: Record<string, number>,
-  options: { craftCounts?: Record<string, number>; craftingXp?: number; craftedOnly?: boolean } = {}
+  options: { craftCounts?: Record<string, number>; craftedOnly?: boolean } = {}
 ): PlannerTargetRow[] {
   const craftedSoFar = (itemId: string) =>
     Math.max(0, Math.round(Number(options.craftCounts?.[itemIdToCanonicalKey(itemId)]) || 0));
   return rows.map((row) => {
     const mode = goalRowMode(row);
-    if (mode === "shiny") {
-      // A shiny goal is the crafts that give its chance: crafted so far + those crafts.
-      const crafted = craftedSoFar(row.itemId);
-      const needed = craftsForShinyChance({
-        itemKey: itemIdToCanonicalKey(row.itemId),
-        rarity: row.shinyRarity!,
-        targetChance: normalizedShinyGoalPercent(row.quantityInput) / 100,
-        craftedBefore: crafted,
-        craftingXp: options.craftingXp || 0,
-      });
-      return { id: row.id, itemId: row.itemId, craftGoal: true, quantityInput: String(crafted + needed.crafts) };
-    }
-    if (mode === "crafts") {
+    // Shiny and craft-count goals mean the same on both pages (a shiny goal's
+    // crafts are worked out from the profile at each calculate).
+    if (mode === "shiny" || mode === "crafts") {
       return row;
     }
     if (options.craftedOnly && itemIdTakesCraftCountGoal(row.itemId)) {

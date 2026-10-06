@@ -1,3 +1,4 @@
+import type { ShinyRarity } from "./shiny-odds";
 import { itemIdToCanonicalKey } from "./item-utils";
 import { recipes as defaultRecipes, type Recipes } from "./recipes";
 
@@ -26,6 +27,8 @@ export type CraftReservationGoal = {
   quantity: number;
   /** Read `quantity` as an all-time craft count. Ignored for items with no recipe. */
   craftGoal?: boolean;
+  /** A shiny goal (quantity = percent). Resolve it to a craft count (resolveShinyGoalTargets) before reserving. */
+  shinyRarity?: ShinyRarity;
 };
 
 export type CraftGoalReservation = {

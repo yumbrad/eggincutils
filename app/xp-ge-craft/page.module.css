@@ -659,10 +659,6 @@
   cursor: default;
 }
 
-.standaloneCraftableToggle {
-  margin-left: 0;
-}
-
 .standaloneTopBox {
   display: block;
   padding-left: 12px;
@@ -1236,4 +1232,39 @@
     width: 100%;
     max-width: none;
   }
+}
+
+/* Shiny odds on manual-craft rows (the "Shiny odds" view option). */
+.shinyOddsInline {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.shinyOddsInline [data-rarity="rare"] {
+  color: var(--rarity-rare);
+}
+
+.shinyOddsInline [data-rarity="epic"] {
+  color: var(--rarity-epic);
+}
+
+.shinyOddsInline [data-rarity="legendary"] {
+  color: var(--rarity-legendary);
+}
+
+.shinyOddsToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
 }

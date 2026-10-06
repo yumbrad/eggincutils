@@ -322,6 +322,24 @@ export type ShinyOdds = {
   lastExactChance: number;
 };
 
+/**
+ * Each shiny rarity's chance from a run of crafts made one after another,
+ * from this craft count and crafting XP (each craft's own XP raising the
+ * level as it goes). `miss` is the chance none of them lands it, for
+ * combining runs.
+ */
+export function craftRunOdds(options: {
+  itemKey: string;
+  craftedBefore: number;
+  craftingXp: number;
+  crafts: number;
+}): Array<{ rarity: ShinyRarity; miss: number; firstChance: number; lastChance: number }> {
+  return shinyRaritiesFor(options.itemKey).map((rarity) => {
+    const rolls = rollCrafts({ ...options, rarity, ingredientXp: 0, maxCrafts: Math.max(0, Math.round(options.crafts)) });
+    return { rarity, miss: 1 - rolls.chance, firstChance: rolls.firstChance, lastChance: rolls.lastChance };
+  });
+}
+
 /** XP from the plan's crafts of everything an item is made from (its whole recipe tree). */
 export function ingredientCraftXp(itemKey: string, plannedCrafts: Record<string, number>): number {
   const seen = new Set<string>();

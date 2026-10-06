@@ -50,7 +50,7 @@ export type GoalRowsChange =
 const DEFAULT_CRAFT_COUNT_TITLE = `Aiming for an all-time craft count instead of new copies: ${CRAFT_GOAL_DEFAULT_COUNT} crafts maxes this artifact's shiny luck; ${CRAFT_DISCOUNT_MAX_COUNT} already maxes its GE discount. The count comes from your save, so it is the same on every device. Mission drops do not raise it, and copies a higher tier consumes still do, so the plan crafts exactly the difference.`;
 const DEFAULT_COPIES_TITLE = "Read this number as copies to add to what you already have.";
 const SHINY_TITLE =
-  "Aim for a chance of ending with at least one copy of this rarity or better. The plan crafts enough to reach it from crafting alone, counting your craft count and crafting level rising as you craft; shiny drops from the planned missions add to it.";
+  "Aim for a chance of ending with at least one copy of this rarity or better. The plan crafts enough to reach it from crafting alone, counting your craft count and crafting level rising as you craft; shiny drops from the planned missions add to it. The chance counts from your craft count now, so each plan aims for it afresh.";
 
 /** A per-craft or overall chance: two decimals under 1%, one above. */
 export function formatShinyPercent(chance: number): string {

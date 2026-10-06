@@ -22,7 +22,6 @@ import {
   toggleTargetRowCraftGoal,
   type PlannerTargetRow,
 } from "./goal-rows";
-import { getCraftingLevelTotalXpForLevel } from "./crafting-levels";
 
 const options = buildTargetOptions();
 const option = (itemId: string) => {
@@ -276,14 +275,10 @@ describe("shiny goal rows", () => {
     );
   });
 
-  it("imports into the XP planner as the craft count that gives the chance", () => {
-    const steady = 0.01 ** 0.7;
-    const crafts = Math.ceil(Math.log(0.5) / Math.log(1 - steady));
-    expect(
-      plannerRowsToKeepRows([shinyRow("a", "interstellar-compass-4", "50", "legendary")], {}, {
-        craftCounts: { interstellar_compass_4: 400 },
-        craftingXp: getCraftingLevelTotalXpForLevel(30),
-      })
-    ).toEqual([row("a", "interstellar-compass-4", String(400 + crafts), true)]);
+  it("imports into the XP planner as the same shiny goal", () => {
+    const shiny = shinyRow("a", "interstellar-compass-4", "50", "legendary");
+    expect(plannerRowsToKeepRows([shiny], {}, { craftCounts: { interstellar_compass_4: 400 }, craftedOnly: true })).toEqual([
+      shiny,
+    ]);
   });
 });
