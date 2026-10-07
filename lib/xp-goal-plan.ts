@@ -86,7 +86,7 @@ export function goalPlanKey(reservations: CraftReservations | null): string {
   }
   return JSON.stringify({
     held: reservations.held,
-    goals: reservations.goals.map((goal) => [goal.itemKey, goal.craftGoal, goal.finishable, goal.finishTake]),
+    goals: reservations.goals.map((goal) => [goal.itemKey, goal.craftGoal, goal.craftLater, goal.finishable, goal.finishTake]),
   });
 }
 
@@ -112,8 +112,12 @@ export function optimizeCraftsForGoals(
       constraints: null,
     };
   }
+  // "Craft later" goals hold everything they need, as blocked goals do, but by choice.
+  const later = new Set(
+    reservations.goals.map((goal, index) => (goal.craftLater ? index : -1)).filter((index) => index >= 0)
+  );
   const solveWith = (blocked: ReadonlySet<number>, undecided: ReadonlySet<number> = new Set()) => {
-    const constraints = goalPlanConstraints(inventory, reservations, blocked, undecided);
+    const constraints = goalPlanConstraints(inventory, reservations, new Set([...blocked, ...later]), undecided);
     return {
       constraints,
       solution: optimizeCrafts(highs, constraints.inventory, craftCounts, saleEnabled, craftLimits, constraints.requirements),
@@ -126,7 +130,7 @@ export function optimizeCraftsForGoals(
   }
 
   const requiring = reservations.goals
-    .map((goal, index) => (goal.itemKey && goal.finishable > 0 ? index : -1))
+    .map((goal, index) => (goal.itemKey && goal.finishable > 0 && !goal.craftLater ? index : -1))
     .filter((index) => index >= 0);
   const blocked = new Set<number>();
   requiring.forEach((index, position) => {

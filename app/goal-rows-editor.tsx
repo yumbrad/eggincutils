@@ -18,13 +18,14 @@ import {
   selectTargetRowOption,
   setTargetRowGoalMode,
   setTargetRowQuantityInput,
+  setTargetRowCraftLater,
   setTargetRowShinyRarity,
   type GoalMode,
   type PlannerTargetRow,
   type TargetOption,
 } from "../lib/goal-rows";
 import { itemIdToCanonicalKey } from "../lib/item-utils";
-import { itemIdTakesCraftCountGoal } from "../lib/recipes";
+import { itemIdCanBeCrafted, itemIdTakesCraftCountGoal } from "../lib/recipes";
 import {
   craftsForShinyChance,
   itemIdTakesShinyGoal,
@@ -44,6 +45,7 @@ export type GoalRowsChange =
   | { kind: "normalizeQuantity"; rowId: string }
   | { kind: "goalMode"; rowId: string; mode: GoalMode }
   | { kind: "shinyRarity"; rowId: string; rarity: ShinyRarity }
+  | { kind: "craftLater"; rowId: string; craftLater: boolean }
   | { kind: "add"; rowId: string }
   | { kind: "remove"; rowId: string };
 
@@ -57,6 +59,9 @@ export function formatShinyPercent(chance: number): string {
   const percent = chance * 100;
   return `${percent > 0 && percent < 1 ? percent.toFixed(2) : percent.toFixed(1)}%`;
 }
+
+const CRAFT_LATER_TITLE =
+  "Keep everything this goal needs (owned copies and ingredients, as far as your inventory goes) out of the plan, without crafting it now. Useful when saving up to craft it later, e.g. at a higher crafting level.";
 
 const GOAL_MODE_LABELS: Record<GoalMode, string> = { copies: "copies", crafts: "craft count", shiny: "shiny" };
 
@@ -88,6 +93,8 @@ type GoalRowsEditorProps = {
   allowShinyGoals?: boolean;
   /** Lifetime crafting XP for the shiny goals' crafts estimate, or null until a profile loads. */
   craftingXp?: number | null;
+  /** Offer "craft later" (the XP planner): hold a goal's materials without crafting it. */
+  allowCraftLater?: boolean;
 };
 
 /**
@@ -111,6 +118,7 @@ export default function GoalRowsEditor({
   renderRowFooter,
   allowShinyGoals = false,
   craftingXp = null,
+  allowCraftLater = false,
 }: GoalRowsEditorProps) {
   const [activeRowId, setActiveRowId] = useState(rows[0]?.id || "target-1");
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -244,6 +252,10 @@ export default function GoalRowsEditor({
     onRowsChange((current) => setTargetRowGoalMode(current, rowId, mode), { kind: "goalMode", rowId, mode });
   }
 
+  function setCraftLater(rowId: string, craftLater: boolean): void {
+    onRowsChange((current) => setTargetRowCraftLater(current, rowId, craftLater), { kind: "craftLater", rowId, craftLater });
+  }
+
   function setShinyRarity(rowId: string, rarity: ShinyRarity): void {
     onRowsChange((current) => setTargetRowShinyRarity(current, rowId, rarity), { kind: "shinyRarity", rowId, rarity });
   }
@@ -341,6 +353,7 @@ export default function GoalRowsEditor({
         // The goal modes are only for artifacts that can be crafted.
         const takesCraftGoal = itemIdTakesCraftCountGoal(row.itemId);
         const takesShinyGoal = allowShinyGoals && itemIdTakesShinyGoal(row.itemId);
+        const takesCraftLater = allowCraftLater && itemIdCanBeCrafted(row.itemId);
         const mode = goalRowMode(row);
         const modes: GoalMode[] = takesShinyGoal ? ["copies", "crafts", "shiny"] : ["copies", "crafts"];
         const itemKey = itemIdToCanonicalKey(row.itemId);
@@ -472,8 +485,9 @@ export default function GoalRowsEditor({
               </div>
             )}
           </div>
-          {takesCraftGoal && (
+          {(takesCraftGoal || takesCraftLater) && (
             <div className={styles.targetRowMeta}>
+              {takesCraftGoal && (
               <span className={styles.targetGoalModes} role="group" aria-label={`${option?.label || "Goal"} goal type`}>
                 {modes.map((candidate) => (
                   <button
@@ -489,7 +503,8 @@ export default function GoalRowsEditor({
                   </button>
                 ))}
               </span>
-              {mode === "shiny" ? (
+              )}
+              {!takesCraftGoal ? null : mode === "shiny" ? (
                 <>
                   <span className={styles.targetRarities} role="group" aria-label="Rarity">
                     {shinyRarities.map((rarity) => (
@@ -532,6 +547,18 @@ export default function GoalRowsEditor({
                 craftedSoFar > 0 && (
                   <span className={styles.targetRowMetaText}>{craftedSoFar.toLocaleString()} crafted so far</span>
                 )
+              )}
+              {takesCraftLater && (
+                <button
+                  type="button"
+                  className={styles.targetCraftLater}
+                  data-on={row.craftLater ? "1" : "0"}
+                  aria-pressed={Boolean(row.craftLater)}
+                  onClick={() => setCraftLater(row.id, !row.craftLater)}
+                  title={CRAFT_LATER_TITLE}
+                >
+                  craft later
+                </button>
               )}
             </div>
           )}

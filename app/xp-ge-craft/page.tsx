@@ -307,9 +307,10 @@ const INVENTORY_MATRIX_FAMILIES: InventoryMatrixFamily[] = [
 
 function goalRowToReservationGoal(row: PlannerTargetRow): CraftReservationGoal {
   const target = targetRowToPlannerTarget(row);
+  const later = target.craftLater ? { craftLater: true } : {};
   return target.shinyRarity
-    ? { itemId: target.targetItemId, quantity: target.quantity, shinyRarity: target.shinyRarity }
-    : { itemId: target.targetItemId, quantity: target.quantity, craftGoal: target.craftGoal };
+    ? { itemId: target.targetItemId, quantity: target.quantity, shinyRarity: target.shinyRarity, ...later }
+    : { itemId: target.targetItemId, quantity: target.quantity, craftGoal: target.craftGoal, ...later };
 }
 
 /**
@@ -335,7 +336,12 @@ function resolveShinyGoals(
     })),
     { craftCounts, craftingXp }
   );
-  return targets.map((target) => ({ itemId: target.targetItemId, quantity: target.quantity, craftGoal: target.craftGoal }));
+  return targets.map((target, index) => ({
+    itemId: target.targetItemId,
+    quantity: target.quantity,
+    craftGoal: target.craftGoal,
+    ...(goals[index].craftLater ? { craftLater: true } : {}),
+  }));
 }
 
 /** Goal rows with an item picked, as reservation goals. */
@@ -475,10 +481,12 @@ function GoalReservationLine({
   if (!goal || !goal.itemKey) {
     return null;
   }
-  const holds = blocked ? goal.keeps : goal.held;
+  // A "craft later" goal holds everything it would use, as a blocked one does.
+  const holdsAll = blocked || goal.craftLater;
+  const holds = holdsAll ? goal.keeps : goal.held;
   const holdsList = formatGoalItemList(holds);
   const holdsTitle = formatGoalItemList(holds, Number.MAX_SAFE_INTEGER);
-  const planText = blocked ? null : goalPlanText(goal);
+  const planText = holdsAll ? null : goalPlanText(goal);
   const shortfall = goalShortfallText(goal);
   const breakdown = goalCopiesBreakdownText(goal, owned, ownedExpected);
   return (
@@ -494,11 +502,13 @@ function GoalReservationLine({
         <span className={styles.goalCovered}>Covered</span>
       )}
       {breakdown && <span className={styles.goalKeeps}>{breakdown}</span>}
-      {blocked && <span className={styles.goalShort}>Max-craft limits block it, so it holds its items</span>}
+      {blocked && !goal.craftLater && <span className={styles.goalShort}>Max-craft limits block it, so it holds its items</span>}
+      {goal.craftLater && <span className={styles.goalKeeps}>Not crafted in this plan</span>}
       {planText && <span className={styles.goalKeeps}>{planText}</span>}
       {holdsList && (
         <span className={styles.goalKeeps} title={`Holds ${holdsTitle}`}>
           Holds {holdsList}
+          {goal.craftLater ? " for later" : ""}
         </span>
       )}
     </div>
@@ -2807,6 +2817,7 @@ export default function XpGeCraftPage(): JSX.Element {
                 craftCounts={planSourceInventory ? planSourceCraftCounts : null}
                 craftingXp={planSourceInventory ? planSourceCraftingXp : null}
                 allowShinyGoals
+                allowCraftLater
                 minRows={0}
                 newRowItemId=""
                 copyLastRowItem={false}

@@ -29,6 +29,8 @@ export type CraftReservationGoal = {
   craftGoal?: boolean;
   /** A shiny goal (quantity = percent). Resolve it to a craft count (resolveShinyGoalTargets) before reserving. */
   shinyRarity?: ShinyRarity;
+  /** Hold everything the goal needs without crafting it in the plan ("craft later"). */
+  craftLater?: boolean;
 };
 
 export type CraftGoalReservation = {
@@ -37,6 +39,8 @@ export type CraftGoalReservation = {
   quantity: number;
   /** Whether the goal was read as a craft count (only for craftable items). */
   craftGoal: boolean;
+  /** "Craft later": the plan holds what it needs instead of crafting it. */
+  craftLater: boolean;
   /** Craft-count goals: crafts still to make; null for copies goals. */
   craftsToGo: number | null;
   /** What the goal still asks of inventory: copies to have, or crafts still to go. */
@@ -179,6 +183,7 @@ export function reserveInventoryForGoals(
         itemKey: "",
         quantity,
         craftGoal: false,
+        craftLater: Boolean(goal.craftLater),
         craftsToGo: null,
         needed: 0,
         finishable: 0,
@@ -218,6 +223,7 @@ export function reserveInventoryForGoals(
       itemKey,
       quantity,
       craftGoal,
+      craftLater: Boolean(goal.craftLater),
       craftsToGo,
       needed,
       finishable,

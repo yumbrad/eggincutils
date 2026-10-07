@@ -155,6 +155,22 @@ describe("goal requirements in the LP", () => {
 });
 
 describe("optimizeCraftsForGoals", () => {
+  it("holds a craft-later goal's materials without crafting it", async () => {
+    const highs = await realHighs();
+    const inventory = { soul_stone_1: 300 };
+    const goal: CraftReservationGoal = { itemId: "soul-stone-2", quantity: 2, craftLater: true };
+    const result = optimizeCraftsForGoals(highs, inventory, {}, false, {}, [goal]);
+    const held = reserveInventoryForGoals(inventory, {}, [{ itemId: "soul-stone-2", quantity: 2 }]);
+
+    // No requirement to craft it: its fragments are held back, and the plan works with the rest.
+    expect(result.constraints!.requirements.keepCopies).toEqual({});
+    expect(result.constraints!.steps).toEqual([]);
+    expect(result.constraints!.held).toEqual(held.goals[0].keeps);
+    expect(result.solution.totalXp).toBe(optimizeCrafts(highs, held.available).totalXp);
+    // It holds by choice, so it isn't reported as blocked by limits.
+    expect(result.blocked).toEqual([]);
+  });
+
   it("crafts a finishable copies goal in the plan and counts its XP", async () => {
     const highs = await realHighs();
     const inventory = { soul_stone_1: 300 };

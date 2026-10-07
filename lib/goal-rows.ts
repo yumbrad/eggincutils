@@ -37,6 +37,8 @@ export type PlannerTargetRow = {
   /** Read the quantity as a percent chance of at least one copy of this
    *  rarity or better (a shiny goal); craftGoal is then false. */
   shinyRarity?: ShinyRarity;
+  /** XP planner: hold what the goal needs instead of crafting it now. */
+  craftLater?: boolean;
 };
 
 /** A goal row as stored and as sent to the planners. */
@@ -45,6 +47,7 @@ export type PlannerTargetInput = {
   quantity: number;
   craftGoal?: boolean;
   shinyRarity?: ShinyRarity;
+  craftLater?: boolean;
 };
 
 export type GoalMode = "copies" | "crafts" | "shiny";
@@ -111,11 +114,13 @@ export function normalizedTargetQuantity(rawValue: string): number {
 }
 
 export function targetRowToPlannerTarget(row: PlannerTargetRow): PlannerTargetInput {
+  const later = row.craftLater ? { craftLater: true } : {};
   if (goalRowMode(row) === "shiny") {
     return {
       targetItemId: row.itemId,
       quantity: normalizedShinyGoalPercent(row.quantityInput),
       shinyRarity: row.shinyRarity,
+      ...later,
     };
   }
   const target: PlannerTargetInput = {
@@ -125,7 +130,7 @@ export function targetRowToPlannerTarget(row: PlannerTargetRow): PlannerTargetIn
   if (row.craftGoal && itemIdTakesCraftCountGoal(row.itemId)) {
     target.craftGoal = true;
   }
-  return target;
+  return { ...target, ...later };
 }
 
 export function parseStoredTargetRows(raw: string | null, targetOptions: TargetOption[]): PlannerTargetRow[] | null {
@@ -150,6 +155,7 @@ export function parseStoredTargetRows(raw: string | null, targetOptions: TargetO
         quantityInput?: unknown;
         craftGoal?: unknown;
         shinyRarity?: unknown;
+        craftLater?: unknown;
       };
       const itemId = typeof record.targetItemId === "string"
         ? record.targetItemId
@@ -173,6 +179,7 @@ export function parseStoredTargetRows(raw: string | null, targetOptions: TargetO
           quantityInput: String(normalizedShinyGoalPercent(String(record.quantity ?? record.quantityInput))),
           craftGoal: false,
           shinyRarity,
+          ...(record.craftLater === true ? { craftLater: true } : {}),
         });
         continue;
       }
@@ -192,6 +199,7 @@ export function parseStoredTargetRows(raw: string | null, targetOptions: TargetO
         itemId,
         quantityInput: String(quantity),
         craftGoal,
+        ...(record.craftLater === true ? { craftLater: true } : {}),
       });
     }
     return rows.length > 0 ? rows : null;
@@ -260,7 +268,13 @@ export function selectTargetRowOption(rows: PlannerTargetRow[], rowId: string, o
       const shinyRarity = itemIdTakesShinyGoal(option.itemId) ? shinyRarityFor(option.itemId, row.shinyRarity) : undefined;
       return shinyRarity
         ? { ...row, itemId: option.itemId, shinyRarity }
-        : { id: row.id, itemId: option.itemId, quantityInput: "1", craftGoal: false };
+        : {
+            id: row.id,
+            itemId: option.itemId,
+            quantityInput: "1",
+            craftGoal: false,
+            ...(row.craftLater ? { craftLater: true } : {}),
+          };
     }
     const craftGoal = row.craftGoal && itemIdTakesCraftCountGoal(option.itemId);
     // A seeded craft count drops back to one copy when the new item can't
@@ -314,7 +328,13 @@ export function setTargetRowGoalMode(rows: PlannerTargetRow[], rowId: string, mo
     if (mode === "crafts" && !itemIdTakesCraftCountGoal(row.itemId)) {
       return row;
     }
-    const base: PlannerTargetRow = { id: row.id, itemId: row.itemId, quantityInput: row.quantityInput, craftGoal: false };
+    const base: PlannerTargetRow = {
+      id: row.id,
+      itemId: row.itemId,
+      quantityInput: row.quantityInput,
+      craftGoal: false,
+      ...(row.craftLater ? { craftLater: true } : {}),
+    };
     if (current === "shiny") {
       // A percent means nothing as copies or crafts.
       return mode === "crafts"
@@ -322,6 +342,16 @@ export function setTargetRowGoalMode(rows: PlannerTargetRow[], rowId: string, mo
         : { ...base, quantityInput: "1" };
     }
     return toggleTargetRowCraftGoal([row], rowId)[0];
+  });
+}
+
+export function setTargetRowCraftLater(rows: PlannerTargetRow[], rowId: string, craftLater: boolean): PlannerTargetRow[] {
+  return rows.map((row) => {
+    if (row.id !== rowId) {
+      return row;
+    }
+    const { craftLater: _previous, ...rest } = row;
+    return craftLater ? { ...rest, craftLater: true } : rest;
   });
 }
 

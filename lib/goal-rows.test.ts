@@ -16,6 +16,7 @@ import {
   goalRowMode,
   selectTargetRowOption,
   serializeTargetRows,
+  setTargetRowCraftLater,
   setTargetRowGoalMode,
   setTargetRowShinyRarity,
   targetRowToPlannerTarget,
@@ -280,5 +281,18 @@ describe("shiny goal rows", () => {
     expect(plannerRowsToKeepRows([shiny], {}, { craftCounts: { interstellar_compass_4: 400 }, craftedOnly: true })).toEqual([
       shiny,
     ]);
+  });
+});
+
+describe("craft later", () => {
+  it("saves with the goal and survives switching its type or item", () => {
+    const later = setTargetRowCraftLater([row("a", "gusset-3", "2")], "a", true);
+    expect(later[0].craftLater).toBe(true);
+    expect(targetRowToPlannerTarget(later[0])).toEqual({ targetItemId: "gusset-3", quantity: 2, craftLater: true });
+    expect(parseStoredTargetRows(serializeTargetRows(later), options)![0].craftLater).toBe(true);
+    expect(setTargetRowGoalMode(later, "a", "crafts")[0].craftLater).toBe(true);
+    expect(setTargetRowGoalMode(setTargetRowGoalMode(later, "a", "shiny"), "a", "copies")[0].craftLater).toBe(true);
+    expect(selectTargetRowOption(later, "a", option("soul-stone-2"))[0].craftLater).toBe(true);
+    expect(setTargetRowCraftLater(later, "a", false)[0]).toEqual(row("a", "gusset-3", "2"));
   });
 });
