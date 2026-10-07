@@ -2858,17 +2858,40 @@ function VirtueTankTimeline({ view, plan }: { view: VirtueTankPlanView; plan: Pl
 }
 
 /** A plan.missions row in the mission table; tank mode passes the launches that go in one tank. */
-type RankedYield = { itemId: string; quantity: number };
+type RankedYield = {
+  itemId: string;
+  quantity: number;
+  /** How much of what the plan still needs from missions this row covers. */
+  note?: string;
+};
+
+function formatYieldCount(quantity: number): string {
+  return quantity.toLocaleString(undefined, { maximumFractionDigits: quantity < 1 ? 2 : quantity < 10 ? 1 : 0 });
+}
+
+function formatCoverage(share: number): string {
+  const percent = share * 100;
+  return percent > 0 && percent < 1 ? "<1%" : `${Math.round(percent)}%`;
+}
 
 /**
  * Each mission row's yields the plan cares about, ranked by how much of the
- * plan's need for the item the row covers (so a row that supplies all of a
- * small need ranks above a big pile that covers a sliver). Drops the plan
+ * item's shortfall the row covers: what the plan uses (goal copies,
+ * ingredients of its crafts, consumed copies) less what's in the inventory
+ * and what the plan crafts. That's what missions must bring, directly or by
+ * consuming their drops, so a row that brings all of a small shortfall ranks
+ * above a big pile of something inventory already covers. Drops the plan
  * consumes also bring what consuming them yields, at the share of the item's
- * mission drops the plan consumes. Need = goal copies + ingredients of the
- * planned crafts + consumed copies.
+ * mission drops the plan consumes.
+ *
+ * A tier whose only use in the plan is crafting the next tier of its family
+ * (tiny gold only ever becomes enriched gold) counts as equivalents of the
+ * tier it ends up as, so T1 and T2 drops compare: the chain's shortfall is
+ * what the plan uses of its top tier less the whole chain's inventory in
+ * top-tier equivalents (crafts inside the chain are conversions, not
+ * supply). A tier with any other use keeps its own shortfall.
  */
-function rankRelevantYields(plan: PlanResponse["plan"]): Map<number, RankedYield[]> {
+function rankRelevantYields(plan: PlanResponse["plan"], inventory: Record<string, number> | null): Map<number, RankedYield[]> {
   const recipeMap = recipes as Record<string, { ingredients: Record<string, number> } | null>;
   const need = new Map<string, number>();
   const addNeed = (itemId: string, quantity: number) => {
@@ -2880,8 +2903,11 @@ function rankRelevantYields(plan: PlanResponse["plan"]): Map<number, RankedYield
       addNeed(target.targetItemId, target.quantity);
     }
   }
+  const crafted = new Map<string, number>();
   for (const craft of plan.crafts) {
-    for (const [ingredientKey, perCraft] of Object.entries(recipeMap[itemIdToCanonicalKey(craft.itemId)]?.ingredients || {})) {
+    const craftKey = itemIdToCanonicalKey(craft.itemId);
+    crafted.set(craftKey, (crafted.get(craftKey) || 0) + craft.count);
+    for (const [ingredientKey, perCraft] of Object.entries(recipeMap[craftKey]?.ingredients || {})) {
       addNeed(ingredientKey, perCraft * craft.count);
     }
   }
@@ -2906,6 +2932,63 @@ function rankRelevantYields(plan: PlanResponse["plan"]): Map<number, RankedYield
       perCopy: row.yields.map((entry) => ({ key: itemIdToCanonicalKey(entry.itemId), quantity: entry.quantity / row.count })),
     });
   }
+  const have = (key: string) => Math.max(0, Math.floor(inventory?.[key] || 0));
+  // Which crafts use each ingredient (and goal or consumption demand, as "").
+  const usedBy = new Map<string, Set<string>>();
+  const markUse = (ingredientKey: string, consumerKey: string) => {
+    const consumers = usedBy.get(ingredientKey) || new Set<string>();
+    consumers.add(consumerKey);
+    usedBy.set(ingredientKey, consumers);
+  };
+  for (const target of plan.targets?.length ? plan.targets : [{ targetItemId: plan.targetItemId, quantity: plan.quantity }]) {
+    if (!("craftGoal" in target && target.craftGoal)) {
+      markUse(itemIdToCanonicalKey(target.targetItemId), "");
+    }
+  }
+  for (const craft of plan.crafts) {
+    const craftKey = itemIdToCanonicalKey(craft.itemId);
+    for (const ingredientKey of Object.keys(recipeMap[craftKey]?.ingredients || {})) {
+      markUse(ingredientKey, craftKey);
+    }
+  }
+  for (const row of plan.consumptions || []) {
+    markUse(itemIdToCanonicalKey(row.itemId), "");
+  }
+  // The tier an item collapses into (its next tier, when that's its only use) and
+  // how many of the chain's top tier one copy is worth.
+  const chainTop = new Map<string, { top: string; perCopy: number }>();
+  const collapse = (key: string): { top: string; perCopy: number } => {
+    const known = chainTop.get(key);
+    if (known) {
+      return known;
+    }
+    const match = key.match(/^(.*)_(\d+)$/);
+    const nextKey = match ? `${match[1]}_${Number(match[2]) + 1}` : "";
+    const consumers = usedBy.get(key);
+    const perNext = nextKey ? recipeMap[nextKey]?.ingredients[key] || 0 : 0;
+    const result =
+      consumers && consumers.size === 1 && consumers.has(nextKey) && perNext > 0
+        ? (() => {
+            const above = collapse(nextKey);
+            return { top: above.top, perCopy: above.perCopy / perNext };
+          })()
+        : { top: key, perCopy: 1 };
+    chainTop.set(key, result);
+    return result;
+  };
+  // A chain's inventory in top-tier equivalents.
+  const chainHave = new Map<string, number>();
+  for (const key of new Set([...need.keys(), ...missionSupply.keys()])) {
+    const { top, perCopy } = collapse(key);
+    if (top !== key) {
+      chainHave.set(top, (chainHave.get(top) || 0) + have(key) * perCopy);
+    }
+  }
+  const isChainTop = (key: string) => chainHave.has(key);
+  const shortfall = (key: string) =>
+    isChainTop(key)
+      ? Math.max(0, (need.get(key) || 0) - have(key) - (chainHave.get(key) || 0))
+      : Math.max(0, (need.get(key) || 0) - have(key) - (crafted.get(key) || 0));
   const ranked = new Map<number, RankedYield[]>();
   plan.missions.forEach((mission, missionIndex) => {
     const quantities = new Map<string, number>();
@@ -2920,16 +3003,43 @@ function rankRelevantYields(plan: PlanResponse["plan"]): Map<number, RankedYield
         }
       }
     }
+    // Coverage of the item's shortfall, or of its chain's in top-tier equivalents.
     const coverage = (key: string, quantity: number) => {
-      const needed = need.get(key) || 0;
-      return needed > 0 ? quantity / needed : 0;
+      const { top, perCopy } = collapse(key);
+      const missing = shortfall(top);
+      return missing > 0 ? Math.min(1, (quantity * perCopy) / missing) : 0;
     };
     ranked.set(
       missionIndex,
       Array.from(quantities.entries())
         .filter(([, quantity]) => quantity > 0)
         .sort(([aKey, a], [bKey, b]) => coverage(bKey, b) - coverage(aKey, a) || b - a)
-        .map(([key, quantity]) => ({ itemId: itemKeyToId(key), quantity }))
+        .map(([key, quantity]) => {
+          const { top, perCopy } = collapse(key);
+          const missing = shortfall(top);
+          const label = itemIdToLabel(itemKeyToId(top));
+          const used = need.get(top) || 0;
+          const percent = formatCoverage(coverage(key, quantity));
+          let note: string;
+          if (top !== key) {
+            // A lower tier that only goes toward `top` here.
+            note =
+              missing > 0
+                ? `≈ ${formatYieldCount(quantity * perCopy)} ${label}: covers ${percent} of the ${formatYieldCount(missing)} ${label} the plan still needs from missions (lower tiers here only go toward it; ${formatYieldCount(used)} used − ${formatYieldCount(have(top) + (chainHave.get(top) || 0))} have, counting lower tiers).`
+                : `None needed from missions: inventory covers the ${formatYieldCount(used)} ${label} this only goes toward.`;
+          } else if (isChainTop(key)) {
+            note =
+              missing > 0
+                ? `Covers ${percent} of the ${formatYieldCount(missing)} ${label} the plan still needs from missions (${formatYieldCount(used)} used − ${formatYieldCount(have(key) + (chainHave.get(key) || 0))} have, counting lower tiers).`
+                : `None needed from missions: inventory covers the ${formatYieldCount(used)} ${label} the plan uses, counting lower tiers.`;
+          } else {
+            note =
+              missing > 0
+                ? `Covers ${percent} of the ${formatYieldCount(missing)} ${label} the plan still needs from missions (${formatYieldCount(used)} used − ${formatYieldCount(have(key))} have − ${formatYieldCount(crafted.get(key) || 0)} crafted).`
+                : `None needed from missions: inventory and crafts cover the ${formatYieldCount(used)} ${label} the plan uses.`;
+          }
+          return { itemId: itemKeyToId(key), quantity, note };
+        })
     );
   });
   return ranked;
@@ -3005,7 +3115,7 @@ function renderMissionTableRow(
                   loading="lazy"
                 />
               )}
-              <span>
+              <span title={(yieldRow as RankedYield).note}>
                 {itemIdToLabel(yieldRow.itemId)}: {(yieldRow.quantity * yieldScale).toFixed(2)}
                 {mission.launches > 0 && (
                   // Per launch, so ships with different launch counts compare.
@@ -3025,12 +3135,15 @@ function VirtueTankMissionRows({
   view,
   plan,
   targetOverrideByIndex,
+  inventory,
 }: {
   view: VirtueTankPlanView;
   plan: PlanResponse["plan"];
   targetOverrideByIndex: Map<number, string>;
+  /** The profile's inventory, for ranking yields by what missions must still bring. */
+  inventory: Record<string, number> | null;
 }) {
-  const rankedYields = useMemo(() => rankRelevantYields(plan), [plan]);
+  const rankedYields = useMemo(() => rankRelevantYields(plan, inventory), [plan, inventory]);
   const tankRows = view.tanks.map((tankView) => groupTankLaunches(view, tankView.tank));
   const tanksByMissionIndex = new Map<number, number>();
   tankRows.forEach((rows) =>
@@ -4105,8 +4218,8 @@ export default function MissionCraftPlannerPage() {
     return rows;
   }, [lastSolveRequest?.targetCraftedOnly, lootData, profileSnapshot, response, showAllShinyOdds]);
   const relevantYieldsByMission = useMemo(
-    () => (response ? rankRelevantYields(response.plan) : new Map<number, RankedYield[]>()),
-    [response]
+    () => (response ? rankRelevantYields(response.plan, profileSnapshot?.inventory ?? null) : new Map<number, RankedYield[]>()),
+    [response, profileSnapshot]
   );
   const missionPrepTargetOverrideByIndex = useMemo(() => {
     const overrides = new Map<number, string>();
@@ -6353,6 +6466,7 @@ export default function MissionCraftPlannerPage() {
                     view={virtueTankView}
                     plan={response.plan}
                     targetOverrideByIndex={missionPrepTargetOverrideByIndex}
+                    inventory={profileSnapshot?.inventory ?? null}
                   />
                 </table>
               </div>
