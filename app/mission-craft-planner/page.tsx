@@ -2866,6 +2866,9 @@ type RankedYield = {
 };
 
 function formatYieldCount(quantity: number): string {
+  if (quantity > 0 && quantity < 0.01) {
+    return "<0.01";
+  }
   return quantity.toLocaleString(undefined, { maximumFractionDigits: quantity < 1 ? 2 : quantity < 10 ? 1 : 0 });
 }
 
@@ -2919,20 +2922,21 @@ function rankRelevantYields(plan: PlanResponse["plan"], inventory: Record<string
     }
   }
   // What one consumed copy yields, and the share of an item's mission drops the plan consumes.
-  const consumption = new Map<string, { share: number; perCopy: Array<{ key: string; quantity: number }> }>();
+  const consumption = new Map<string, { count: number; share: number; perCopy: Array<{ key: string; quantity: number }> }>();
   for (const row of plan.consumptions || []) {
     if (row.count <= 0) {
       continue;
     }
     const key = itemIdToCanonicalKey(row.itemId);
-    addNeed(key, row.count);
     const supply = missionSupply.get(key) || 0;
     consumption.set(key, {
+      count: row.count,
       share: supply > 0 ? Math.min(1, row.count / supply) : 0,
       perCopy: row.yields.map((entry) => ({ key: itemIdToCanonicalKey(entry.itemId), quantity: entry.quantity / row.count })),
     });
   }
   const have = (key: string) => Math.max(0, Math.floor(inventory?.[key] || 0));
+  const CONSUMED = "__consumed";
   // Which crafts use each ingredient (and goal or consumption demand, as "").
   const usedBy = new Map<string, Set<string>>();
   const markUse = (ingredientKey: string, consumerKey: string) => {
@@ -2951,8 +2955,19 @@ function rankRelevantYields(plan: PlanResponse["plan"], inventory: Record<string
       markUse(ingredientKey, craftKey);
     }
   }
-  for (const row of plan.consumptions || []) {
-    markUse(itemIdToCanonicalKey(row.itemId), "");
+  for (const key of consumption.keys()) {
+    markUse(key, CONSUMED);
+  }
+  // A drop the plan only consumes is worth what consuming it yields; anything
+  // else it's consumed for also counts as a need for the item itself.
+  const consumedOnly = (key: string) => {
+    const consumers = usedBy.get(key);
+    return Boolean(consumption.has(key) && consumers && consumers.size === 1);
+  };
+  for (const [key, consumed] of consumption) {
+    if (!consumedOnly(key)) {
+      addNeed(key, consumed.count);
+    }
   }
   // The tier an item collapses into (its next tier, when that's its only use) and
   // how many of the chain's top tier one copy is worth.
@@ -2994,21 +3009,27 @@ function rankRelevantYields(plan: PlanResponse["plan"], inventory: Record<string
     const quantities = new Map<string, number>();
     const add = (key: string, quantity: number) => quantities.set(key, (quantities.get(key) || 0) + quantity);
     for (const yieldRow of mission.expectedYields) {
-      const key = itemIdToCanonicalKey(yieldRow.itemId);
-      add(key, yieldRow.quantity);
-      const consumed = consumption.get(key);
-      if (consumed && consumed.share > 0) {
-        for (const entry of consumed.perCopy) {
-          add(entry.key, yieldRow.quantity * consumed.share * entry.quantity);
-        }
-      }
+      add(itemIdToCanonicalKey(yieldRow.itemId), yieldRow.quantity);
     }
     // Coverage of the item's shortfall, or of its chain's in top-tier equivalents.
-    const coverage = (key: string, quantity: number) => {
+    const directCoverage = (key: string, quantity: number) => {
       const { top, perCopy } = collapse(key);
       const missing = shortfall(top);
       return missing > 0 ? Math.min(1, (quantity * perCopy) / missing) : 0;
     };
+    // What consuming the plan's share of these drops yields, for an item only consumed.
+    const consumedYields = (key: string, quantity: number) => {
+      const consumed = consumption.get(key)!;
+      return consumed.perCopy.map((entry) => ({
+        key: entry.key,
+        quantity: quantity * consumed.share * entry.quantity,
+        coverage: directCoverage(entry.key, quantity * consumed.share * entry.quantity),
+      }));
+    };
+    const coverage = (key: string, quantity: number) =>
+      consumedOnly(key)
+        ? Math.min(1, consumedYields(key, quantity).reduce((sum, entry) => sum + entry.coverage, 0))
+        : directCoverage(key, quantity);
     ranked.set(
       missionIndex,
       Array.from(quantities.entries())
@@ -3021,7 +3042,17 @@ function rankRelevantYields(plan: PlanResponse["plan"], inventory: Record<string
           const used = need.get(top) || 0;
           const percent = formatCoverage(coverage(key, quantity));
           let note: string;
-          if (top !== key) {
+          if (consumedOnly(key)) {
+            // Valued by its main consumption yield (in that yield's chain-top equivalents).
+            const main = consumedYields(key, quantity).sort((a, b) => b.coverage - a.coverage)[0];
+            const mainChain = collapse(main.key);
+            const mainLabel = itemIdToLabel(itemKeyToId(mainChain.top));
+            const mainMissing = shortfall(mainChain.top);
+            note =
+              main.coverage > 0
+                ? `Only consumed here, for its ${itemIdToLabel(itemKeyToId(main.key))}: ≈ ${formatYieldCount(main.quantity * mainChain.perCopy)} ${mainLabel}, covering ${formatCoverage(coverage(key, quantity))} of the ${formatYieldCount(mainMissing)} ${mainLabel} the plan still needs from missions.`
+                : `Only consumed here, for its ${itemIdToLabel(itemKeyToId(main.key))}, which inventory and crafts already cover.`;
+          } else if (top !== key) {
             // A lower tier that only goes toward `top` here.
             note =
               missing > 0
