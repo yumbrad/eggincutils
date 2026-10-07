@@ -64,44 +64,43 @@
 }
 
 :root[data-theme="light"] {
+  /* "Clean slate": cool grey page, white cards, slate ink, and the dark
+     theme's pairing of a blue accent with gold headings (--navy). */
   color-scheme: light;
-  --bg-a: #f8f3e8;
-  --bg-b: #efe5d3;
+  --bg-a: #f3f5f8;
+  --bg-b: #e9edf2;
   --font-ui: "Space Grotesk", "Avenir Next Condensed", "Trebuchet MS", "Segoe UI", sans-serif;
   --font-brand-title: "Space Grotesk", "Avenir Next Condensed", "Trebuchet MS", "Segoe UI", sans-serif;
   --font-display: "Courier New", "Eurostile", "Microgramma D Extended", "Space Grotesk", sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, "Courier New", monospace;
-  --bg-color: #f8f3e8;
-  --bg-image:
-    radial-gradient(1200px 550px at 0% -10%, color-mix(in oklab, var(--accent), transparent 86%) 0%, transparent 62%),
-    radial-gradient(900px 460px at 100% 120%, color-mix(in oklab, var(--accent-2), transparent 85%) 0%, transparent 66%),
-    linear-gradient(145deg, var(--bg-a), var(--bg-b));
+  --bg-color: #eef1f5;
+  --bg-image: linear-gradient(180deg, var(--bg-a), var(--bg-b));
   --bg-size: auto;
   --bg-position: 0 0;
   --bg-repeat: no-repeat;
   --bg-blend: normal, normal, normal;
-  --ink: #1f3049;
-  --muted: #4d5f74;
-  --xmuted: #6d7f74;  
-  --card: #fffdf8;
-  --panel: #fffdf8;
-  --stroke: #d6c4a8;
-  --accent: #eea33a;
-  --accent-2: #c4770f;
-  --navy: #213754;
+  --ink: #1b2433;
+  --muted: #5a6475;
+  --xmuted: #7a8494;  
+  --card: #ffffff;
+  --panel: #ffffff;
+  --stroke: #d8dde6;
+  --accent: #2f74d0;
+  --accent-2: #0e7490;
+  --navy: #8a5a00;
   --ok: #2b7a4a;
-  --field: #fffcf6;
-  --field-ink: #1f3049;
-  --button-bg: #ffc770;
-  --button-bg-hover: #ffd99f;
-  --button-active: #ffc770;  
-  --button-ink: #3e2a10;
-  --panel-shadow: 0 8px 30px rgba(20, 26, 39, 0.08);
-  --card-hover-border: #db9c49;
+  --field: #ffffff;
+  --field-ink: #1b2433;
+  --button-bg: #ffffff;
+  --button-bg-hover: #eef3fc;
+  --button-active: #dbe8fb;  
+  --button-ink: #1b2433;
+  --panel-shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 4px 16px rgba(16, 24, 40, 0.06);
+  --card-hover-border: #93b4ea;
   --error-bg: #fff4ec;
   --error-border: #d59c84;
   --error-ink: #7a2d0c;
-  --theme-switch-bg: rgba(255, 253, 247, 0.88);
+  --theme-switch-bg: rgba(255, 255, 255, 0.9);
   --brand-kicker-color: #ff1279;
   --egg-curiosity: #3f4556;
   --egg-resilience: #8f7700;
@@ -111,7 +110,7 @@
   --warn-bg: #fff4dc;
   --warn-border: #b8862a;
   --warn-ink: #6b4a0c;
-  /* Blue notices: information, kept apart from the amber warnings (light --accent is amber). */
+  /* Blue notices: information, kept apart from the amber warnings. */
   --info: #2f6fb6;
   --tank-marker: #213754;
   --sleep-bad-bg: color-mix(in oklab, #b9a1f1, transparent 64%);

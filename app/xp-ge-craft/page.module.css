@@ -580,6 +580,15 @@
     0 6px 14px color-mix(in oklab, var(--accent), transparent 75%);
 }
 
+/* Light theme: a pale accent tint with dark text, no glow; the dark themes'
+   gradient would put dark text on a strong blue. */
+:global(:root[data-theme="light"]) .activeButton {
+  background: var(--button-active);
+  border-color: var(--accent);
+  color: var(--ink);
+  box-shadow: none;
+}
+
 .tableSection {
   margin-top: 14px;
   width: max-content;
@@ -1228,6 +1237,10 @@
   color: var(--button-ink);
   cursor: pointer;
   font-weight: 800;
+}
+
+:global(:root[data-theme="light"]) .pendingLimitBar button {
+  color: #ffffff;
 }
 
 .pendingLimitBar .secondaryButton {
