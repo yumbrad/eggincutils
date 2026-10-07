@@ -3,6 +3,8 @@ import { NextRequest } from "next/server";
 import { formatZodIssues, prePlanSendsSchema, profileQuerySchema } from "../../../lib/api-schemas";
 import { projectInFlightMissions } from "../../../lib/in-flight";
 import { applyPrePlanSendsToProfile } from "../../../lib/preplan-sends";
+import { applyProfileOverrides, normalizeProfileOverrides, summarizeProfile } from "../../../lib/profile-overrides";
+import { createXpDemoProfile, isBlankEid } from "../../../lib/demo-profile";
 import { getPlayerProfile } from "../../../lib/profile";
 
 export const runtime = "nodejs";
@@ -40,7 +42,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   for (const field of QUERY_FIELDS) {
     query[field] = request.nextUrl.searchParams.get(field) ?? undefined;
   }
-  return inventoryResponse(query, prePlanSends);
+  return inventoryResponse(query, prePlanSends, undefined);
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -59,17 +61,19 @@ export async function POST(request: Request): Promise<Response> {
     const value = record[field];
     query[field] = typeof value === "string" ? value : typeof value === "boolean" ? String(value) : undefined;
   }
-  return inventoryResponse(query, record.prePlanSends ?? []);
+  return inventoryResponse(query, record.prePlanSends ?? [], record.profileOverrides);
 }
 
-async function inventoryResponse(query: InventoryQuery, prePlanSends: unknown): Promise<Response> {
+async function inventoryResponse(query: InventoryQuery, prePlanSends: unknown, rawOverrides: unknown): Promise<Response> {
   const parsedPrePlanSends = prePlanSendsSchema.safeParse(prePlanSends);
   if (!parsedPrePlanSends.success) {
     return invalidRequest(formatZodIssues(parsedPrePlanSends.error));
   }
 
+  // A blank EID runs the XP planner's demo profile.
+  const demo = isBlankEid(query.eid ?? "");
   const parsedQuery = profileQuerySchema.safeParse({
-    eid: query.eid ?? "",
+    eid: demo ? "DEMO" : query.eid ?? "",
     includeSlotted: query.includeSlotted,
     inventorySource: query.inventorySource,
     includeInventoryFragments: query.includeInventoryFragments,
@@ -89,12 +93,18 @@ async function inventoryResponse(query: InventoryQuery, prePlanSends: unknown): 
       epic: parsedQuery.data.includeInventoryEpic,
       legendary: parsedQuery.data.includeInventoryLegendary,
     };
-    let profile = await getPlayerProfile(parsedQuery.data.eid, parsedQuery.data.includeSlotted, {
-      inventorySource: parsedQuery.data.inventorySource,
-      includeArtifactRarities: includeRarities,
-      includeStoneFragments: parsedQuery.data.includeInventoryFragments,
-    });
+    let profile = demo
+      ? createXpDemoProfile(parsedQuery.data.inventorySource)
+      : await getPlayerProfile(parsedQuery.data.eid, parsedQuery.data.includeSlotted, {
+          inventorySource: parsedQuery.data.inventorySource,
+          includeArtifactRarities: includeRarities,
+          includeStoneFragments: parsedQuery.data.includeInventoryFragments,
+        });
     const shinyIngredientCount = profile.shinyIngredientCount || 0;
+    // A customized profile (shared with the attainment planner) replaces the
+    // backup's values before anything reads them; the backup's go back for the dialog.
+    const realProfile = summarizeProfile(profile);
+    profile = applyProfileOverrides(profile, normalizeProfileOverrides(rawOverrides));
     // Ships in the air, counted only on request: their loot isn't in hand yet.
     // Their stars are in the profile already either way.
     const inFlight = await projectInFlightMissions(profile.inFlightMissions || [], {
@@ -127,6 +137,7 @@ async function inventoryResponse(query: InventoryQuery, prePlanSends: unknown): 
         craftCounts: profile.craftCounts,
         craftingXp: profile.craftingXp,
         shinyIngredientCount,
+        realProfile,
         shipLevels,
         inFlight: {
           missionCount: inFlight.missionCount,

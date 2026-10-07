@@ -3268,3 +3268,17 @@
     transition: none;
   }
 }
+
+/* The EID hint with the "Customize profile" link (or chip) beside it. */
+.eidHelpRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.customizedPlanNote {
+  margin: 14px 0 0;
+  font-size: 12.5px;
+}

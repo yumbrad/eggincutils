@@ -39,6 +39,8 @@ export const LOCAL_PREF_KEYS = {
   plannerShipDurations: "eggincutils-planner-ship-durations",
   plannerShowAllShinyOdds: "eggincutils-planner-show-all-shiny-odds",
   plannerSession: "eggincutils-planner-session-v1",
+  // Customized profile values per EID (blank = demo), shared by the planners.
+  profileOverrides: "eggincutils-profile-overrides",
   // The planner's last plan launches per inventory source, for the XP planner's import.
   plannerPlanLaunchesMain: "eggincutils-planner-plan-launches-main",
   plannerPlanLaunchesVirtue: "eggincutils-planner-plan-launches-virtue",

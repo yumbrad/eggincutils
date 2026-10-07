@@ -87,6 +87,14 @@ import {
   type VirtueTopUpFamily,
 } from "../../lib/virtue-top-up";
 import GoalRowsEditor, { formatShinyPercent, type GoalRowsChange } from "../goal-rows-editor";
+import ProfileCustomizer, { useProfileOverrides } from "../profile-customizer";
+import {
+  applyProfileOverrides,
+  profileOverrideCount,
+  summarizeProfile,
+  type ProfileOverrides,
+  type ProfileSummary,
+} from "../../lib/profile-overrides";
 import {
   MAX_SHINY_GOAL_CRAFTS,
   SHINY_RARITY_LABELS,
@@ -96,6 +104,7 @@ import {
   type ShinyOdds,
   type ShinyRarity,
 } from "../../lib/shiny-odds";
+import { shipDisplayName as titleCaseShip } from "../../lib/ship-data";
 import styles from "./page.module.css";
 
 type ShipLevelInfo = {
@@ -280,6 +289,8 @@ type SolveSnapshotRequest = {
 type LastSolveInputs = SolveSnapshotRequest & {
   eid: string;
   sourceFilters: PlannerSourceFilters;
+  /** Customized profile values the plan used; absent when none were set. */
+  profileOverrides?: ProfileOverrides;
 };
 
 type PersistedPlannerSession = {
@@ -2847,11 +2858,88 @@ function VirtueTankTimeline({ view, plan }: { view: VirtueTankPlanView; plan: Pl
 }
 
 /** A plan.missions row in the mission table; tank mode passes the launches that go in one tank. */
+type RankedYield = { itemId: string; quantity: number };
+
+/**
+ * Each mission row's yields the plan cares about, ranked by how much of the
+ * plan's need for the item the row covers (so a row that supplies all of a
+ * small need ranks above a big pile that covers a sliver). Drops the plan
+ * consumes also bring what consuming them yields, at the share of the item's
+ * mission drops the plan consumes. Need = goal copies + ingredients of the
+ * planned crafts + consumed copies.
+ */
+function rankRelevantYields(plan: PlanResponse["plan"]): Map<number, RankedYield[]> {
+  const recipeMap = recipes as Record<string, { ingredients: Record<string, number> } | null>;
+  const need = new Map<string, number>();
+  const addNeed = (itemId: string, quantity: number) => {
+    const key = itemIdToCanonicalKey(itemId);
+    need.set(key, (need.get(key) || 0) + quantity);
+  };
+  for (const target of plan.targets?.length ? plan.targets : [{ targetItemId: plan.targetItemId, quantity: plan.quantity }]) {
+    if (!("craftGoal" in target && target.craftGoal)) {
+      addNeed(target.targetItemId, target.quantity);
+    }
+  }
+  for (const craft of plan.crafts) {
+    for (const [ingredientKey, perCraft] of Object.entries(recipeMap[itemIdToCanonicalKey(craft.itemId)]?.ingredients || {})) {
+      addNeed(ingredientKey, perCraft * craft.count);
+    }
+  }
+  const missionSupply = new Map<string, number>();
+  for (const mission of plan.missions) {
+    for (const yieldRow of mission.expectedYields) {
+      const key = itemIdToCanonicalKey(yieldRow.itemId);
+      missionSupply.set(key, (missionSupply.get(key) || 0) + yieldRow.quantity);
+    }
+  }
+  // What one consumed copy yields, and the share of an item's mission drops the plan consumes.
+  const consumption = new Map<string, { share: number; perCopy: Array<{ key: string; quantity: number }> }>();
+  for (const row of plan.consumptions || []) {
+    if (row.count <= 0) {
+      continue;
+    }
+    const key = itemIdToCanonicalKey(row.itemId);
+    addNeed(key, row.count);
+    const supply = missionSupply.get(key) || 0;
+    consumption.set(key, {
+      share: supply > 0 ? Math.min(1, row.count / supply) : 0,
+      perCopy: row.yields.map((entry) => ({ key: itemIdToCanonicalKey(entry.itemId), quantity: entry.quantity / row.count })),
+    });
+  }
+  const ranked = new Map<number, RankedYield[]>();
+  plan.missions.forEach((mission, missionIndex) => {
+    const quantities = new Map<string, number>();
+    const add = (key: string, quantity: number) => quantities.set(key, (quantities.get(key) || 0) + quantity);
+    for (const yieldRow of mission.expectedYields) {
+      const key = itemIdToCanonicalKey(yieldRow.itemId);
+      add(key, yieldRow.quantity);
+      const consumed = consumption.get(key);
+      if (consumed && consumed.share > 0) {
+        for (const entry of consumed.perCopy) {
+          add(entry.key, yieldRow.quantity * consumed.share * entry.quantity);
+        }
+      }
+    }
+    const coverage = (key: string, quantity: number) => {
+      const needed = need.get(key) || 0;
+      return needed > 0 ? quantity / needed : 0;
+    };
+    ranked.set(
+      missionIndex,
+      Array.from(quantities.entries())
+        .filter(([, quantity]) => quantity > 0)
+        .sort(([aKey, a], [bKey, b]) => coverage(bKey, b) - coverage(aKey, a) || b - a)
+        .map(([key, quantity]) => ({ itemId: itemKeyToId(key), quantity }))
+    );
+  });
+  return ranked;
+}
+
 function renderMissionTableRow(
   mission: PlanMissionRow,
   missionIndex: number,
   targetOverride: string | null,
-  options: { key: string; launches?: number; splitAcrossTanks?: boolean }
+  options: { key: string; launches?: number; splitAcrossTanks?: boolean; yields?: RankedYield[] }
 ) {
   const targetLabel = targetOverride || afxIdToTargetFamilyName(mission.targetAfxId);
   const targetItemKey = targetOverride ? null : afxIdToItemKey(mission.targetAfxId);
@@ -2904,7 +2992,7 @@ function renderMissionTableRow(
           : formatDurationFromHours(mission.durationSeconds / 3600)}
       </td>
       <td>
-        {mission.expectedYields.slice(0, 3).map((yieldRow) => {
+        {(options.yields ?? mission.expectedYields).slice(0, 3).map((yieldRow) => {
           const iconUrl = itemIdToIconUrl(yieldRow.itemId);
           return (
             <div key={yieldRow.itemId} style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -2936,6 +3024,7 @@ function VirtueTankMissionRows({
   plan: PlanResponse["plan"];
   targetOverrideByIndex: Map<number, string>;
 }) {
+  const rankedYields = useMemo(() => rankRelevantYields(plan), [plan]);
   const tankRows = view.tanks.map((tankView) => groupTankLaunches(view, tankView.tank));
   const tanksByMissionIndex = new Map<number, number>();
   tankRows.forEach((rows) =>
@@ -2957,6 +3046,7 @@ function VirtueTankMissionRows({
           {inAirRows.map(([missionIndex, mission]) =>
             renderMissionTableRow(mission, missionIndex, null, {
               key: `${missionIndex}:${mission.ship}:${mission.durationType}:${mission.missionId}:${mission.targetAfxId}`,
+              yields: rankedYields.get(missionIndex),
             })
           )}
         </tbody>
@@ -3005,6 +3095,7 @@ function VirtueTankMissionRows({
                     key: `${tank.index}:${row.key}`,
                     launches: row.launches,
                     splitAcrossTanks: (tanksByMissionIndex.get(row.missionIndex) || 0) > 1,
+                    yields: rankedYields.get(row.missionIndex),
                   }
                 );
               }
@@ -3047,6 +3138,7 @@ function VirtueTankMissionRows({
           {unpackedRows.map(([missionIndex, mission]) =>
             renderMissionTableRow(mission, missionIndex, targetOverrideByIndex.get(missionIndex) || null, {
               key: `none:${missionIndex}`,
+              yields: rankedYields.get(missionIndex),
             })
           )}
         </tbody>
@@ -3148,25 +3240,6 @@ function prepReasonLabel(reason: string): string {
     return `Unlock ${titleCaseShip(unlockMatch[1])}`;
   }
   return reason;
-}
-
-function titleCaseShip(ship: string): string {
-  const overrides: Record<string, string> = {
-    ATREGGIES: "Henliner",
-    CHICKFIANT: "Defihent",
-    CORELLIHEN_CORVETTE: "Cornish-Hen Corvette",
-    MILLENIUM_CHICKEN: "Quintillion Chicken",
-    BCR: "BCR",
-  };
-  const override = overrides[ship];
-  if (override) {
-    return override;
-  }
-  return ship
-    .toLowerCase()
-    .split("_")
-    .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
-    .join(" ");
 }
 
 function compactShipName(ship: string): string {
@@ -3490,7 +3563,16 @@ export default function MissionCraftPlannerPage() {
   responseRef.current = response;
   const shiftCapSliderRef = useRef<HTMLInputElement | null>(null);
   const trimmedEid = eid.trim();
+  const [profileOverrides, setProfileOverrides] = useProfileOverrides(eid);
+  // The backup's own values (before any customizing), for the customize dialog.
+  const [fetchedProfileSummary, setFetchedProfileSummary] = useState<{ eid: string; summary: ProfileSummary } | null>(null);
   const isDemoMode = trimmedEid.length === 0;
+  const demoProfileSummary = useMemo(
+    () => (isDemoMode ? summarizeProfile(createDemoProfile(inventorySource)) : null),
+    [isDemoMode, inventorySource]
+  );
+  const profileSummaryForDialog =
+    demoProfileSummary ?? (fetchedProfileSummary?.eid === trimmedEid ? fetchedProfileSummary.summary : null);
   const showDemoNotice = isDemoMode && !demoNoticeDismissed;
   const sourceFilters: PlannerSourceFilters = {
     inventorySource,
@@ -4016,6 +4098,10 @@ export default function MissionCraftPlannerPage() {
 
     return rows;
   }, [lastSolveRequest?.targetCraftedOnly, lootData, profileSnapshot, response, showAllShinyOdds]);
+  const relevantYieldsByMission = useMemo(
+    () => (response ? rankRelevantYields(response.plan) : new Map<number, RankedYield[]>()),
+    [response]
+  );
   const missionPrepTargetOverrideByIndex = useMemo(() => {
     const overrides = new Map<number, string>();
     if (!response) {
@@ -4599,6 +4685,8 @@ export default function MissionCraftPlannerPage() {
     virtueShiftCap: inventorySource === "virtue" ? virtueShiftCap : undefined,
     virtueStartTank: inventorySource === "virtue" ? virtueStartTank : undefined,
     sourceFilters: { ...sourceFilters },
+    // Left out when nothing is customized, so such requests compare the same as before.
+    ...(profileOverrideCount(profileOverrides) > 0 ? { profileOverrides } : {}),
   };
   const planInputsChanged =
     !response || !lastSolveRequest || JSON.stringify(currentSolveRequest) !== JSON.stringify(lastSolveRequest);
@@ -4682,6 +4770,10 @@ export default function MissionCraftPlannerPage() {
           profile = createDemoProfile(inventorySource) as unknown as ProfileSnapshot;
         } else {
           profile = await fetchProfileSnapshot(trimmedEid, sourceFilters);
+        }
+        setFetchedProfileSummary({ eid: trimmedEid, summary: summarizeProfile(profile) });
+        if (snapshotRequest.profileOverrides) {
+          profile = applyProfileOverrides(profile, snapshotRequest.profileOverrides);
         }
         // The card's hand edits override this backup's readings, however new it is.
         if (inventorySource === "virtue" && profile.virtueTank && virtueTankEdits?.eid === trimmedEid) {
@@ -5204,8 +5296,21 @@ export default function MissionCraftPlannerPage() {
                   </div>
                 </div>
               </div>
-              <div className={styles.helpText}>
-                Enter your EID for personalized plans, or leave blank to run a demo profile.
+              <div className={`${styles.helpText} ${styles.eidHelpRow}`}>
+                <span>Enter your EID for personalized plans, or leave blank to run a demo profile.</span>
+                <ProfileCustomizer
+                  eid={eid}
+                  overrides={profileOverrides}
+                  onChange={setProfileOverrides}
+                  summary={profileSummaryForDialog}
+                  pendingNote={
+                    response &&
+                    JSON.stringify(lastSolveRequest?.profileOverrides ?? {}) !==
+                      JSON.stringify(profileOverrideCount(profileOverrides) > 0 ? profileOverrides : {})
+                      ? "rebuild to apply"
+                      : null
+                  }
+                />
               </div>
             </div>
 
@@ -5858,6 +5963,12 @@ export default function MissionCraftPlannerPage() {
       )}
       {response && (
         <>
+          {lastSolveRequest?.profileOverrides && (
+            <p className={`muted ${styles.customizedPlanNote}`}>
+              Planned with a customized profile ({profileOverrideCount(lastSolveRequest.profileOverrides)}{" "}
+              {profileOverrideCount(lastSolveRequest.profileOverrides) === 1 ? "change" : "changes"}).
+            </p>
+          )}
           <div className={`grid ${styles.resultsGrid}`} style={{ marginTop: 14 }}>
           <div className="grid cards">
             <div className="card">
@@ -6227,7 +6338,7 @@ export default function MissionCraftPlannerPage() {
                       <th scope="col">Target</th>
                       <th scope="col">Launches</th>
                       <th scope="col">Duration</th>
-                      <th scope="col">Top expected yields</th>
+                      <th scope="col">Top relevant yields</th>
                     </tr>
                   </thead>
                   <VirtueTankMissionRows
@@ -6246,7 +6357,7 @@ export default function MissionCraftPlannerPage() {
                       <th>Target</th>
                       <th>Launches</th>
                       <th>Duration</th>
-                      <th>Top expected yields</th>
+                      <th>Top relevant yields</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -6260,7 +6371,10 @@ export default function MissionCraftPlannerPage() {
                           mission,
                           missionIndex,
                           mission.inAir ? null : missionPrepTargetOverrideByIndex.get(missionIndex) || null,
-                          { key: `${missionIndex}:${mission.ship}:${mission.durationType}:${mission.missionId}:${mission.targetAfxId}` }
+                          {
+                            key: `${missionIndex}:${mission.ship}:${mission.durationType}:${mission.missionId}:${mission.targetAfxId}`,
+                            yields: relevantYieldsByMission.get(missionIndex),
+                          }
                         )
                       )}
                   </tbody>

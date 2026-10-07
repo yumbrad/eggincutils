@@ -283,3 +283,93 @@ export function buildMissionOptions(shipLevels: ShipLevelInfo[], epicResearchFTL
 
   return options;
 }
+
+/** Every ship in unlock order with its star count, for pickers. */
+export function shipStarRanges(): Array<{ ship: string; maxLevel: number }> {
+  return shipConfig.map((entry) => ({ ship: entry.ship, maxLevel: entry.levelMissionRequirements.length }));
+}
+
+/**
+ * Ship levels with some ships set to a star count (a customized profile).
+ * Stars come from launch points and each ship unlocks after enough launches
+ * of the one before, so a set ship gets the short launches its stars need,
+ * the ships before it get enough launches to unlock it, and a ship that
+ * unlocks the next keeps the launches that does (so its stars may stay above
+ * what was asked: 0★ with the next ship unlocked can't happen in the game).
+ * Launch counts stay consistent, so anything that replays launches from them
+ * keeps the stars. Ships not set keep their entries.
+ */
+export function withShipStars(
+  shipLevels: ShipLevelInfo[],
+  stars: Record<string, number>
+): { shipLevels: ShipLevelInfo[]; effective: Record<string, number> } {
+  const setShips = SHIP_ORDER.filter((ship) => stars[ship] != null && Number.isFinite(stars[ship]));
+  if (setShips.length === 0) {
+    return { shipLevels, effective: {} };
+  }
+  const byShip = new Map(shipLevels.map((entry) => [entry.ship, entry]));
+  const counts = shipLevelsToLaunchCounts(shipLevels);
+  const touched = new Set<string>();
+  const launchesOf = (ship: string) => ALL_DURATIONS.reduce((sum, duration) => sum + counts[ship][duration], 0);
+  for (const ship of setShips) {
+    const entry = shipConfig.find((candidate) => candidate.ship === ship)!;
+    const index = SHIP_ORDER.indexOf(ship);
+    const level = Math.max(0, Math.min(entry.levelMissionRequirements.length, Math.round(stars[ship])));
+    const points = Math.ceil(cumulativeThresholds(entry.levelMissionRequirements)[level] || 0);
+    const next = SHIP_ORDER[index + 1];
+    const keepsNextUnlocked = next != null && (byShip.get(next)?.unlocked || setShips.includes(next));
+    const launches = Math.max(points, keepsNextUnlocked ? UNLOCK_LAUNCHES[ship] || 0 : 0);
+    counts[ship] = { TUTORIAL: 0, SHORT: launches, LONG: 0, EPIC: 0 };
+    touched.add(ship);
+    // Unlock it: every earlier ship needs its unlock launches.
+    for (let earlier = index - 1; earlier >= 0; earlier -= 1) {
+      const earlierShip = SHIP_ORDER[earlier];
+      const needed = UNLOCK_LAUNCHES[earlierShip] || 0;
+      if (launchesOf(earlierShip) < needed) {
+        counts[earlierShip].SHORT += needed - launchesOf(earlierShip);
+        touched.add(earlierShip);
+      }
+    }
+  }
+  const rebuilt = new Map(buildLevelInfoFromLaunchCounts(counts).map((entry) => [entry.ship, entry]));
+  const effective: Record<string, number> = {};
+  const next = shipLevels.map((entry) => {
+    if (!touched.has(entry.ship)) {
+      return entry;
+    }
+    const rebuiltEntry = rebuilt.get(entry.ship)!;
+    // A set ship is unlocked; a profile can list ships unlocked with no launches (the demo).
+    const merged = { ...rebuiltEntry, unlocked: rebuiltEntry.unlocked || entry.unlocked || setShips.includes(entry.ship) };
+    if (merged.unlocked && !rebuiltEntry.unlocked) {
+      merged.level = Math.min(
+        merged.maxLevel,
+        getLevelFromLaunchPoints(merged.launchPoints, shipConfig.find((c) => c.ship === entry.ship)!.levelMissionRequirements)
+      );
+    }
+    if (setShips.includes(entry.ship)) {
+      effective[entry.ship] = merged.level;
+    }
+    return merged;
+  });
+  return { shipLevels: next, effective };
+}
+
+const SHIP_DISPLAY_NAMES: Record<string, string> = {
+  ATREGGIES: "Henliner",
+  CHICKFIANT: "Defihent",
+  CORELLIHEN_CORVETTE: "Cornish-Hen Corvette",
+  MILLENIUM_CHICKEN: "Quintillion Chicken",
+  BCR: "BCR",
+};
+
+/** A ship's in-game name ("HENERPRISE" -> "Henerprise", "ATREGGIES" -> "Henliner"). */
+export function shipDisplayName(ship: string): string {
+  return (
+    SHIP_DISPLAY_NAMES[ship] ||
+    ship
+      .toLowerCase()
+      .split("_")
+      .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
+      .join(" ")
+  );
+}

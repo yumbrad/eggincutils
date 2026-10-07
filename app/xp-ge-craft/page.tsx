@@ -73,6 +73,9 @@ import {
 import { XP_GE_CRAFT_COPY } from "../../lib/xp-ge-craft-copy";
 import { craftRunOdds, resolveShinyGoalTargets, SHINY_RARITY_LABELS, type ShinyRarity } from "../../lib/shiny-odds";
 import GoalRowsEditor from "../goal-rows-editor";
+import ProfileCustomizer, { useProfileOverrides } from "../profile-customizer";
+import { profileOverrideCount, type ProfileOverrides, type ProfileSummary } from "../../lib/profile-overrides";
+import { shipDisplayName as titleCaseShip } from "../../lib/ship-data";
 import styles from "./page.module.css";
 
 type SortKey = "xpPerGe" | "xp" | "tierXpPerGe" | "familyTier" | "name";
@@ -110,6 +113,8 @@ type InventoryResponse = {
   craftCounts?: Record<string, number>;
   craftingXp?: number;
   shinyIngredientCount?: number;
+  /** The backup's own values, before any customized profile. */
+  realProfile?: ProfileSummary;
   shipLevels?: ShipStars[];
   inFlight?: InFlightResult;
   prePlanSends?: {
@@ -221,6 +226,7 @@ type OptimizePayload = {
   craftingXp: number;
   shinyIngredientCount: number;
   shipLevels: ShipStars[];
+  realProfile: ProfileSummary | null;
   inFlight: InFlightResult | null;
   prePlanSends?: InventoryResponse["prePlanSends"];
 };
@@ -510,7 +516,8 @@ async function getOptimalCrafts(
   craftLimits: CraftLimits,
   prePlanSends: PrePlanSendRow[],
   includeInFlight: boolean,
-  goals: CraftReservationGoal[]
+  goals: CraftReservationGoal[],
+  profileOverrides: ProfileOverrides
 ): Promise<OptimizePayload> {
   const body = {
     eid,
@@ -521,6 +528,7 @@ async function getOptimalCrafts(
     includeInventoryLegendary: includeShiny.legendary ? "true" : "false",
     inventorySource,
     includeInFlight: includeInFlight ? "true" : "false",
+    ...(profileOverrideCount(profileOverrides) > 0 ? { profileOverrides } : {}),
     // Unfiltered, so the per-row results line up with the rows on screen.
     prePlanSends: prePlanSends.map((send) => ({
       ship: send.ship,
@@ -558,27 +566,10 @@ async function getOptimalCrafts(
     craftingXp,
     shinyIngredientCount: Math.max(0, Math.floor(data.shinyIngredientCount || 0)),
     shipLevels: data.shipLevels || [],
+    realProfile: data.realProfile || null,
     inFlight: data.inFlight || null,
     prePlanSends: data.prePlanSends,
   };
-}
-
-function titleCaseShip(ship: string): string {
-  const overrides: Record<string, string> = {
-    ATREGGIES: "Henliner",
-    CHICKFIANT: "Defihent",
-    CORELLIHEN_CORVETTE: "Cornish-Hen Corvette",
-    MILLENIUM_CHICKEN: "Quintillion Chicken",
-    BCR: "BCR",
-  };
-  if (overrides[ship]) {
-    return overrides[ship];
-  }
-  return ship
-    .toLowerCase()
-    .split("_")
-    .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
-    .join(" ");
 }
 
 function durationTypeLabel(durationType: PrePlanDurationType): string {
@@ -1597,6 +1588,10 @@ function getCostTooltip(artifact: string, craft: Solution["crafts"][string]): st
 export default function XpGeCraftPage(): JSX.Element {
   const highs = useHighsClient();
   const [eid, setEID] = useState<string>("");
+  const [profileOverrides, setProfileOverrides] = useProfileOverrides(eid);
+  // The backup's own values from the last calculate, and the overrides it used.
+  const [realProfileSummary, setRealProfileSummary] = useState<{ eid: string; summary: ProfileSummary } | null>(null);
+  const [calculatedOverridesKey, setCalculatedOverridesKey] = useState<string | null>(null);
   const [includeSlotted, setIncludeSlotted] = useState<boolean>(true);
   const [includeFragments, setIncludeFragments] = useState<boolean>(true);
   const [includeRare, setIncludeRare] = useState<boolean>(false);
@@ -1911,10 +1906,6 @@ export default function XpGeCraftPage(): JSX.Element {
       setError("Solver is still loading. Please try again in a moment.");
       return;
     }
-    if (!eid.trim()) {
-      setError("Please enter your Egg Inc. ID before calculating.");
-      return;
-    }
 
     setError(null);
     setSolution(null);
@@ -1944,7 +1935,8 @@ export default function XpGeCraftPage(): JSX.Element {
         nextLimits,
         prePlanSends,
         includeInFlight,
-        nextGoals
+        nextGoals,
+        profileOverrides
       );
       lastSolveRef.current = {
         inventory: result.inventory,
@@ -1963,6 +1955,8 @@ export default function XpGeCraftPage(): JSX.Element {
       setLastPrePlanResult(result.prePlanSends || null);
       setLastSolvedPrePlanSignature(prePlanSendsSignature(prePlanSends));
       setLastInFlight(result.inFlight);
+      setRealProfileSummary(result.realProfile ? { eid: eid.trim(), summary: result.realProfile } : null);
+      setCalculatedOverridesKey(JSON.stringify(profileOverrides));
       setShipStars(result.shipLevels.length > 0 ? result.shipLevels : null);
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : "Unable to load inventory.";
@@ -2521,7 +2515,18 @@ export default function XpGeCraftPage(): JSX.Element {
                   event.preventDefault();
                   setEID(event.clipboardData.getData("text"));
                 }}
-                placeholder="EI123..."
+                placeholder="EI123... (blank for a demo)"
+              />
+              <ProfileCustomizer
+                eid={eid}
+                overrides={profileOverrides}
+                onChange={setProfileOverrides}
+                summary={realProfileSummary?.eid === eid.trim() ? realProfileSummary.summary : null}
+                pendingNote={
+                  solution && calculatedOverridesKey != null && calculatedOverridesKey !== JSON.stringify(profileOverrides)
+                    ? "recalculate to apply"
+                    : null
+                }
               />
             </div>
             <fieldset className={styles.ingredientSourceGroup}>
@@ -3264,7 +3269,7 @@ export default function XpGeCraftPage(): JSX.Element {
         {!solution && (
           <p className={styles.footnote}>
             Enter your Egg Inc. ID and calculate to see optimized craft counts, expected XP, and discounted GE cost based on your
-            current inventory and craft history.
+            current inventory and craft history, or leave it blank to try a small demo inventory.
           </p>
         )}
 

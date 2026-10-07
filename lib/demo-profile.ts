@@ -1,3 +1,4 @@
+import { getCraftingLevelTotalXpForLevel } from "./crafting-levels";
 import type { InFlightMission, InventorySource, PlayerProfile } from "./profile";
 import { buildMissionOptions, computeShipLevelsFromLaunchCounts, type DurationType } from "./ship-data";
 import { TRILLION, virtueTankCapacityForLevel, type VirtueTankSnapshot } from "./virtue-fuel";
@@ -99,5 +100,31 @@ export function createDemoProfile(inventorySource: InventorySource = "main"): Pl
       inventorySource === "virtue"
         ? { ...DEMO_VIRTUE_TANK, fuels: { ...DEMO_VIRTUE_TANK.fuels }, limits: { ...DEMO_VIRTUE_TANK.limits } }
         : undefined,
+  };
+}
+
+// The XP planner's demo: a couple hundred items, enough for a small craft
+// tree (T2s, a T3 puzzle cube, a T3 ankh), and a couple of craft counts so
+// "Customize profile" and the shiny odds have something to show.
+const XP_DEMO_INVENTORY: Record<string, number> = {
+  puzzle_cube_1: 50,
+  puzzle_cube_2: 6,
+  ornate_gusset_1: 20,
+  tungsten_ankh_1: 45,
+  tungsten_ankh_2: 4,
+  solar_titanium_1: 25,
+  interstellar_compass_1: 24,
+  gold_meteorite_1: 27,
+};
+const XP_DEMO_CRAFT_COUNTS: Record<string, number> = { puzzle_cube_2: 120, tungsten_ankh_2: 40 };
+const XP_DEMO_CRAFTING_LEVEL = 8;
+
+/** The demo profile with the XP planner's small sample inventory. */
+export function createXpDemoProfile(inventorySource: InventorySource = "main"): PlayerProfile {
+  return {
+    ...createDemoProfile(inventorySource),
+    inventory: { ...XP_DEMO_INVENTORY },
+    craftCounts: { ...XP_DEMO_CRAFT_COUNTS },
+    craftingXp: getCraftingLevelTotalXpForLevel(XP_DEMO_CRAFTING_LEVEL),
   };
 }
