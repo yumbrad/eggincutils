@@ -499,7 +499,21 @@
   cursor: pointer;
 }
 
-.targetCraftLater:hover {
+/* No hover change and no focus ring after a click: with nothing beside it
+   to compare to, either would hide whether it's on. Keyboard focus keeps a ring. */
+.targetCraftLater:focus:not(:focus-visible) {
+  outline: none;
+  box-shadow: none;
+}
+
+/* Outranks the global button:hover background, so hovering changes nothing. */
+.targetCraftLater:hover:not(:disabled) {
+  background: transparent;
+  color: var(--muted);
+}
+
+.targetCraftLater[data-on="1"]:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--accent), transparent 85%);
   color: var(--ink);
 }
 
