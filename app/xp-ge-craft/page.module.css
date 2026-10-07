@@ -398,11 +398,13 @@
   flex-wrap: wrap;
 }
 
+/* The section background (as .standaloneDrawer), a shade darker than the
+   plan box around it in the dark themes, so the totals stand apart. */
 .summaryCard {
   border: 1px solid var(--stroke);
   border-radius: 10px;
   padding: 10px 12px;
-  background: color-mix(in oklab, var(--card), white 20%);
+  background: color-mix(in oklab, var(--card), white 12%);
   min-width: 160px;
   flex: 1 1 160px;
 }
@@ -1049,11 +1051,44 @@
   gap: 0;
 }
 
-.executionPrefix {
-  font-family: "Iosevka Term", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  color: var(--muted);
-  white-space: pre;
-  margin-right: 2px;
+/* Tree view guides: thin lines drawn across the whole cell height, so they
+   join from row to row; an elbow turns into each child, running on below
+   only when more siblings follow. */
+.treeCell {
+  position: relative;
+}
+
+.treeGuide,
+.treeElbow,
+.treeElbow::after {
+  position: absolute;
+  border-color: color-mix(in oklab, var(--muted), transparent 55%);
+  border-style: solid;
+  border-width: 0;
+  pointer-events: none;
+}
+
+.treeGuide {
+  top: -1px;
+  bottom: -1px;
+  border-left-width: 1.5px;
+}
+
+.treeElbow {
+  top: -1px;
+  height: calc(50% + 1px);
+  width: 9px;
+  border-left-width: 1.5px;
+  border-bottom-width: 1.5px;
+  border-bottom-left-radius: 6px;
+}
+
+.treeElbow[data-last="0"]::after {
+  content: "";
+  left: -1.5px;
+  top: 100%;
+  height: calc(100% + 1px);
+  border-left-width: 1.5px;
 }
 
 .executionRootRow td {

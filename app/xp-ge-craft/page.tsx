@@ -154,7 +154,10 @@ type ExecutionPlanRow = {
   xp: number;
   cost: number;
   depth: number;
-  prefix: string;
+  /** Tree guides: for each level between the top-level row and this one, whether a line runs on past it. */
+  guides: boolean[];
+  /** The last child of its parent (its elbow ends the line). */
+  isLast: boolean;
   usage?: MaxXpUsageSummary;
 };
 
@@ -856,6 +859,14 @@ function getModeComparisonRows(solution: Solution, sortKey: SortKey): ModeCompar
   }
 }
 
+// Tree view geometry: each level indents TREE_INDENT px, its line centered in that step.
+const TREE_CELL_PAD = 8;
+const TREE_INDENT = 18;
+
+function treeLineX(level: number): number {
+  return TREE_CELL_PAD + level * TREE_INDENT + 8;
+}
+
 function getExecutionPlanRows(
   nodes: MaxXpExecutionPlanNode[],
   usageByArtifact: Record<string, MaxXpUsageSummary> = {}
@@ -870,9 +881,6 @@ function getExecutionPlanRows(
     isRoot: boolean,
     isLast: boolean
   ): void => {
-    const prefix = isRoot
-      ? ""
-      : `${ancestorHasNext.map((hasNext) => (hasNext ? "|  " : "   ")).join("")}|_ `;
     rows.push({
       key,
       artifact: node.artifact,
@@ -881,7 +889,9 @@ function getExecutionPlanRows(
       xp: node.xp,
       cost: node.cost,
       depth,
-      prefix,
+      // Top-level rows are separate steps, so no line runs between them.
+      guides: isRoot ? [] : ancestorHasNext.slice(1),
+      isLast,
       usage: usageByArtifact[node.artifact],
     });
 
@@ -3169,9 +3179,24 @@ export default function XpGeCraftPage(): JSX.Element {
                       <tbody>
                         {maxXpExecutionRows.map((row) => (
                           <tr key={row.key} data-depth={row.depth} className={row.mode === "click" ? styles.executionRootRow : ""}>
-                            <td>
+                            <td
+                              className={styles.treeCell}
+                              style={row.depth > 0 ? { paddingLeft: TREE_CELL_PAD + row.depth * TREE_INDENT } : undefined}
+                            >
+                              {row.guides.map((runsOn, level) =>
+                                runsOn ? (
+                                  <span key={level} className={styles.treeGuide} style={{ left: treeLineX(level) }} aria-hidden="true" />
+                                ) : null
+                              )}
+                              {row.depth > 0 && (
+                                <span
+                                  className={styles.treeElbow}
+                                  data-last={row.isLast ? "1" : "0"}
+                                  style={{ left: treeLineX(row.depth - 1) }}
+                                  aria-hidden="true"
+                                />
+                              )}
                               <span className={styles.executionArtifactCell}>
-                                {row.prefix && <span className={styles.executionPrefix}>{row.prefix}</span>}
                                 <ArtifactCell artifact={row.artifact} />
                                 <ShinyOddsInline odds={shinyOdds.byRow.get(row.key)} artifact={row.artifact} />
                               </span>
