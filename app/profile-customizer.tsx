@@ -13,6 +13,8 @@ import {
   type ProfileOverrides,
   type ProfileSummary,
 } from "../lib/profile-overrides";
+import { buildTargetOptions, filterTargetOptions, type TargetOption } from "../lib/goal-rows";
+import { recipes } from "../lib/recipes";
 import { shipDisplayName, shipStarRanges } from "../lib/ship-data";
 import styles from "./profile-customizer.module.css";
 
@@ -45,7 +47,7 @@ function parseField(raw: string): number | undefined {
 
 /**
  * A "Customize profile" link by the EID that opens a dialog for setting
- * research, crafting level, ship stars and the in-air toggle over the
+ * research, crafting level, starting ship stars and item counts over the
  * backup's (or the demo's) values. Once anything is set it shows as a chip
  * with the count and a reset, so a customized profile is never forgotten.
  */
@@ -124,10 +126,7 @@ export default function ProfileCustomizer({
         <div className={styles.body}>
           <header className={styles.header}>
             <h2 id="profile-customizer-title">Customize profile</h2>
-            <p>
-              Values you set replace {source}&apos;s when planning, in both planners. Leave one blank to use{" "}
-              {isDemo ? "the demo's" : "your backup's"}.
-            </p>
+            <p>Leave any blank to use {isDemo ? "the demo profile's" : "your backup's"}.</p>
           </header>
 
           <section className={styles.section}>
@@ -181,23 +180,9 @@ export default function ProfileCustomizer({
                 );
               })}
             </div>
-            <p className={styles.note}>
-              Where each ship starts; planned launches still level it up from there. Setting a ship unlocks it, and a ship
-              whose launches unlock the next one may start a star above what you set.
-            </p>
           </section>
 
-          <section className={styles.section}>
-            <label className={styles.toggle}>
-              <input
-                type="checkbox"
-                checked={Boolean(overrides.ignoreInFlight)}
-                onChange={(event) => set({ ignoreInFlight: event.target.checked })}
-              />
-              Ignore ships in the air
-              {summary && summary.inFlightCount > 0 && <span className={styles.real}>({summary.inFlightCount} now)</span>}
-            </label>
-          </section>
+          <ItemOverrides overrides={overrides} summary={summary} onChange={set} />
 
           <footer className={styles.footer}>
             <button type="button" className={styles.resetAll} onClick={() => onChange({})} disabled={count === 0}>
@@ -249,6 +234,185 @@ function NumberField({
       <span className={styles.real}>
         {min}–{max}
       </span>
+    </label>
+  );
+}
+
+let itemOptions: TargetOption[] | null = null;
+const ITEM_RESULT_LIMIT = 8;
+
+/**
+ * Inventory and craft counts: only the items you've changed are listed, and
+ * a search adds one. Each count shows the backup's greyed until you type;
+ * clearing both of an item's counts drops it.
+ */
+function ItemOverrides({
+  overrides,
+  summary,
+  onChange,
+}: {
+  overrides: ProfileOverrides;
+  summary: ProfileSummary | null;
+  onChange: (patch: Partial<ProfileOverrides>) => void;
+}) {
+  itemOptions ??= buildTargetOptions();
+  const options = itemOptions;
+  const [query, setQuery] = useState("");
+  // Items added from the search that don't have a value yet.
+  const [added, setAdded] = useState<string[]>([]);
+  const firstFieldRef = useRef<HTMLInputElement | null>(null);
+  const [focusKey, setFocusKey] = useState<string | null>(null);
+
+  const editedKeys = Array.from(
+    new Set([...Object.keys(overrides.inventory || {}), ...Object.keys(overrides.craftCounts || {}), ...added])
+  );
+  const results = query.trim()
+    ? filterTargetOptions(options, query)
+        .filter((option) => !editedKeys.includes(option.itemKey))
+        .slice(0, ITEM_RESULT_LIMIT)
+    : [];
+
+  useEffect(() => {
+    if (focusKey) {
+      firstFieldRef.current?.focus();
+      setFocusKey(null);
+    }
+  }, [focusKey]);
+
+  function add(option: TargetOption): void {
+    setAdded((current) => (current.includes(option.itemKey) ? current : [...current, option.itemKey]));
+    setQuery("");
+    setFocusKey(option.itemKey);
+  }
+
+  function setCount(kind: "inventory" | "craftCounts", itemKey: string, value: number | undefined): void {
+    const next = { ...(overrides[kind] || {}) };
+    if (value == null) {
+      delete next[itemKey];
+    } else {
+      next[itemKey] = value;
+    }
+    onChange({ [kind]: next });
+  }
+
+  function remove(itemKey: string): void {
+    const inventory = { ...(overrides.inventory || {}) };
+    const craftCounts = { ...(overrides.craftCounts || {}) };
+    delete inventory[itemKey];
+    delete craftCounts[itemKey];
+    setAdded((current) => current.filter((key) => key !== itemKey));
+    onChange({ inventory, craftCounts });
+  }
+
+  return (
+    <section className={styles.section}>
+      <h3>Inventory and craft counts</h3>
+      <div className={styles.itemSearch}>
+        <input
+          type="text"
+          value={query}
+          placeholder="Add an item…"
+          aria-label="Add an item to change its count"
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && results[0]) {
+              event.preventDefault();
+              add(results[0]);
+            }
+          }}
+        />
+        {results.length > 0 && (
+          <ul className={styles.itemResults} role="listbox">
+            {results.map((option) => (
+              <li key={option.itemKey} role="option" aria-selected={false}>
+                <button type="button" onClick={() => add(option)}>
+                  {option.iconUrl ? <img src={option.iconUrl} alt="" width={18} height={18} loading="lazy" /> : null}
+                  {option.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {editedKeys.length > 0 && (
+        <div className={styles.itemRows}>
+          {editedKeys.map((itemKey) => {
+            const option = options.find((candidate) => candidate.itemKey === itemKey);
+            const craftable = Boolean(recipes[itemKey]);
+            return (
+              <div key={itemKey} className={styles.itemRow}>
+                <span className={styles.itemName} title={option?.label || itemKey}>
+                  {option?.iconUrl ? <img src={option.iconUrl} alt="" width={18} height={18} loading="lazy" /> : null}
+                  <span>{option?.label || itemKey}</span>
+                </span>
+                <CountField
+                  label="have"
+                  itemLabel={option?.label || itemKey}
+                  value={overrides.inventory?.[itemKey]}
+                  real={summary ? Math.floor(summary.inventory[itemKey] || 0) : undefined}
+                  inputRef={focusKey === itemKey ? firstFieldRef : undefined}
+                  onChange={(value) => setCount("inventory", itemKey, value)}
+                />
+                {craftable ? (
+                  <CountField
+                    label="crafted"
+                    itemLabel={option?.label || itemKey}
+                    value={overrides.craftCounts?.[itemKey]}
+                    real={summary ? Math.round(summary.craftCounts[itemKey] || 0) : undefined}
+                    onChange={(value) => setCount("craftCounts", itemKey, value)}
+                  />
+                ) : (
+                  <span />
+                )}
+                <button
+                  type="button"
+                  className={styles.itemRemove}
+                  onClick={() => remove(itemKey)}
+                  aria-label={`Use the backup's counts for ${option?.label || itemKey}`}
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CountField({
+  label,
+  itemLabel,
+  value,
+  real,
+  inputRef,
+  onChange,
+}: {
+  label: string;
+  itemLabel: string;
+  value: number | undefined;
+  real: number | undefined;
+  inputRef?: React.Ref<HTMLInputElement>;
+  onChange: (value: number | undefined) => void;
+}) {
+  const [draft, setDraft] = useState(value == null ? "" : String(value));
+  useEffect(() => {
+    setDraft(value == null ? "" : String(value));
+  }, [value]);
+  return (
+    <label className={styles.countField} data-set={value != null ? "1" : "0"}>
+      <span>{label}</span>
+      <input
+        ref={inputRef}
+        type="text"
+        inputMode="numeric"
+        aria-label={`${itemLabel} ${label}`}
+        value={draft}
+        placeholder={real == null ? "—" : real.toLocaleString()}
+        onChange={(event) => setDraft(event.target.value.replace(/[^\d]/g, ""))}
+        onBlur={() => onChange(parseField(draft))}
+      />
     </label>
   );
 }

@@ -1,5 +1,6 @@
 import { getCraftingLevelProgress, getCraftingLevelTotalXpForLevel } from "./crafting-levels";
 import { LOCAL_PREF_KEYS, readFirstStoredString, writeStoredString } from "./local-preferences";
+import { recipes } from "./recipes";
 import { buildMissionOptions, shipStarRanges, withShipStars, type ShipLevelInfo } from "./ship-data";
 
 /**
@@ -14,9 +15,13 @@ export type ProfileOverrides = {
   craftingLevel?: number;
   /** Ship -> stars (0 to its max). */
   shipStars?: Record<string, number>;
-  /** Plan as if nothing were in the air. */
-  ignoreInFlight?: boolean;
+  /** Item key -> copies in the inventory. */
+  inventory?: Record<string, number>;
+  /** Item key -> all-time crafts. */
+  craftCounts?: Record<string, number>;
 };
+
+const MAX_ITEM_COUNT = 10_000_000;
 
 export const MAX_FTL_RESEARCH_LEVEL = 60;
 export const MAX_ZEROG_RESEARCH_LEVEL = 10;
@@ -57,9 +62,23 @@ export function normalizeProfileOverrides(raw: unknown): ProfileOverrides {
       overrides.shipStars = shipStars;
     }
   }
-  if (record.ignoreInFlight === true) {
-    overrides.ignoreInFlight = true;
-  }
+  const items = (value: unknown, craftableOnly: boolean): Record<string, number> | undefined => {
+    if (!value || typeof value !== "object") {
+      return undefined;
+    }
+    const counts: Record<string, number> = {};
+    for (const [itemKey, raw] of Object.entries(value as Record<string, unknown>)) {
+      const count = clampInt(raw, 0, MAX_ITEM_COUNT);
+      if (count != null && itemKey in recipes && (!craftableOnly || recipes[itemKey])) {
+        counts[itemKey] = count;
+      }
+    }
+    return Object.keys(counts).length > 0 ? counts : undefined;
+  };
+  const inventory = items(record.inventory, false);
+  const craftCounts = items(record.craftCounts, true);
+  if (inventory) overrides.inventory = inventory;
+  if (craftCounts) overrides.craftCounts = craftCounts;
   return overrides;
 }
 
@@ -70,7 +89,8 @@ export function profileOverrideCount(overrides: ProfileOverrides): number {
     (overrides.epicResearchZerogLevel != null ? 1 : 0) +
     (overrides.craftingLevel != null ? 1 : 0) +
     Object.keys(overrides.shipStars || {}).length +
-    (overrides.ignoreInFlight ? 1 : 0)
+    Object.keys(overrides.inventory || {}).length +
+    Object.keys(overrides.craftCounts || {}).length
   );
 }
 
@@ -99,12 +119,13 @@ export function writeProfileOverrides(eid: string, overrides: ProfileOverrides):
 }
 
 type OverridableProfile = {
+  inventory: Record<string, number>;
+  craftCounts: Record<string, number>;
   craftingXp: number;
   epicResearchFTLLevel: number;
   epicResearchZerogLevel: number;
   shipLevels: ShipLevelInfo[];
   missionOptions: ReturnType<typeof buildMissionOptions>;
-  inFlightMissions?: unknown[];
 };
 
 /** The profile with the overrides applied (mission options rebuilt for the new stars and research). */
@@ -125,7 +146,8 @@ export function applyProfileOverrides<T extends OverridableProfile>(profile: T, 
         : profile.craftingXp,
     shipLevels,
     missionOptions: buildMissionOptions(shipLevels, ftl, zerog),
-    ...(overrides.ignoreInFlight ? { inFlightMissions: [] } : {}),
+    ...(overrides.inventory ? { inventory: { ...profile.inventory, ...overrides.inventory } } : {}),
+    ...(overrides.craftCounts ? { craftCounts: { ...profile.craftCounts, ...overrides.craftCounts } } : {}),
   };
 }
 
@@ -135,7 +157,8 @@ export type ProfileSummary = {
   epicResearchZerogLevel: number;
   craftingLevel: number;
   ships: Array<{ ship: string; unlocked: boolean; level: number; maxLevel: number }>;
-  inFlightCount: number;
+  inventory: Record<string, number>;
+  craftCounts: Record<string, number>;
 };
 
 export function summarizeProfile(profile: OverridableProfile): ProfileSummary {
@@ -149,6 +172,7 @@ export function summarizeProfile(profile: OverridableProfile): ProfileSummary {
       level: entry.level,
       maxLevel: entry.maxLevel,
     })),
-    inFlightCount: profile.inFlightMissions?.length ?? 0,
+    inventory: profile.inventory,
+    craftCounts: profile.craftCounts,
   };
 }
