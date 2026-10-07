@@ -57,6 +57,11 @@
 .dialog {
   width: min(560px, calc(100vw - 32px));
   max-height: calc(100vh - 48px);
+  /* The visible height on phones, where 100vh runs under the browser's toolbar. */
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  /* Scrolling past either end stays in the dialog instead of moving the page. */
+  overscroll-behavior: contain;
   padding: 0;
   border: 1px solid var(--stroke);
   border-radius: 12px;
@@ -306,4 +311,13 @@
   width: auto;
   min-width: 82px;
   min-height: 0;
+}
+
+/* iOS zooms the page when focusing a field under 16px, which pushes the
+   dialog off screen; phones get 16px fields. */
+@media (max-width: 640px), (pointer: coarse) {
+  .dialog.dialog input[type="text"],
+  .dialog.dialog select {
+    font-size: 16px;
+  }
 }

@@ -71,8 +71,25 @@ export default function ProfileCustomizer({
   const isDemo = !eid.trim();
   const source = isDemo ? "the demo profile" : "your backup";
 
+  // While it's open the page behind stays put (no scrolling along with the
+  // dialog on phones), and closing returns to where the page was.
+  const scrollLockRef = useRef<{ y: number; overflow: string } | null>(null);
+
   function open(): void {
+    const root = document.documentElement;
+    scrollLockRef.current = { y: window.scrollY, overflow: root.style.overflow };
+    root.style.overflow = "hidden";
     dialogRef.current?.showModal();
+  }
+
+  function onClosed(): void {
+    const lock = scrollLockRef.current;
+    if (!lock) {
+      return;
+    }
+    scrollLockRef.current = null;
+    document.documentElement.style.overflow = lock.overflow;
+    window.scrollTo(0, lock.y);
   }
 
   function set(patch: Partial<ProfileOverrides>): void {
@@ -116,6 +133,7 @@ export default function ProfileCustomizer({
         ref={dialogRef}
         className={styles.dialog}
         aria-labelledby="profile-customizer-title"
+        onClose={onClosed}
         onClick={(event) => {
           // A click on the backdrop (the dialog itself, outside its body) closes it.
           if (event.target === dialogRef.current) {
