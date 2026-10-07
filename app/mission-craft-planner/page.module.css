@@ -3282,3 +3282,9 @@
   margin: 14px 0 0;
   font-size: 12.5px;
 }
+
+/* A yield per launch, beside the row's total. */
+.perShipYield {
+  color: var(--muted);
+  font-weight: 500;
+}

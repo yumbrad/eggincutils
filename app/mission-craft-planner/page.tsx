@@ -3005,7 +3005,13 @@ function renderMissionTableRow(
                   loading="lazy"
                 />
               )}
-              <span>{itemIdToLabel(yieldRow.itemId)}: {(yieldRow.quantity * yieldScale).toFixed(2)}</span>
+              <span>
+                {itemIdToLabel(yieldRow.itemId)}: {(yieldRow.quantity * yieldScale).toFixed(2)}
+                {mission.launches > 0 && (
+                  // Per launch, so ships with different launch counts compare.
+                  <em className={styles.perShipYield}> ({(yieldRow.quantity / mission.launches).toFixed(2)})</em>
+                )}
+              </span>
             </div>
           );
         })}
@@ -6338,7 +6344,9 @@ export default function MissionCraftPlannerPage() {
                       <th scope="col">Target</th>
                       <th scope="col">Launches</th>
                       <th scope="col">Duration</th>
-                      <th scope="col">Top relevant yields</th>
+                      <th scope="col">
+                        Top relevant yields <em className={styles.perShipYield}>(per ship)</em>
+                      </th>
                     </tr>
                   </thead>
                   <VirtueTankMissionRows
@@ -6357,7 +6365,9 @@ export default function MissionCraftPlannerPage() {
                       <th>Target</th>
                       <th>Launches</th>
                       <th>Duration</th>
-                      <th>Top relevant yields</th>
+                      <th>
+                        Top relevant yields <em className={styles.perShipYield}>(per ship)</em>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
