@@ -356,6 +356,68 @@ describe("Path of Virtue tank mode", () => {
   );
 
   it(
+    "keeps a ship that drops lower tiers when another drops the tier above",
+    async () => {
+      // Six Puzzle Cube T2s, crafted from three T1s each or dropped whole.
+      // Chickfiant EPICs (19.2h, C3 K3) drop three T1s, Voyegger EPICs
+      // (28.8h, C25 K15) one T2. The tank fuels six Chickfiants but only two
+      // Voyeggers, so the Chickfiants alone finish in two rounds with no
+      // shift. Offering the Voyegger too can only help: its T2 drops must
+      // not take the T1 source out of the plan.
+      const chickfiant = {
+        ship: "CHICKFIANT",
+        durationType: "EPIC" as const,
+        missionId: "chickfiant-extended",
+        durationSeconds: 69_120,
+        itemId: "puzzle-cube-1",
+        perLaunch: 3,
+      };
+      const voyegger = {
+        ship: "VOYEGGER",
+        durationType: "EPIC" as const,
+        missionId: "voyegger-extended",
+        durationSeconds: 103_680,
+        itemId: "puzzle-cube-2",
+        perLaunch: 1,
+      };
+      const plan = (ships: Array<typeof chickfiant>) =>
+        planForTarget(profileFor(ships), "puzzle-cube-2", 6, 1, {
+          objectiveMode: "virtueFuel",
+          virtueTank: tankOptions({ shiftCap: 0 }),
+          lootData: {
+            missions: ships.map((ship) => ({
+              afxShip: 0,
+              afxDurationType: 0,
+              missionId: ship.missionId,
+              levels: [
+                {
+                  level: 0,
+                  targets: [
+                    {
+                      totalDrops: 5000,
+                      targetAfxId: 10000,
+                      items: [{ afxId: 0, afxLevel: 1, itemId: ship.itemId, counts: [5000 * ship.perLaunch, 0, 0, 0] }],
+                    },
+                  ],
+                },
+              ],
+            })),
+          } as LootJson,
+          solverFn: recordingSolver().solverFn,
+        });
+      const alone = await plan([chickfiant]);
+      expect(alone.virtueTanks!.overCap).toBe(false);
+      expect(alone.expectedHours).toBeCloseTo(38.4, 6);
+      const both = await plan([chickfiant, voyegger]);
+      expect(both.unmetItems).toEqual([]);
+      expect(both.virtueTanks!.overCap).toBe(false);
+      expect(plannedLaunches(both, "CHICKFIANT")).toBe(6);
+      expect(both.expectedHours).toBeLessThanOrEqual(alone.expectedHours + 1e-6);
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
     "credits fuel carried into every refuel loop, not just the first",
     async () => {
       // 16 more cubes from Henerprise EPICs (C25 K25 R20) or LONGs (C20 K15
@@ -805,12 +867,14 @@ describe("Path of Virtue tank mode", () => {
     async () => {
       // Two ships that burn no tank fuel: a launch's objective coefficient is
       // its slot time over three slots plus the launch effort, so a short
-      // launch weighs more than its mission time alone says.
-      const ships: TestShip[] = [
-        { ship: "CHICKEN_ONE", durationType: "SHORT", missionId: "chicken-one-short", durationSeconds: 600 },
-        { ship: "CHICKEN_HEAVY", durationType: "LONG", missionId: "chicken-heavy-long", durationSeconds: 6_000 },
+      // launch weighs more than its mission time alone says. The long one
+      // drops three cubes to the short one's one, so neither beats the other
+      // outright and both reach the solve.
+      const ships: Array<TestShip & { cubes: number }> = [
+        { ship: "CHICKEN_ONE", durationType: "SHORT", missionId: "chicken-one-short", durationSeconds: 600, cubes: 1 },
+        { ship: "CHICKEN_HEAVY", durationType: "LONG", missionId: "chicken-heavy-long", durationSeconds: 6_000, cubes: 3 },
       ];
-      const { result, models } = await planTank(ships, 4, tankOptions({ shiftCap: 0 }));
+      const { result, models } = await planTank(ships, 4, tankOptions({ shiftCap: 0 }), { lootData: lootForCubes(ships) });
       expect(result.unmetItems).toEqual([]);
       const model = models.find((entry) => entry.includes("\nGeneral") && /\bm_1\b/.test(entry))!;
       const objective = model.slice(model.indexOf("obj:"), model.indexOf("Subject To"));
@@ -837,9 +901,12 @@ describe("Path of Virtue tank mode", () => {
   it(
     "narrows the candidate missions to the best per item without dropping an only source",
     async () => {
-      // Twelve Henerprise targets drop Puzzle Cubes at different rates, and
-      // only a slow one drops the Gold Meteorite. Without the yield index the
-      // solve keeps the best few cube targets and the meteorite's only source.
+      // Twelve Henerprise targets drop Puzzle Cubes at different rates, each
+      // with a trace of Gold Meteorite that shrinks as its cubes grow (so no
+      // target beats another outright), and only a slow one drops the
+      // meteorite in earnest. Without the yield index the solve keeps the
+      // best few cube targets, the best few meteorite ones and so the
+      // meteorite's real source.
       const cubeTargets = Array.from({ length: 12 }, (_, index) => index + 1);
       const lootData = {
         missions: [
@@ -854,7 +921,10 @@ describe("Path of Virtue tank mode", () => {
                   ...cubeTargets.map((targetAfxId) => ({
                     totalDrops: 5000,
                     targetAfxId,
-                    items: [{ afxId: 0, afxLevel: 1, itemId: "puzzle-cube-1", counts: [400 * targetAfxId, 0, 0, 0] }],
+                    items: [
+                      { afxId: 0, afxLevel: 1, itemId: "puzzle-cube-1", counts: [400 * targetAfxId, 0, 0, 0] },
+                      { afxId: 0, afxLevel: 1, itemId: "gold-meteorite-1", counts: [13 - targetAfxId, 0, 0, 0] },
+                    ],
                   })),
                   {
                     totalDrops: 5000,
@@ -879,16 +949,17 @@ describe("Path of Virtue tank mode", () => {
         solverFn,
       });
       expect(result.unmetItems).toEqual([]);
-      // Solves start from the 5 kept actions; checks over all 13 find
-      // nothing better.
+      // Solves start from the 8 kept actions (cube targets 9-12, then 99 and
+      // the meteorite traces of targets 1-3); checks over all 13 find nothing
+      // better.
       const actionCounts = models
         .filter((model) => model.includes("vy_"))
         .map((model) => (model.match(/\n  m_\d+ >= 0/g) || []).length);
-      expect(actionCounts[0]).toBe(5);
+      expect(actionCounts[0]).toBe(8);
       expect(actionCounts).toContain(13);
-      expect(actionCounts.every((count) => count === 5 || count === 13)).toBe(true);
+      expect(actionCounts.every((count) => count === 8 || count === 13)).toBe(true);
       expect(result.notes).toContain(
-        "Tank mode kept 5 of 13 candidate mission actions: the top 4 mission/target pairs per required item by time, by fuel and by each egg's fuel."
+        "Tank mode kept 8 of 13 candidate mission actions: the top 4 mission/target pairs per required item by time, by fuel and by each egg's fuel."
       );
       const targets = new Set(result.missions.map((mission) => mission.targetAfxId));
       expect(targets.has(99)).toBe(true);
@@ -915,12 +986,17 @@ describe("Path of Virtue tank mode", () => {
       // Five Henerprise targets drop more Puzzle Cubes and five more Gold
       // Meteorites than target 99, so pruning keeps neither of its drops'
       // rankings; but it drops both, and three launches of it (one round)
-      // beat four of the specialists (two rounds).
-      const drops = (itemId: string, rates: number[], firstTarget: number) =>
+      // beat four of the specialists (two rounds). Each specialist drops a
+      // trace of the other item, more the less of its own it drops, so none
+      // beats another outright.
+      const drops = (itemId: string, otherItemId: string, rates: number[], firstTarget: number) =>
         rates.map((rate, index) => ({
           totalDrops: 5000,
           targetAfxId: firstTarget + index,
-          items: [{ afxId: 0, afxLevel: 1, itemId, counts: [5000 * rate, 0, 0, 0] }],
+          items: [
+            { afxId: 0, afxLevel: 1, itemId, counts: [5000 * rate, 0, 0, 0] },
+            { afxId: 0, afxLevel: 1, itemId: otherItemId, counts: [50 * (index + 1), 0, 0, 0] },
+          ],
         }));
       const lootData = {
         missions: [
@@ -932,8 +1008,8 @@ describe("Path of Virtue tank mode", () => {
               {
                 level: 0,
                 targets: [
-                  ...drops("puzzle-cube-1", [1, 0.95, 0.9, 0.85, 0.8], 1),
-                  ...drops("gold-meteorite-1", [1, 0.95, 0.9, 0.85, 0.8], 11),
+                  ...drops("puzzle-cube-1", "gold-meteorite-1", [1, 0.95, 0.9, 0.85, 0.8], 1),
+                  ...drops("gold-meteorite-1", "puzzle-cube-1", [1, 0.95, 0.9, 0.85, 0.8], 11),
                   {
                     totalDrops: 5000,
                     targetAfxId: 99,
@@ -977,7 +1053,8 @@ describe("Path of Virtue tank mode", () => {
     async () => {
       // The Millenium Chicken is 2 launches short of level 1. Level 0 offers
       // only target 50, a poor cube source every ranking drops; level 1
-      // offers twelve better ones. Phased leveling fills level 0 before level
+      // offers twelve better ones, trading cubes for Gold Meteorites (so none
+      // beats another outright). Phased leveling fills level 0 before level
       // 1 can fly, so pruning has to keep target 50's level-0 action or no
       // kept action could ever be flown (short of a prep candidate that flies
       // those 2 launches as prep).
@@ -994,10 +1071,13 @@ describe("Path of Virtue tank mode", () => {
         shipLevels,
         missionOptions: buildMissionOptions(shipLevels, 0, 0),
       };
-      const cube = (targetAfxId: number, count: number) => ({
+      const cube = (targetAfxId: number, count: number, meteorites = 0) => ({
         totalDrops: 5000,
         targetAfxId,
-        items: [{ afxId: 0, afxLevel: 1, itemId: "puzzle-cube-1", counts: [count, 0, 0, 0] }],
+        items: [
+          { afxId: 0, afxLevel: 1, itemId: "puzzle-cube-1", counts: [count, 0, 0, 0] },
+          ...(meteorites > 0 ? [{ afxId: 0, afxLevel: 1, itemId: "gold-meteorite-1", counts: [meteorites, 0, 0, 0] }] : []),
+        ],
       });
       const lootData = {
         missions: [
@@ -1007,7 +1087,10 @@ describe("Path of Virtue tank mode", () => {
             missionId: "millenium-chicken-short",
             levels: [
               { level: 0, targets: [cube(50, 500)] },
-              { level: 1, targets: Array.from({ length: 12 }, (_, index) => cube(index + 1, 2000 + 250 * index)) },
+              {
+                level: 1,
+                targets: Array.from({ length: 12 }, (_, index) => cube(index + 1, 2000 + 250 * index, 50 * (12 - index))),
+              },
             ],
           },
         ],
@@ -1016,6 +1099,10 @@ describe("Path of Virtue tank mode", () => {
       const result = await planForTarget(profile, "puzzle-cube-1", 60, 1, {
         objectiveMode: "virtueFuel",
         virtueTank: tankOptions({ shiftCap: 0 }),
+        targets: [
+          { targetItemId: "puzzle-cube-1", quantity: 60 },
+          { targetItemId: "gold-meteorite-1", quantity: 1 },
+        ],
         lootData,
         solverFn,
       });

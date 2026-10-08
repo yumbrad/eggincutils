@@ -457,6 +457,57 @@ describe("planForTarget coverage handling", () => {
     ).toBe(true);
   });
 
+  it("keeps a mission that drops lower tiers when another drops the tier above, dropping only one beaten outright", async () => {
+    // A fast mission drops three T1 Puzzle Cubes (one T2's worth), a slow
+    // one a T2, and a third, as slow, half a T2. The T2 drops must not push
+    // the T1 source out of the solve: crafting can be the faster route. Only
+    // the third mission, which the second beats on every count, is left out.
+    const mission = (missionId: string, itemId: string, count: number) => ({
+      afxShip: 0,
+      afxDurationType: 0,
+      missionId,
+      levels: [
+        {
+          level: 0,
+          targets: [
+            {
+              totalDrops: 5000,
+              targetAfxId: 10000,
+              items: [{ afxId: 23, afxLevel: 1, itemId, counts: [count, 0, 0, 0] as [number, number, number, number] }],
+            },
+          ],
+        },
+      ],
+    });
+    mockedLoadLootData.mockResolvedValue({
+      missions: [
+        mission("fast-short", "puzzle-cube-1", 15000),
+        mission("slow-long", "puzzle-cube-2", 5000),
+        mission("slower-long", "puzzle-cube-2", 2500),
+      ],
+    });
+    mockedSolveWithHighs.mockResolvedValue({ Status: "Optimal", Columns: { m_0: { Primal: 1 } } });
+
+    const profile = baseProfile();
+    profile.missionOptions = [
+      { ship: "CHICKEN_ONE", missionId: "fast-short", durationType: "SHORT", level: 0, durationSeconds: 1200, capacity: 1 },
+      { ship: "CHICKEN_NINE", missionId: "slow-long", durationType: "LONG", level: 0, durationSeconds: 3600, capacity: 1 },
+      { ship: "CHICKEN_HEAVY", missionId: "slower-long", durationType: "LONG", level: 0, durationSeconds: 3600, capacity: 1 },
+    ];
+
+    await planForTarget(profile, "puzzle-cube-2", 1, 1);
+
+    const solveModels = mockedSolveWithHighs.mock.calls
+      .map(([model]) => model as string)
+      .filter((model) => model.includes("  b_0:"));
+    expect(solveModels.length).toBeGreaterThan(0);
+    for (const model of solveModels) {
+      expect((model.match(/\n  m_\d+ >= 0/g) || []).length).toBe(2);
+      // The fast mission's three T1 cubes reach a demand row.
+      expect(model).toMatch(/\n  b_\d+: [^\n]*\b3 m_\d+/);
+    }
+  });
+
   it("reports expected mission time as 3-slot makespan rather than slot-time average", async () => {
     mockedLoadLootData.mockResolvedValue({
       missions: [
@@ -1356,9 +1407,10 @@ describe("planForTarget coverage handling", () => {
               level: 0,
               targets: [
                 {
+                  // Two cubes a launch, so the fast mission does not beat it outright.
                   totalDrops: 5000,
                   targetAfxId: 10000,
-                  items: [{ afxId: 1, afxLevel: 1, itemId: "puzzle-cube-1", counts: [5000, 0, 0, 0] }],
+                  items: [{ afxId: 1, afxLevel: 1, itemId: "puzzle-cube-1", counts: [10000, 0, 0, 0] }],
                 },
               ],
             },

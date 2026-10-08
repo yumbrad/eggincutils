@@ -466,7 +466,6 @@ type ProgressionCacheEntry = {
 type MissionActionCacheEntry = {
   actions: MissionAction[];
   rawCount: number;
-  prunedCount: number;
   indexFilteredCount: number;
   coverageRepairCount: number;
 };
@@ -1168,43 +1167,101 @@ async function buildMissionActions(
 }
 
 /**
- * Prune actions whose yields are entirely sub-dominated: every yielded item
- * belongs to an artifact family where a higher-tier version is already available
- * from other actions. Such actions are practically useless since the solver
- * would never prefer farming lower-tier sub-components and crafting up when the
- * higher-tier item can be obtained directly.
+ * Drops the mission actions another action beats outright, which can never
+ * cost a plan anything: swapping each launch of the dropped one for a launch
+ * of the other still meets every goal, at no more mission time or fuel.
+ * Action B beats action A when B drops at least as much of every item A
+ * drops, flies no longer and, with `compareFuel`, burns no more of any egg.
+ * A targeted launch never beats an untargeted one (the solve's tie-break
+ * prefers untargeted), and of two equal actions the first by key stays.
+ * A launch of an option in `constrainedOptionKeys` (phased leveling, prep)
+ * also counts toward that option's rows, the levels it fills or the launches
+ * it must fly, so such an action only loses to one of its own option and
+ * never stands in for another option's. With `tankRounds`, tank mode times
+ * each mission duration's rounds apart, so a launch only moves to a mission
+ * of the same length or to one too short to have rounds
+ * (VIRTUE_TANK_MAKESPAN_ROUND_MIN_SECONDS).
+ *
+ * This replaced a rule that dropped every action whose drops were all lower
+ * tiers than some other action dropped. A Voyegger that drops a few T4s at
+ * a higher level took out every Chickfiant launch that drops T3s by the
+ * dozen, and adding the Voyegger made plans days slower.
  */
-function pruneSubDominatedActions(actions: MissionAction[]): MissionAction[] {
-  const maxDroppedTier: Record<string, number> = {};
+function pruneDominatedActions(
+  actions: MissionAction[],
+  options: { constrainedOptionKeys: Set<string>; compareFuel: boolean; tankRounds: boolean }
+): MissionAction[] {
+  const itemIndex = new Map<string, number>();
   for (const action of actions) {
     for (const itemKey of Object.keys(action.yields)) {
-      const match = itemKey.match(/^(.+)_(\d+)$/);
-      if (match) {
-        const family = match[1];
-        const tier = parseInt(match[2], 10);
-        if (tier > (maxDroppedTier[family] || 0)) {
-          maxDroppedTier[family] = tier;
-        }
+      if (!itemIndex.has(itemKey)) {
+        itemIndex.set(itemKey, itemIndex.size);
       }
     }
   }
-
-  return actions.filter((action) => {
-    const yieldKeys = Object.keys(action.yields);
-    if (yieldKeys.length === 0) {
+  const words = Math.ceil(itemIndex.size / 32);
+  const optionIds = new Map<string, number>();
+  const entries = actions.map((action) => {
+    const amounts = new Float64Array(itemIndex.size);
+    const items: number[] = [];
+    const support = new Uint32Array(words);
+    for (const [itemKey, amount] of Object.entries(action.yields)) {
+      const index = itemIndex.get(itemKey)!;
+      amounts[index] = amount;
+      items.push(index);
+      support[index >>> 5] |= 1 << (index & 31);
+    }
+    const fuelConfig = getVirtueFuelConfig(action.ship, action.durationType);
+    if (!optionIds.has(action.optionKey)) {
+      optionIds.set(action.optionKey, optionIds.size);
+    }
+    return {
+      action,
+      option: optionIds.get(action.optionKey)!,
+      amounts,
+      items,
+      support,
+      fuel: VIRTUE_REFILL_ROUTE_ORDER.map((egg) => Math.max(0, fuelConfig[egg] || 0)),
+      untargeted: isUntargetedTargetAfxId(action.targetAfxId),
+      constrained: options.constrainedOptionKeys.has(action.optionKey),
+    };
+  });
+  type Entry = (typeof entries)[number];
+  const beats = (b: Entry, a: Entry): boolean => {
+    if (b.option !== a.option) {
+      if (a.constrained || b.constrained || b.action.durationSeconds > a.action.durationSeconds) {
+        return false;
+      }
+      if (
+        options.tankRounds &&
+        b.action.durationSeconds !== a.action.durationSeconds &&
+        b.action.durationSeconds >= VIRTUE_TANK_MAKESPAN_ROUND_MIN_SECONDS
+      ) {
+        return false;
+      }
+      if (options.compareFuel && b.fuel.some((amount, egg) => amount > a.fuel[egg])) {
+        return false;
+      }
+    }
+    if (a.untargeted && !b.untargeted) {
       return false;
     }
-    for (const itemKey of yieldKeys) {
-      const match = itemKey.match(/^(.+)_(\d+)$/);
-      if (!match) {
-        return true; // Unknown format → keep
-      }
-      if (parseInt(match[2], 10) >= (maxDroppedTier[match[1]] || 0)) {
-        return true; // At least one yield is not sub-dominated → keep
+    for (let word = 0; word < words; word += 1) {
+      if ((a.support[word] & ~b.support[word]) !== 0) {
+        return false;
       }
     }
-    return false; // All yields sub-dominated → prune
-  });
+    return a.items.every((index) => b.amounts[index] >= a.amounts[index]);
+  };
+  // Beating is transitive, so every action dropped here loses to one kept.
+  return entries
+    .filter(
+      (a) =>
+        !entries.some(
+          (b) => b !== a && beats(b, a) && (!beats(a, b) || b.action.key < a.action.key)
+        )
+    )
+    .map((entry) => entry.action);
 }
 
 function missionYieldIndexActionId(action: MissionAction): string {
@@ -3215,18 +3272,14 @@ async function getMissionActionsForOptionsCached(options: {
     options.lootData,
     options.missionDropRarities
   );
-  const builtPruned = pruneSubDominatedActions(
-    builtRaw
-  );
   const filtered = filterMissionActionsWithYieldIndex(
-    builtPruned,
+    builtRaw,
     options.relevantItems,
     options.actionFilter
   );
   const created: MissionActionCacheEntry = {
     actions: filtered.actions,
     rawCount: builtRaw.length,
-    prunedCount: Math.max(0, builtRaw.length - builtPruned.length),
     indexFilteredCount: filtered.indexFilteredCount,
     coverageRepairCount: filtered.coverageRepairCount,
   };
@@ -5376,7 +5429,11 @@ async function planForTargetHeuristic(
     missionDropRarities,
     actionFilter,
   });
-  const actions = actionsEntry.actions;
+  const actions = pruneDominatedActions(actionsEntry.actions, {
+    constrainedOptionKeys: new Set(),
+    compareFuel: objectiveContext.mode === "virtueFuel",
+    tankRounds: false,
+  });
 
   const inventory: Record<string, number> = { ...profile.inventory };
   const craftCounts: Record<string, number> = { ...profile.craftCounts };
@@ -6618,14 +6675,6 @@ async function planForNewLaunches(
     actionFilter: missionActionFilter,
   });
   const baseActions = baseActionsEntry.actions;
-  const subDominatedPrunedCount = baseActionsEntry.prunedCount;
-  if (subDominatedPrunedCount > 0) {
-    reportProgress({
-      phase: "init",
-      message: `Pruned ${subDominatedPrunedCount} sub-dominated actions (${baseActions.length} remaining).`,
-    });
-    await yieldForProgressFlush();
-  }
   if (baseActionsEntry.indexFilteredCount > 0) {
     reportProgress({
       phase: "init",
@@ -6706,6 +6755,8 @@ async function planForNewLaunches(
     const virtueTankActionPruning = Boolean(tankRun) && !missionActionFilter;
     const virtueTankActionCounts = { before: 0, after: 0, fullChecksWon: 0 };
     const prunedActionCache = new Map<string, MissionAction[]>();
+    const dominanceActionCache = new Map<string, MissionAction[]>();
+    const dominatedActionCounts = { before: 0, after: 0 };
     let indexCoverageRepairActionCount = baseActionsEntry.coverageRepairCount;
     const candidateLoopStartedAtMs = Date.now();
     const estimateCandidateEtaMs = (): number | null => {
@@ -6805,9 +6856,9 @@ async function planForNewLaunches(
         mergeMissionOptionsByKey(baseOptions, phased.phasedOptions),
         prepOptions
       );
-      const candidateKey = missionOptionsFingerprint(combinedOptions);
-      let candidateActions = actionCache.get(candidateKey);
-      if (!candidateActions) {
+      const optionsKey = missionOptionsFingerprint(combinedOptions);
+      let allActions = actionCache.get(optionsKey);
+      if (!allActions) {
         const candidateEntry = await getMissionActionsForOptionsCached({
           missionOptions: combinedOptions,
           relevantItems: closure,
@@ -6818,8 +6869,25 @@ async function planForNewLaunches(
         });
         indexFilteredActionCount += candidateEntry.indexFilteredCount;
         indexCoverageRepairActionCount += candidateEntry.coverageRepairCount;
-        candidateActions = candidateEntry.actions;
-        actionCache.set(candidateKey, candidateActions);
+        allActions = candidateEntry.actions;
+        actionCache.set(optionsKey, allActions);
+      }
+      // Leveling and prep launches also fill their options' rows, so those
+      // actions only lose to their own option's (pruneDominatedActions). An
+      // option keeps at least one action that way, so which prep launches
+      // have drops (worked out below) is the same as over every action.
+      const constrainedOptionKeys = new Set([...phasedOptionKeys, ...prepRequirements.keys()]);
+      const candidateKey = `${optionsKey}::${Array.from(constrainedOptionKeys).sort().join(",")}`;
+      let candidateActions = dominanceActionCache.get(candidateKey);
+      if (!candidateActions) {
+        candidateActions = pruneDominatedActions(allActions, {
+          constrainedOptionKeys,
+          compareFuel: objectiveMode === "virtueFuel",
+          tankRounds: Boolean(tankRun),
+        });
+        dominatedActionCounts.before += allActions.length;
+        dominatedActionCounts.after += candidateActions.length;
+        dominanceActionCache.set(candidateKey, candidateActions);
       }
       const finalOptionKeys = new Set(candidate.missionOptions.map((option) => missionOptionKey(option)));
       const actionOptionKeys = new Set(candidateActions.map((action) => action.optionKey));
@@ -8567,8 +8635,12 @@ async function planForNewLaunches(
     if (evaluatedCount > 1) {
       notes.push(`Horizon search evaluated ${evaluatedCount} projected ship progression states.`);
     }
-    if (subDominatedPrunedCount > 0) {
-      notes.push(`Pruned ${subDominatedPrunedCount} sub-dominated mission actions (only yield lower-tier items already available at higher tiers).`);
+    if (dominatedActionCounts.after < dominatedActionCounts.before) {
+      notes.push(
+        `Dropped ${(dominatedActionCounts.before - dominatedActionCounts.after).toLocaleString()} of ${dominatedActionCounts.before.toLocaleString()} candidate mission actions that another mission beats outright: at least as many of every drop, in no more time${
+          objectiveMode === "virtueFuel" ? " and fuel" : ""
+        }.`
+      );
     }
     if (prunedCandidateCount > 0) {
       notes.push(`Pruned ${prunedCandidateCount} progression candidates using prep-time lower-bound screening.`);
