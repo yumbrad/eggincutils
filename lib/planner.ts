@@ -87,6 +87,8 @@ type MissionAction = {
   targetAfxId: number;
   yields: Record<string, number>;
   dubcap?: boolean;
+  /** Event copies: the action they copy, shared by its copies for each leveling phase. */
+  dubcapOf?: string;
 };
 
 type ArtifactConsumptionMap = Record<string, Record<string, number>>;
@@ -3609,13 +3611,47 @@ function addDubcapActions(
       phaseKeys.push(`${action.optionKey}|dubcap`);
     }
     return phaseKeys.map((optionKey) => ({
-      ...action, key: `${action.key}|dubcap|${optionKey}`, optionKey, dubcap: true,
+      ...action, key: `${action.key}|dubcap|${optionKey}`, optionKey, dubcap: true, dubcapOf: action.key,
       // The XP phase credits the launch once. Its drops still use only the
       // known stars at event start, even when that launch helps level up.
       yields: Object.fromEntries(Object.entries(action.yields).map(([key, amount]) => [key, amount * 2])),
     }));
   });
   return [...actions, ...eventActions];
+}
+
+/**
+ * An event action's copies differ only in the leveling phase their launches
+ * credit (addDubcapActions); the plan shows them as one mission row, and
+ * their back-to-back event launches as one run.
+ */
+function foldDubcapCopies(
+  actions: MissionAction[],
+  missionCounts: Record<string, number>,
+  allocation: DubcapAllocation | undefined
+): { missionCounts: Record<string, number>; allocation: DubcapAllocation | undefined } {
+  const firstCopy = new Map<string, string>();
+  const canonical = new Map<string, string>();
+  for (const action of actions) {
+    if (action.dubcapOf) {
+      const first = firstCopy.get(action.dubcapOf) ?? action.key;
+      firstCopy.set(action.dubcapOf, first);
+      canonical.set(action.key, first);
+    }
+  }
+  const keyOf = (key: string) => canonical.get(key) ?? key;
+  const folded: Record<string, number> = {};
+  for (const [key, launches] of Object.entries(missionCounts)) {
+    folded[keyOf(key)] = (folded[keyOf(key)] || 0) + launches;
+  }
+  return {
+    missionCounts: folded,
+    allocation: allocation && {
+      lanes: allocation.lanes.map((lane) =>
+        mergeDubcapRuns(lane.map((block) => ({ ...block, actionKey: keyOf(block.actionKey) })), (block) => block.actionKey)
+      ),
+    },
+  };
 }
 
 /**
@@ -3762,6 +3798,8 @@ function buildVirtueTankUnits(options: {
 type DubcapUnits = {
   units: VirtueTankPlanUnit[];
   allocation: DubcapAllocation;
+  /** Each event unit's id → one id per mission row's event launches, for the finished plan. */
+  eventRunIds: Map<string, string>;
 };
 
 /** Split fuel-burning event launches so tank packing preserves their exact chronology. */
@@ -3775,6 +3813,7 @@ function buildDubcapUnits(
   const eventKeys = new Set(allocation.lanes.flatMap((lane) => lane.map((block) => block.actionKey)));
   const ordinary = units.filter((unit) => !eventKeys.has(actionByUnit.get(unit.id) || ""));
   const eventUnits: VirtueTankPlanUnit[] = [];
+  const eventRunIds = new Map<string, string>();
   const lanes = allocation.lanes.map((lane, laneIndex) => lane.flatMap((block, blockIndex) => {
     const base = units.find((unit) => !unit.isPrep && actionByUnit.get(unit.id) === block.actionKey);
     if (!base) throw new Error("Dubcap timeline has no matching mission row.");
@@ -3785,10 +3824,58 @@ function buildDubcapUnits(
       const startSeconds = block.startSeconds + (split ? index * base.durationSeconds : 0);
       const id = `${base.id}|event|${laneIndex}|${blockIndex}|${index}`;
       eventUnits.push({ ...base, id, launches, launchOrder: startSeconds });
+      eventRunIds.set(id, `${base.id}|event`);
       return { actionKey: id, launches, startSeconds, endSeconds: startSeconds + launches * base.durationSeconds };
     });
   }));
-  return { units: [...ordinary, ...eventUnits], allocation: { lanes } };
+  return { units: [...ordinary, ...eventUnits], allocation: { lanes }, eventRunIds };
+}
+
+/**
+ * Once packed and scheduled, a mission row's event launches go back to being
+ * one unit (packing needed one per launch time), and back-to-back launches
+ * of a unit from one tank become one run, so the tanks and their timeline
+ * read like any other plan's. Returns the plan's units.
+ */
+function collapseDubcapUnits(event: DubcapUnits, pack: VirtueTankPlan): VirtueTankPlanUnit[] {
+  const runId = (unitId: string) => event.eventRunIds.get(unitId) ?? unitId;
+  const units = new Map<string, VirtueTankPlanUnit>();
+  for (const unit of event.units) {
+    const id = runId(unit.id);
+    const run = units.get(id);
+    if (run) {
+      run.launches += unit.launches;
+      run.launchOrder = Math.min(run.launchOrder ?? Infinity, unit.launchOrder ?? Infinity);
+    } else {
+      units.set(id, { ...unit, id });
+    }
+  }
+  const sameRun = (a: { unitId: string; tankIndex: number }, b: { unitId: string; tankIndex: number }) =>
+    a.unitId === b.unitId && a.tankIndex === b.tankIndex;
+  pack.launchOrder = pack.launchOrder.reduce<VirtueTankPlan["launchOrder"]>((order, entry) => {
+    const next = { ...entry, unitId: runId(entry.unitId) };
+    const last = order.at(-1);
+    if (last && sameRun(last, next)) {
+      last.launches += next.launches;
+    } else {
+      order.push(next);
+    }
+    return order;
+  }, []);
+  for (const tank of pack.tanks) {
+    const launches = new Map<string, number>();
+    for (const entry of tank.launches) {
+      launches.set(runId(entry.unitId), (launches.get(runId(entry.unitId)) || 0) + entry.launches);
+    }
+    tank.launches = Array.from(launches, ([unitId, count]) => ({ unitId, launches: count }));
+  }
+  pack.schedule = {
+    ...pack.schedule,
+    lanes: pack.schedule.lanes.map((lane) =>
+      mergeDubcapRuns(lane.map((block) => ({ ...block, unitId: runId(block.unitId) })), (block) => `${block.unitId}|${block.tankIndex}`)
+    ),
+  };
+  return Array.from(units.values());
 }
 
 /**
@@ -8887,7 +8974,8 @@ async function planForNewLaunches(
     }
 
     const actionKeyByRowKey = new Map<string, string>();
-    const missionRows = buildMissionRows(outputActions, outputUnified.missionCounts, actionKeyByRowKey);
+    const shown = foldDubcapCopies(outputActions, outputUnified.missionCounts, outputUnified.dubcapAllocation);
+    const missionRows = buildMissionRows(outputActions, shown.missionCounts, actionKeyByRowKey);
     const craftRows = buildCraftRows(outputUnified.crafts);
     const consumptionRows = buildConsumptionRows(outputUnified.consumptions, consumptionOptions);
     const targetBreakdowns = buildTargetBreakdowns({
@@ -9126,7 +9214,7 @@ async function planForNewLaunches(
       actions: outputActions, missionRows, actionKeyByRowKey, prepSteps: outputPrepSteps,
     }) : [];
     const eventUnits = plannerOptions.includeDubcap ? buildDubcapUnits(
-      baseUnits, outputUnified.dubcapAllocation ?? { lanes: [[], [], []] }, actionKeyByRowKey, Boolean(tankRun)
+      baseUnits, shown.allocation ?? { lanes: [[], [], []] }, actionKeyByRowKey, Boolean(tankRun)
     ) : undefined;
     if (tankRun) {
       reportProgress({
@@ -9137,7 +9225,7 @@ async function planForNewLaunches(
         etaMs: null,
       });
       await yieldForProgressFlush();
-      const units = eventUnits?.units ?? baseUnits;
+      let units = eventUnits?.units ?? baseUnits;
       const pack = await packVirtueTanks({
         units,
         capacity: tankRun.capacity,
@@ -9154,6 +9242,7 @@ async function planForNewLaunches(
           throw new Error("The dubcap launches could not be packed into fuel tanks.");
         }
         dubcap = finishDubcapSchedule(eventUnits, tankRun.inAirLaneFreeSeconds, pack);
+        units = collapseDubcapUnits(eventUnits, pack);
       }
       virtueTanks = {
         shiftCap: tankRun.shiftCap,

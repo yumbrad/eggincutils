@@ -60,6 +60,22 @@ function expectValidTimeline(result: PlannerResult): void {
       end = block.endSeconds;
     }
   }
+  // One row per physical mission: event copies for each leveling phase fold together.
+  const rowIdentities = result.missions.filter((row) => !row.inAir)
+    .map((row) => `${row.missionId}|${row.level}|${row.targetAfxId}|${Boolean(row.dubcap)}`);
+  expect(new Set(rowIdentities).size).toBe(rowIdentities.length);
+  if (result.virtueTanks) {
+    // Packing splits event launches; the finished plan has one unit per row and runs per slot.
+    const eventUnits = result.virtueTanks.units.filter((unit) => unit.launchOrder !== undefined);
+    expect(new Set(eventUnits.map((unit) => unit.missionRowKey)).size).toBe(eventUnits.length);
+    for (const lane of result.virtueTanks.pack.schedule.lanes) {
+      lane.forEach((block, index) => {
+        const previous = lane[index - 1];
+        expect(previous && previous.endSeconds === block.startSeconds && previous.unitId === block.unitId &&
+          previous.tankIndex === block.tankIndex).toBeFalsy();
+      });
+    }
+  }
   expect(result.expectedHours * 3600).toBeCloseTo(event.makespanSeconds, 6);
   expect(plannerResultSchema.parse(result)).toEqual(result);
 }
@@ -253,6 +269,29 @@ describe("one dubcap event", () => {
     const result = await planForTarget(profileFor(options), "puzzle-cube-1", 8, 1, { includeDubcap: true, lootData, solverFn: solveWithHighs });
     expect(launches(result, false)).toBe(0);
     expect(result.expectedHours).toBeCloseTo(38.4, 1);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("shows a leveling ship's event launches as one mission row and one run per slot in tank mode", async () => {
+    // BCR levels during the plan, so its event action is copied for each
+    // leveling phase, and burns fuel, so packing splits its event launches.
+    const shipLevels = computeShipLevelsFromLaunchCounts({
+      CHICKEN_ONE: { SHORT: 4 }, CHICKEN_NINE: { SHORT: 6 }, CHICKEN_HEAVY: { SHORT: 12 }, BCR: { SHORT: 15 },
+    });
+    const missionOptions = buildMissionOptions(shipLevels, 60, 0).filter((option) => option.ship === "BCR");
+    const lootData = { missions: missionOptions.map((option) => ({ afxShip: 0, afxDurationType: 0, missionId: option.missionId,
+      levels: [0, 1, 2, 3, 4, 5].map((level) => ({ level, targets: [{ totalDrops: 5000, targetAfxId: 10000,
+        items: [{ afxId: 0, afxLevel: 1, itemId: "gold-meteorite-1", counts: [30, 0, 0, 0] }] }] })) })) } as LootJson;
+    const result = await planForTarget({ ...profileFor(missionOptions), shipLevels }, "gold-meteorite-1", 2500, 1, {
+      includeDubcap: true, lootData, solverFn: solveWithHighs, objectiveMode: "virtueFuel",
+      virtueTank: { shiftCap: 4, startMode: "current", capacity: 500 * T,
+        currentContents: { curiosity: 200 * T, integrity: 200 * T, kindness: 200 * T, resilience: 200 * T } },
+    });
+    expect(result.unmetItems).toEqual([]);
+    const eventRows = result.missions.filter((row) => row.dubcap);
+    expect(eventRows.length).toBeGreaterThan(0);
+    // Every slot flies a run of event launches, not one block per launch.
+    expect(result.dubcap!.lanes.every((lane) => lane.some((block) => block.launches > 1))).toBe(true);
     expectValidTimeline(result);
   }, 120_000);
 

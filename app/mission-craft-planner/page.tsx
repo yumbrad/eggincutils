@@ -1779,7 +1779,7 @@ function buildVirtueTankPlanView(
     const mission = missionIndex != null ? plan.missions[missionIndex] : null;
     const prepReason = prepReasonByShape.get(`${unit.ship}|${unit.durationType}`);
     const subtitle = mission
-      ? afxIdToTargetFamilyName(mission.targetAfxId)
+      ? `${afxIdToTargetFamilyName(mission.targetAfxId)}${mission.dubcap ? " · dubcap ×2" : ""}`
       : unit.isPrep && prepReason
         ? prepReasonLabel(prepReason)
         : unit.targetAfxId != null
