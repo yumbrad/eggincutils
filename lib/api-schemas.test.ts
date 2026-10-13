@@ -258,6 +258,19 @@ describe("plannerResultSchema virtue tanks", () => {
     expect(throughRoute(result)).toStrictEqual(result);
   });
 
+  it("preserves a capped partial plan and its advisory complete-plan shift count", () => {
+    const units = sampleUnits().filter((unit) => unit.ship === "CHICKEN_ONE");
+    const virtueTanks = tankResult({ capacity: 500 * T, shiftCap: 0, startMode: "current", currentContents: {} }, units);
+    virtueTanks.goalsUnmet = true;
+    virtueTanks.neededShifts = 4;
+    virtueTanks.neededShiftsProven = false;
+    const parsed = virtueTankPlannerResultSchema.parse(virtueTanks);
+    expect(parsed).toEqual(virtueTanks);
+    expect(parsed.overCap).toBe(false);
+    expect(parsed.plannedShiftCap).toBe(0);
+    expect(parsed.pack.totalShifts).toBe(0);
+  });
+
   it("round-trips a last-tank top-up", () => {
     const options = buildVirtueTankPlannerOptions(sampleTank(), 2, "current");
     const virtueTanks = tankResult(options, sampleUnits());

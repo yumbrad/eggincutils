@@ -219,6 +219,7 @@ type PlanResponse = {
       fromCraft: number;
       fromMissionsExpected: number;
       shortfall: number;
+      craftGoal?: boolean;
     }>;
     progression: {
       prepHours: number;
@@ -1362,6 +1363,8 @@ const VIRTUE_EID_PATTERN = /^EI\d{16}$/i;
 const VIRTUE_BANNER_NOTE_PATTERNS = [
   /^These goals need at least \d+ shifts/,
   /^No plan (within \d+ shifts|without shifts)/,
+  /^No complete plan (within \d+ shifts|without shifts)/,
+  /^Some goals could not be reached within \d+ shifts/,
   /^With \d+ shifts the goals take/,
 ];
 
@@ -1372,6 +1375,7 @@ const VIRTUE_TANK_NOTES_SHOWN_ELSEWHERE = [
   "These goals need at least",
   "No plan within",
   "No plan without shifts",
+  "No complete plan",
 ];
 
 type VirtueTankUnitView = {
@@ -5309,17 +5313,18 @@ export default function MissionCraftPlannerPage() {
     });
   };
   const planVirtueTanks = response?.plan.virtueTanks ?? null;
-  // Shifts the last plan needs past its cap: the fewest that meet the goals
-  // when the solve went over, or what packing took when it came out above
-  // what the solve counted.
+  const planGoalShortfalls = response?.plan.targetBreakdowns.filter((goal) => goal.shortfall > 1e-6) ?? [];
+  const planHasGoalShortfalls = planVirtueTanks != null && planGoalShortfalls.length > 0;
+  // Advisory shifts for completing all goals. Older saved plans may instead
+  // carry a plan whose packing exceeded the selected cap.
   const planOverCapByPacking =
     planVirtueTanks != null && !planVirtueTanks.overCap && planVirtueTanks.pack.totalShifts > planVirtueTanks.shiftCap;
-  const planNeededShifts = planVirtueTanks?.overCap
-    ? planVirtueTanks.neededShifts ?? planVirtueTanks.plannedShiftCap
-    : planOverCapByPacking
-      ? planVirtueTanks!.pack.totalShifts
-      : null;
-  // "plan needs N" sits over the slider only while the cap is still below it.
+  const planNeededShifts = planVirtueTanks?.neededShifts ?? (
+    planVirtueTanks?.overCap
+      ? planVirtueTanks.plannedShiftCap
+      : planOverCapByPacking ? planVirtueTanks!.pack.totalShifts : null
+  );
+  // The all-goals marker sits over the slider while the cap is below it.
   const shiftCapNeedIndex = (() => {
     if (inventorySource !== "virtue" || planNeededShifts == null || planNeededShifts <= virtueShiftCap) {
       return null;
@@ -5328,10 +5333,9 @@ export default function MissionCraftPlannerPage() {
     return detent == null ? VIRTUE_SHIFT_CAP_DETENTS.length - 1 : VIRTUE_SHIFT_CAP_DETENTS.indexOf(detent);
   })();
   const planNeededShiftsDetent = planNeededShifts != null ? shiftCapDetentFor(planNeededShifts) : null;
-  const virtueBannerShown = Boolean(virtueTankView && planVirtueTanks && planNeededShifts != null);
-  // Over the cap, the count is a minimum only when the planner's search finished;
-  // otherwise it is the fewest it found in its time limits. Older plans don't say.
-  const planNeededShiftsProven = planVirtueTanks?.overCap ? planVirtueTanks.neededShiftsProven !== false : false;
+  const virtueBannerShown = Boolean(virtueTankView && planVirtueTanks && (planHasGoalShortfalls || planNeededShifts != null));
+  // Only a finished search establishes a minimum; otherwise it is a suggestion.
+  const planNeededShiftsProven = planVirtueTanks?.neededShiftsProven === true;
 
   const setShiftCapToPlanNeed = () => {
     if (planNeededShiftsDetent == null) {
@@ -5350,6 +5354,7 @@ export default function MissionCraftPlannerPage() {
   const virtueSlowPlanBannerShown = Boolean(
     virtueTankView &&
       planVirtueTanks &&
+      !planHasGoalShortfalls &&
       planNeededShifts == null &&
       planFasterOption &&
       planFasterOption.shifts > planVirtueTanks.shiftCap
@@ -5860,7 +5865,7 @@ export default function MissionCraftPlannerPage() {
                           }}
                         >
                           <span>
-                            plan {planNeededShiftsProven ? "needs" : "takes"} {planNeededShifts}
+                            all goals {planNeededShiftsProven ? "need" : "fit"} {planNeededShifts}
                           </span>
                         </div>
                       )}
@@ -5884,12 +5889,12 @@ export default function MissionCraftPlannerPage() {
                     <div className={styles.shiftCapHint} id="virtueShiftCapHint">
                       {virtueShiftCap === 0 ? (
                         <span>
-                          No refuels unless your goals need them. Then the plan uses the fewest shifts that work and says
-                          so above the results.
+                          No refuels. The plan uses the initial tank and shows any goals it cannot reach.
                         </span>
                       ) : (
                         <>
                           <span>
+                            The plan stays within this cap and shows any goal shortfalls.{" "}
                             Room for up to {pluralize(Math.floor(virtueShiftCap / 2), "refuel loop")}. A loop costs 1
                             shift per egg refilled + 1 back to Humility, e.g.{" "}
                             <span className={styles.shiftCapRoute}>C → R → K → H</span> = 4.
@@ -6014,11 +6019,31 @@ export default function MissionCraftPlannerPage() {
       {/* Mounted empty in virtue mode, before any plan, so the banner is announced when it appears. */}
       {(inventorySource === "virtue" || virtueTankView) && (
         <div role="status">
-          {virtueBannerShown && planVirtueTanks && planNeededShifts != null && (
+          {virtueBannerShown && planVirtueTanks && (
             <div className={styles.shiftCapBanner} data-tone="warn">
               {VIRTUE_WARN_ICON}
               <div className={styles.shiftCapBannerText}>
-                {planVirtueTanks.overCap && planNeededShiftsProven ? (
+                {planHasGoalShortfalls ? (
+                  <>
+                    <strong>
+                      {planNeededShifts != null && planNeededShiftsProven
+                        ? `These goals need at least ${planNeededShifts} shifts; the slider allows ${planVirtueTanks.shiftCap}.`
+                        : `Some goals could not be reached ${planVirtueTanks.shiftCap > 0 ? `within ${planVirtueTanks.shiftCap} shifts` : "without shifts"}.`}
+                    </strong>{" "}
+                    Planned as much as possible within your cap ({pluralize(planVirtueTanks.pack.totalShifts, "shift")}).
+                    {planNeededShifts != null && !planNeededShiftsProven && (
+                      <> A complete plan was found with {planNeededShifts} shifts; fewer may be possible.</>
+                    )}
+                    <ul className={styles.shiftCapShortfalls}>
+                      {planGoalShortfalls.map((goal, index) => (
+                        <li key={`${goal.itemId}:${index}`}>
+                          {itemIdToLabel(goal.itemId)}: expected {(goal.requested - goal.shortfall).toFixed(2)} of{" "}
+                          {goal.requested.toLocaleString()}{goal.craftGoal ? " additional crafts" : ""} · short by {goal.shortfall.toFixed(2)}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : planVirtueTanks.overCap && planNeededShiftsProven ? (
                   <>
                     <strong>
                       These goals need at least {planNeededShifts} shifts; the slider allows {planVirtueTanks.shiftCap}.
@@ -6137,7 +6162,7 @@ export default function MissionCraftPlannerPage() {
             </div>
             {projectedCompletion && (
               <div className="card">
-                <div className="muted">Projected completion</div>
+                <div className="muted">{planHasGoalShortfalls ? "Partial plan completion" : "Projected completion"}</div>
                 <div className="kpi">{formatPlanCompletion(projectedCompletion.at)}</div>
                 <div
                   className={`muted ${styles.tooltipValue}`}
@@ -6710,7 +6735,7 @@ export default function MissionCraftPlannerPage() {
                             <td>—</td>
                             <td>{formatDurationFromHours(response.plan.expectedHours)}</td>
                             <td>{response.plan.geCost.toLocaleString()}</td>
-                            <td><span className="good">yes</span></td>
+                            <td><span className={planHasGoalShortfalls ? "error" : "good"}>{planHasGoalShortfalls ? "partial" : "yes"}</span></td>
                           </tr>
                           {compareResults.map((path, pathIndex) => {
                             const targetLabel = afxIdToTargetFamilyName(path.targetAfxId);

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { LootJson } from "./loot-data";
 import { solveWithHighs } from "./highs";
-import { MissionCoverageError, planForTarget, type PlannerOptions, type PlannerResult, type SolverFunction } from "./planner";
+import { planForTarget, type PlannerOptions, type PlannerResult, type SolverFunction } from "./planner";
 import type { InFlightMission, PlayerProfile } from "./profile";
 import { buildMissionOptions, computeShipLevelsFromLaunchCounts, type MissionOption } from "./ship-data";
 import { getVirtueFuelConfig, TRILLION, VIRTUE_FUEL_DISPLAY } from "./virtue-fuel";
@@ -197,7 +197,7 @@ describe("Path of Virtue tank mode", () => {
   );
 
   it(
-    "plans at the fewest shifts that meet the goals when the cap is too low",
+    "returns the best partial plan within the selected cap and advises the shifts for all goals",
     async () => {
       // Only Henerprise EPICs (C25 K25 R20 each): the tank holds 2, and the
       // other 10 (700T) need two refuel loops. The first refills C, R and K
@@ -205,18 +205,20 @@ describe("Path of Virtue tank mode", () => {
       // (3 shifts).
       const { result } = await planTank([HENERPRISE_EPIC], 12, tankOptions({ shiftCap: 0 }));
       const tanks = result.virtueTanks!;
-      expect(result.unmetItems).toEqual([]);
-      expect(plannedLaunches(result, "HENERPRISE")).toBe(12);
-      expect(tanks.overCap).toBe(true);
+      expect(result.unmetItems).toEqual([{ itemId: "puzzle-cube-1", quantity: 10 }]);
+      expect(result.targetBreakdown).toMatchObject({ requested: 12, fromMissionsExpected: 2, shortfall: 10 });
+      expect(plannedLaunches(result, "HENERPRISE")).toBe(2);
+      expect(tanks.overCap).toBe(false);
+      expect(tanks.goalsUnmet).toBe(true);
       expect(tanks.shiftCap).toBe(0);
       expect(tanks.neededShifts).toBe(7);
-      expect(tanks.plannedShiftCap).toBe(7);
-      expect(tanks.pack.totalShifts).toBe(7);
-      expect(tanks.pack.tanks.map((tank) => tank.refill?.shifts ?? 0)).toEqual([0, 4, 3]);
+      expect(tanks.plannedShiftCap).toBe(0);
+      expect(tanks.pack.totalShifts).toBe(0);
+      expect(tanks.pack.tanks.map((tank) => tank.refill?.shifts ?? 0)).toEqual([0]);
       // Three loops could fit in 6 shifts, and the solve models only two
       // loops one by one, so 7 is not called the minimum.
       expect(tanks.neededShiftsProven).toBe(false);
-      expect(result.notes[0]).toBe("No plan without shifts was found; this plan takes 7 shifts, and fewer may be possible.");
+      expect(result.notes[0]).toBe("No complete plan without shifts was found; a complete plan was found with 7 shifts, and fewer may be possible. Planned as much as possible within the selected cap.");
       // Every plan flies the same twelve launches, so more shifts buy nothing.
       expect(tanks.fasterOption).toBeUndefined();
     },
@@ -237,13 +239,121 @@ describe("Path of Virtue tank mode", () => {
         },
       });
       const tanks = result.virtueTanks!;
-      expect(result.unmetItems).toEqual([]);
-      expect(tanks.overCap).toBe(true);
+      expect(result.targetBreakdown.shortfall).toBeCloseTo(10);
+      expect(plannedLaunches(result, "CHICKFIANT")).toBe(20);
+      expect(tanks.overCap).toBe(false);
+      expect(tanks.goalsUnmet).toBe(true);
       expect(tanks.neededShifts).toBe(3);
       expect(tanks.neededShiftsProven).toBe(true);
-      expect(tanks.pack.totalShifts).toBe(3);
+      expect(tanks.pack.totalShifts).toBe(0);
       expect(events).toEqual(expect.arrayContaining(["Trying 2 shifts…", "Trying 3 shifts…"]));
       expect(events.some((event) => event.startsWith("Finding the fewest shifts"))).toBe(false);
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
+    "maximizes achievable launches with a binding nonzero cap and an ideal first tank",
+    async () => {
+      const { result } = await planTank([HENERPRISE_EPIC], 20, tankOptions({ shiftCap: 4 }));
+      expect(plannedLaunches(result, "HENERPRISE")).toBe(9);
+      expect(result.targetBreakdown.shortfall).toBeCloseTo(11);
+      expect(result.virtueTanks!.plannedShiftCap).toBe(4);
+      expect(result.virtueTanks!.pack.totalShifts).toBe(4);
+      expect(result.virtueTanks!.pack.feasible).toBe(true);
+
+      const { result: ideal } = await planTank([HENERPRISE_EPIC], 10, tankOptions({ shiftCap: 0, startMode: "ideal" }));
+      expect(plannedLaunches(ideal, "HENERPRISE")).toBe(7);
+      expect(ideal.targetBreakdown.shortfall).toBeCloseTo(3);
+      expect(ideal.virtueTanks!.pack.totalShifts).toBe(0);
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
+    "weights mixed goals by their completion fraction and never spends fuel on an unreachable goal",
+    async () => {
+      const ships = [HENERPRISE_EPIC];
+      const lootData = lootFor(ships);
+      const level = lootData.missions[0].levels[0];
+      level.targets = [
+        { ...level.targets[0], targetAfxId: 12, items: [{ afxId: 0, afxLevel: 1, itemId: "puzzle-cube-1", counts: [100_000, 0, 0, 0] }] },
+        { ...level.targets[0], targetAfxId: 10000, items: [{ afxId: 0, afxLevel: 1, itemId: "gold-meteorite-1", counts: [5000, 0, 0, 0] }] },
+      ];
+      const { result } = await planTank(ships, 100, tankOptions({ shiftCap: 0 }), {
+        targets: [
+          { targetItemId: "puzzle-cube-1", quantity: 100 },
+          { targetItemId: "gold-meteorite-1", quantity: 1 },
+          { targetItemId: "puzzle-cube-3", quantity: 1 },
+        ],
+        lootData,
+      });
+      expect(result.targetBreakdowns).toEqual(expect.arrayContaining([
+        expect.objectContaining({ itemId: "puzzle-cube-1", fromMissionsExpected: 20, shortfall: 80 }),
+        expect.objectContaining({ itemId: "gold-meteorite-1", fromMissionsExpected: 1, shortfall: 0 }),
+        expect.objectContaining({ itemId: "puzzle-cube-3", fromCraft: 0, shortfall: 1 }),
+      ]));
+      expect(result.crafts).toEqual([]);
+      expect(plannedLaunches(result, "HENERPRISE")).toBe(2);
+      expect(result.virtueTanks!.pack.totalShifts).toBe(0);
+      expect(result.virtueTanks!.neededShifts).toBeUndefined();
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
+    "reports independent copy and craft-count shortfalls using only supplied ingredients",
+    async () => {
+      const profile = profileFor([HENERPRISE_EPIC]);
+      profile.inventory = { puzzle_cube_1: 4 };
+      profile.craftCounts = { puzzle_cube_2: 1 };
+      const { solverFn, models } = recordingSolver();
+      const result = await planForTarget(profile, "puzzle-cube-2", 3, 1, {
+        objectiveMode: "virtueFuel",
+        virtueTank: tankOptions({ shiftCap: 0 }),
+        targets: [
+          { targetItemId: "puzzle-cube-2", quantity: 3 },
+          { targetItemId: "puzzle-cube-2", quantity: 5, craftGoal: true },
+        ],
+        lootData: lootFor([HENERPRISE_EPIC]),
+        solverFn,
+      });
+      expect(result.crafts).toEqual([{ itemId: "puzzle-cube-2", count: 2 }]);
+      expect(plannedLaunches(result, "HENERPRISE")).toBe(2);
+      expect(result.targetBreakdowns).toEqual(expect.arrayContaining([
+        expect.objectContaining({ itemId: "puzzle-cube-2", requested: 3, fromCraft: 2, shortfall: 1 }),
+        expect.objectContaining({ itemId: "puzzle-cube-2", requested: 4, fromCraft: 2, shortfall: 2, craftGoal: true }),
+      ]));
+      expect(result.targetBreakdown.shortfall).toBeCloseTo(1);
+      expect(result.unmetItems).toEqual([{ itemId: "puzzle-cube-2", quantity: 3 }]);
+      expect(result.virtueTanks!.pack.totalShifts).toBe(0);
+      expect(models.some((model) => model.includes("goal_completion:"))).toBe(true);
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
+    "keeps an achievable partial incumbent when completion times out or the time polish fails",
+    async () => {
+      for (const failPolish of [false, true]) {
+        const result = await planForTarget(profileFor([HENERPRISE_EPIC]), "puzzle-cube-1", 6, 1, {
+          objectiveMode: "virtueFuel",
+          virtueTank: tankOptions({ shiftCap: 0 }),
+          lootData: lootFor([HENERPRISE_EPIC]),
+          solverFn: async (model, options) => {
+            if (failPolish && model.includes("goal_completion:")) {
+              throw new Error("simulated time-polish failure");
+            }
+            const solution = await solveWithHighs(model, options);
+            return !failPolish && /0 <= u_\d+ <= 6\b/.test(model) && solution.Status === "Optimal"
+              ? { ...solution, Status: "Time limit reached" }
+              : solution;
+          },
+        });
+        expect(result.targetBreakdown).toMatchObject({ fromMissionsExpected: 2, shortfall: 4 });
+        expect(result.virtueTanks!.pack.totalShifts).toBe(0);
+        expect(result.virtueTanks!.pack.feasible).toBe(true);
+      }
     },
     SOLVER_TIMEOUT_MS
   );
@@ -264,12 +374,14 @@ describe("Path of Virtue tank mode", () => {
             : solverFn(model, options),
       });
       const tanks = result.virtueTanks!;
-      expect(result.unmetItems).toEqual([]);
-      expect(tanks.overCap).toBe(true);
-      expect(tanks.neededShifts).toBe(tanks.pack.totalShifts);
+      expect(result.targetBreakdown.shortfall).toBeCloseTo(10);
+      expect(tanks.overCap).toBe(false);
+      expect(tanks.goalsUnmet).toBe(true);
+      expect(tanks.neededShifts).toBeGreaterThan(tanks.pack.totalShifts);
+      expect(tanks.pack.totalShifts).toBe(0);
       expect(tanks.neededShiftsProven).toBe(false);
       expect(result.notes[0]).toBe(
-        `No plan without shifts was found; this plan takes ${tanks.neededShifts} shifts, and fewer may be possible.`
+        `No complete plan without shifts was found; a complete plan was found with ${tanks.neededShifts} shifts, and fewer may be possible. Planned as much as possible within the selected cap.`
       );
       expect(result.notes.some((note) => note.startsWith("These goals need at least"))).toBe(false);
     },
@@ -583,7 +695,7 @@ describe("Path of Virtue tank mode", () => {
       const { solverFn, models } = recordingSolver();
       const result = await planForTarget(profile, "puzzle-cube-1", 1, 1, {
         objectiveMode: "virtueFuel",
-        virtueTank: tankOptions({ shiftCap: 0, currentContents: { curiosity: 30 * T, kindness: 30 * T, resilience: 20 * T } }),
+        virtueTank: tankOptions({ shiftCap: 15, currentContents: { curiosity: 30 * T, kindness: 30 * T, resilience: 20 * T } }),
         lootData: lootFor([HENERPRISE_EPIC]),
         solverFn,
       });
@@ -604,36 +716,40 @@ describe("Path of Virtue tank mode", () => {
       const henerprise = tanks.units.find((unit) => unit.ship === "HENERPRISE")!;
       expect(lastPrep).toBeLessThan(order.indexOf(henerprise.id));
 
-      expect(tanks.overCap).toBe(true);
-      expect(tanks.neededShifts).toBeGreaterThan(0);
-      expect(tanks.pack.totalShifts).toBe(tanks.neededShifts);
+      expect(tanks.overCap).toBe(false);
+      expect(tanks.pack.totalShifts).toBeGreaterThan(0);
+      expect(tanks.pack.totalShifts).toBeLessThanOrEqual(15);
       expect(result.fuelCost).toBe(plannedFuel(result) + prepUnits.reduce((sum, unit) => sum + unit.launches * 15 * T, 0));
     },
     SOLVER_TIMEOUT_MS
   );
 
   it(
-    "throws the usual coverage error when no shift count can meet the goals",
+    "reports goal shortfalls without inventing ingredients when no shift count can meet them",
     async () => {
       // Puzzle Cube T3 also needs Ornate Gussets, which nothing here drops.
       const ships = [HENERPRISE_EPIC];
       const { solverFn } = recordingSolver();
-      await expect(
-        planForTarget(profileFor(ships), "puzzle-cube-3", 1, 1, {
+      const crafted = await planForTarget(profileFor(ships), "puzzle-cube-3", 1, 1, {
           objectiveMode: "virtueFuel",
           virtueTank: tankOptions({ shiftCap: 0 }),
           lootData: lootFor(ships),
           solverFn,
-        })
-      ).rejects.toBeInstanceOf(MissionCoverageError);
-      await expect(
-        planForTarget(profileFor(ships), "puzzle-cube-1", 1, 1, {
+        });
+      expect(crafted.crafts).toEqual([]);
+      expect(crafted.missions).toEqual([]);
+      expect(crafted.unmetItems).toEqual([{ itemId: "puzzle-cube-3", quantity: 1 }]);
+      expect(crafted.virtueTanks!.pack.totalShifts).toBe(0);
+      expect(crafted.virtueTanks!.neededShifts).toBeUndefined();
+      const noLoot = await planForTarget(profileFor(ships), "puzzle-cube-1", 1, 1, {
           objectiveMode: "virtueFuel",
           virtueTank: tankOptions({ shiftCap: 7 }),
           lootData: { missions: [] } as unknown as LootJson,
           solverFn,
-        })
-      ).rejects.toBeInstanceOf(MissionCoverageError);
+        });
+      expect(noLoot.unmetItems).toEqual([{ itemId: "puzzle-cube-1", quantity: 1 }]);
+      expect(noLoot.virtueTanks!.goalsUnmet).toBe(true);
+      expect(noLoot.virtueTanks!.pack.totalShifts).toBe(0);
     },
     SOLVER_TIMEOUT_MS
   );
@@ -673,7 +789,7 @@ describe("Path of Virtue tank mode", () => {
   );
 
   it(
-    "offers a faster plan with a few more shifts when the minimum is slow",
+    "offers the complete plan's shift count without exceeding the selected cap",
     async () => {
       // An empty tank: the fewest shifts is one Integrity refill (2 shifts)
       // for slow Corvettes, 6 of them in two 200,000 s rounds. Refilling C,
@@ -694,18 +810,22 @@ describe("Path of Virtue tank mode", () => {
         },
       });
       const tanks = result.virtueTanks!;
-      expect(result.unmetItems).toEqual([]);
-      expect(tanks.overCap).toBe(true);
+      expect(result.unmetItems).toEqual([{ itemId: "puzzle-cube-1", quantity: 6 }]);
+      expect(tanks.overCap).toBe(false);
+      expect(tanks.goalsUnmet).toBe(true);
+      expect(tanks.pack.totalShifts).toBe(0);
       expect(tanks.neededShifts).toBe(2);
       expect(tanks.neededShiftsProven).toBe(true);
-      expect(plannedLaunches(result, "CORELLIHEN_CORVETTE")).toBe(6);
-      expect(result.expectedHours).toBeCloseTo(400_000 / 3600, 6);
-      expect(tanks.fasterOption).toBeDefined();
-      expect(tanks.fasterOption!.shifts).toBe(4);
-      expect(tanks.fasterOption!.expectedHours).toBeCloseTo(40_000 / 3600, 6);
+      expect(result.missions).toEqual([]);
+      expect(result.expectedHours).toBe(0);
+      expect(tanks.fasterOption).toBeUndefined();
       expect(events).toContain("Checking whether up to 6 shifts is much faster…");
-      expect(result.notes[0]).toBe("These goals need at least 2 shifts; the slider allows 0. Planned with 2 shifts.");
-      expect(result.notes[1]).toBe("With 4 shifts the goals take about 11h 6m instead of 4d 15h 6m.");
+      expect(result.notes[0]).toBe("These goals need at least 2 shifts; the slider allows 0. Planned as much as possible within the selected cap.");
+
+      const { result: atMinimum } = await planTank([HENERPRISE_EPIC, CORVETTE_EPIC], 6, tankOptions({ shiftCap: 2, currentContents: {} }));
+      expect(atMinimum.unmetItems).toEqual([]);
+      expect(plannedLaunches(atMinimum, "CORELLIHEN_CORVETTE")).toBe(6);
+      expect(atMinimum.virtueTanks!.pack.totalShifts).toBe(2);
 
       // Planning with the cap at the offered shifts gives that plan back.
       const { result: atOffer } = await planTank([HENERPRISE_EPIC, CORVETTE_EPIC], 6, tankOptions({ shiftCap: 4, currentContents: {} }));
@@ -940,7 +1060,7 @@ describe("Path of Virtue tank mode", () => {
       const { solverFn, models } = recordingSolver();
       const result = await planForTarget(profileFor([HENERPRISE_EPIC]), "puzzle-cube-1", 4, 1, {
         objectiveMode: "virtueFuel",
-        virtueTank: tankOptions({ shiftCap: 4 }),
+        virtueTank: tankOptions({ shiftCap: 8 }),
         targets: [
           { targetItemId: "puzzle-cube-1", quantity: 4 },
           { targetItemId: "gold-meteorite-1", quantity: 1 },
@@ -963,7 +1083,7 @@ describe("Path of Virtue tank mode", () => {
       );
       const targets = new Set(result.missions.map((mission) => mission.targetAfxId));
       expect(targets.has(99)).toBe(true);
-      expect([...targets].every((targetAfxId) => targetAfxId === 99 || targetAfxId >= 9)).toBe(true);
+      expect([...targets].every((targetAfxId) => targetAfxId === 99 || targetAfxId >= 9 || targetAfxId <= 3)).toBe(true);
 
       // Outside tank mode nothing is pruned.
       const unpruned = await planForTarget(profileFor([HENERPRISE_EPIC]), "puzzle-cube-1", 4, 1, {
@@ -1098,7 +1218,7 @@ describe("Path of Virtue tank mode", () => {
       const { solverFn } = recordingSolver();
       const result = await planForTarget(profile, "puzzle-cube-1", 60, 1, {
         objectiveMode: "virtueFuel",
-        virtueTank: tankOptions({ shiftCap: 0 }),
+        virtueTank: tankOptions({ shiftCap: 2 }),
         targets: [
           { targetItemId: "puzzle-cube-1", quantity: 60 },
           { targetItemId: "gold-meteorite-1", quantity: 1 },

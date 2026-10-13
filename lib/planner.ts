@@ -1900,6 +1900,8 @@ type UnifiedPlan = {
   virtueShifts?: number;
   /** Tank mode only: the solve's objective value, for a cutoff another solve must beat. */
   objectiveValue?: number;
+  /** Partial tank plans: sum of each goal's unmet fraction (copies and craft counts). */
+  goalShortfallScore?: number;
 };
 
 type UnifiedSolveMetrics = {
@@ -2080,13 +2082,12 @@ type VirtueTankSolveOptions = {
    * "budget": mission time plus VIRTUE_SHIFT_PENALTY_SECONDS per shift and
    * VIRTUE_LAUNCH_EFFORT_SECONDS per launch.
    * "minShift": fewest shifts, then mission time and launch effort.
-   * Either way every goal must be met (unmet demand is fixed at 0): a plan
-   * that cannot meet them within the cap is infeasible, not partial.
+   * Goals are hard unless softDemand requests a partial plan within the cap.
    */
   objective: "budget" | "minShift";
   /** Launches with no mission variable that still burn tank fuel and hold slots: prep steps with no useful drops. */
   fixedLaunches?: Array<{ ship: string; durationType: string; durationSeconds: number; launches: number }>;
-  /** Let goals go unmet (at the usual penalty) instead of failing: only to name the ones no plan can meet. */
+  /** Maximize goal completion, then minimize time/effort; ingredient balances remain hard. */
   softDemand?: boolean;
   /**
    * Proven least shifts for this candidate (from its screening solve). The
@@ -2316,6 +2317,24 @@ async function solveUnifiedCraftMissionPlan(options: {
   const normalizedTimeRef = Math.max(1, timeRef);
   const objectiveContext = normalizeObjectiveContext(objectiveMode, priorityTime, minimumTimePriority);
   const tankModel = virtueTank && objectiveContext.mode === "virtueFuel" ? buildVirtueTankModel(actions, virtueTank) : null;
+  const partialTankPlan = tankModel !== null && Boolean(virtueTank!.softDemand);
+  const craftShortfallVars = new Map(
+    partialTankPlan ? craftModels.filter((model) => model.craftFloor > 0).map((model) => [model.itemKey, `uc_${model.craftVar}`]) : []
+  );
+  // Equal weight per goal, scaled to keep even million-copy goals numerically
+  // significant. Only goal rows may have slack: missing ingredients cannot
+  // be used to manufacture crafts in a partial plan.
+  const completionScale = 1_000_000;
+  const goalShortfallTerms = partialTankPlan
+    ? [
+        ...itemKeys.filter((key) => (demandByItem.get(key) || 0) > 0).map((key) => ({
+          coefficient: completionScale / demandByItem.get(key)!, variable: unmetVarByItem.get(key)!,
+        })),
+        ...craftModels.filter((model) => model.craftFloor > 0).map((model) => ({
+          coefficient: completionScale / model.craftFloor, variable: craftShortfallVars.get(model.itemKey)!,
+        })),
+      ]
+    : [];
 
   const lines: string[] = [];
   lines.push("Minimize");
@@ -2395,11 +2414,10 @@ async function solveUnifiedCraftMissionPlan(options: {
   }
 
   const unmetPenaltyCoeff = maxObjectiveCoeff * 1_000_000;
-  for (const itemKey of itemKeys) {
-    objectiveTerms.push({
-      coefficient: unmetPenaltyCoeff,
-      variable: unmetVarByItem.get(itemKey)!,
-    });
+  if (!partialTankPlan) {
+    for (const itemKey of itemKeys) {
+      objectiveTerms.push({ coefficient: unmetPenaltyCoeff, variable: unmetVarByItem.get(itemKey)! });
+    }
   }
   // Tank mode: the first refuel loops are modeled one by one (see
   // virtueTankLoopLayout), so a loop can top up an egg for the next one. Each
@@ -2438,9 +2456,15 @@ async function solveUnifiedCraftMissionPlan(options: {
       });
     }
   }
-  lines.push(`  obj: ${formatLinearExpression(objectiveTerms)}`);
+  lines.push(`  obj: ${formatLinearExpression(partialTankPlan ? goalShortfallTerms : objectiveTerms)}`);
 
   lines.push("Subject To");
+  for (const model of craftModels) {
+    const shortfallVar = craftShortfallVars.get(model.itemKey);
+    if (shortfallVar) {
+      lines.push(`  cg_${model.craftVar}: ${model.craftVar} + ${shortfallVar} >= ${formatLpNumber(model.craftFloor)}`);
+    }
+  }
   for (let itemIndex = 0; itemIndex < itemKeys.length; itemIndex += 1) {
     const itemKey = itemKeys[itemIndex];
     // Target demand is interpreted as additional units beyond current inventory.
@@ -2880,14 +2904,17 @@ async function solveUnifiedCraftMissionPlan(options: {
       tankConstraintCount += 2;
     }
   }
-  // Tank solves never trade goals away: a cap too low for them should fail
-  // (and trigger the fewest-shifts search), and without the do-nothing
-  // incumbent a binding cap finds real plans far sooner.
+  // Hard-goal passes diagnose the cap; partial passes allow only bounded
+  // goal shortfalls, never missing materials for a craft or consumption.
   const hardDemand = tankModel !== null && !virtueTank!.softDemand;
 
   lines.push("Bounds");
   for (const model of craftModels) {
-    lines.push(`  ${formatLpNumber(model.craftFloor)} <= ${model.craftVar} <= ${formatLpNumber(model.craftBound)}`);
+    lines.push(`  ${formatLpNumber(partialTankPlan ? 0 : model.craftFloor)} <= ${model.craftVar} <= ${formatLpNumber(model.craftBound)}`);
+    const shortfallVar = craftShortfallVars.get(model.itemKey);
+    if (shortfallVar) {
+      lines.push(`  0 <= ${shortfallVar} <= ${formatLpNumber(model.craftFloor)}`);
+    }
     for (let stepIndex = 0; stepIndex < model.preDiscountStepVars.length; stepIndex += 1) {
       lines.push(`  0 <= ${model.preDiscountStepVars[stepIndex]} <= ${formatLpNumber(model.preDiscountStepSizes[stepIndex])}`);
     }
@@ -2901,8 +2928,10 @@ async function solveUnifiedCraftMissionPlan(options: {
   for (const variable of consumptionVars) {
     lines.push(`  ${variable} >= 0`);
   }
-  for (const variable of unmetVarByItem.values()) {
-    lines.push(hardDemand ? `  0 <= ${variable} <= 0` : `  ${variable} >= 0`);
+  for (const [itemKey, variable] of unmetVarByItem) {
+    lines.push(partialTankPlan
+      ? `  0 <= ${variable} <= ${formatLpNumber(demandByItem.get(itemKey) || 0)}`
+      : hardDemand ? `  0 <= ${variable} <= 0` : `  ${variable} >= 0`);
   }
   for (const zVar of phasedBinaryVars) {
     lines.push(`  0 <= ${zVar} <= 1`);
@@ -3004,12 +3033,38 @@ async function solveUnifiedCraftMissionPlan(options: {
     tankModel && virtueTank!.objectiveCutoff !== undefined && Number.isFinite(virtueTank!.objectiveCutoff)
       ? { objective_bound: virtueTank!.objectiveCutoff }
       : {};
-  const solution = await solve(lines.join("\n"), {
-    ...(lpRelaxation && integerVars.length === 0 ? {} : { mip_rel_gap: useExactMipGap ? 0 : 0.01, ...minShiftGap, ...objectiveCutoff }),
+  const solveOptions = {
+    ...(lpRelaxation && integerVars.length === 0 ? {} : { mip_rel_gap: useExactMipGap || partialTankPlan ? 0 : 0.01, ...minShiftGap, ...objectiveCutoff }),
     ...(effectiveTimeLimitSeconds !== undefined && Number.isFinite(effectiveTimeLimitSeconds) && effectiveTimeLimitSeconds > 0
       ? { time_limit: effectiveTimeLimitSeconds }
       : {}),
-  });
+  };
+  let solution = await solve(lines.join("\n"), solveOptions);
+  const usableIncumbent = (result: HighsSolveResult) =>
+    result.Status === "Optimal" || (
+      result.Status === "Time limit reached" && Number.isFinite(result.ObjectiveValue) &&
+      Math.abs(result.ObjectiveValue as number) < 1e20 && Object.keys(result.Columns || {}).length > 0
+    );
+  if (partialTankPlan && usableIncumbent(solution)) {
+    // Lexicographic solve: time and shifts may only improve after retaining
+    // the best completion found. A failed polish keeps the first incumbent.
+    const shortfallBound = goalShortfallTerms.reduce(
+      (sum, term) => sum + term.coefficient * Math.max(0, solution.Columns?.[term.variable]?.Primal || 0), 0
+    );
+    const polishLines = [...lines];
+    polishLines[polishLines.findIndex((line) => line.startsWith("  obj:"))] = `  obj: ${formatLinearExpression(objectiveTerms)}`;
+    polishLines.splice(polishLines.indexOf("Bounds"), 0,
+      `  goal_completion: ${formatLinearExpression(goalShortfallTerms)} <= ${formatLpNumber(shortfallBound + 1e-4)}`);
+    try {
+      const polished = await solve(polishLines.join("\n"), { ...solveOptions, mip_rel_gap: 0.01 });
+      if (usableIncumbent(polished)) {
+        // Completion optimality still depends on the first pass finishing.
+        solution = { ...polished, Status: solution.Status === "Optimal" ? polished.Status : solution.Status };
+      }
+    } catch {
+      // Keep the achievable partial plan even if the optional time solve fails.
+    }
+  }
   const elapsedMs = Math.max(0, Date.now() - solveStartedAtMs);
   const status = solution.Status || "Unknown";
   onSolveMetrics?.({
@@ -3075,7 +3130,9 @@ async function solveUnifiedCraftMissionPlan(options: {
     actions,
     missionCounts,
     targetCraftedOnlyKeys: effectiveTargetCraftedOnlyKeys,
-    craftFloorByItem,
+    craftFloorByItem: partialTankPlan
+      ? new Map(Array.from(craftFloorByItem, ([key, floor]) => [key, Math.min(floor, crafts[key] || 0)]))
+      : craftFloorByItem,
   });
   const notes = ["Craft + mission allocation solved with unified HiGHS model (exact craft discount scheduling)."];
   if (trimmed.droppedCrafts > 0 || trimmed.droppedConsumptions > 0) {
@@ -3096,7 +3153,7 @@ async function solveUnifiedCraftMissionPlan(options: {
     const rawValue = solution.Columns?.[unmetVarByItem.get(itemKey)!]?.Primal || 0;
     remainingDemand[itemKey] = Math.max(0, rawValue);
   }
-  if (acceptTankTimeLimit && Object.values(remainingDemand).some((qty) => qty > 1e-6)) {
+  if (acceptTankTimeLimit && !partialTankPlan && Object.values(remainingDemand).some((qty) => qty > 1e-6)) {
     throw new Error(`unified HiGHS solve status '${status}' before meeting every goal`);
   }
   let virtueShifts: number | undefined;
@@ -3123,6 +3180,11 @@ async function solveUnifiedCraftMissionPlan(options: {
     totalSlotSeconds,
     notes,
     ...(virtueShifts !== undefined ? { virtueShifts } : {}),
+    ...(partialTankPlan ? {
+      goalShortfallScore:
+        itemKeys.reduce((sum, key) => sum + ((demandByItem.get(key) || 0) > 0 ? remainingDemand[key] / demandByItem.get(key)! : 0), 0) +
+        craftModels.reduce((sum, model) => sum + (model.craftFloor > 0 ? Math.max(0, model.craftFloor - (crafts[model.itemKey] || 0)) / model.craftFloor : 0), 0),
+    } : {}),
     ...(tankModel && Number.isFinite(solution.ObjectiveValue as number) ? { objectiveValue: solution.ObjectiveValue as number } : {}),
   };
 }
@@ -5819,8 +5881,8 @@ type VirtueTankPassReport = {
  * VIRTUE_LAUNCH_EFFORT_SECONDS per launch, whose launches pack
  * into fuel tanks within the shift cap. Packing is the source of truth for
  * shifts: when it needs more than the solve counted, the plan is re-solved with
- * fewer refuel loops. When the cap cannot meet the goals, the plan is built at
- * the fewest shifts that can, and flagged as over the cap. Either way, a few
+ * fewer refuel loops. When the cap cannot meet the goals, a partial plan stays
+ * within it and the fewest shifts found for all goals are advisory. A few
  * more shifts can be offered beside the plan when they are clearly faster
  * (VirtueTankPlannerResult.fasterOption).
  */
@@ -5917,12 +5979,12 @@ async function planVirtueTankLaunches(
   // loops are capped at `solveShiftCap` (the cap itself unless the caller
   // knows the solve counts higher); when packing overshoots, the plan is
   // re-solved with fewer refuel loops.
-  const planWithinCap = async (cap: number, solveShiftCap = cap): Promise<CapAttempt> => {
-    const first = await runPass("budget", cap, solveShiftCap);
+  const planWithinCap = async (cap: number, solveShiftCap = cap, softDemand = false): Promise<CapAttempt> => {
+    const first = await runPass("budget", cap, solveShiftCap, softDemand);
     if (!first.plan) {
       return { plan: null, fits: false, inconclusive: first.report.inconclusive, error: first.error };
     }
-    if (packedShifts(first.plan) <= cap) {
+    if (first.plan.virtueTanks!.pack.feasible && packedShifts(first.plan) <= cap) {
       return { plan: first.plan, fits: true, inconclusive: false };
     }
     const tried = [first.plan];
@@ -5934,11 +5996,11 @@ async function planVirtueTankLaunches(
         break;
       }
       reportProgress("refinement", "Packing needs more shifts than the solve counted; re-solving with fewer refuel loops…");
-      const next = await runPass("budget", cap, nextSolveShiftCap);
+      const next = await runPass("budget", cap, nextSolveShiftCap, softDemand);
       if (!next.plan) {
         break;
       }
-      if (packedShifts(next.plan) <= cap) {
+      if (next.plan.virtueTanks!.pack.feasible && packedShifts(next.plan) <= cap) {
         return { plan: next.plan, fits: true, inconclusive: false };
       }
       tried.push(next.plan);
@@ -5952,6 +6014,23 @@ async function planVirtueTankLaunches(
     return { plan: closest, fits: false, inconclusive: true };
   };
 
+  const partialWithinCap = async (): Promise<PlannedLaunches> => {
+    reportProgress("refinement", `Maximizing goal completion within ${shiftCap} shifts…`);
+    const attempt = await planWithinCap(shiftCap, shiftCap, true);
+    if (attempt.fits && attempt.plan) {
+      return attempt.plan;
+    }
+    // Packing is authoritative. Even if its approximation of the solve's
+    // loops overshoots on retries, a plan using only the first tank stays
+    // within the user's cap, with the remaining goals reported as shortfalls.
+    const firstTank = await planWithinCap(shiftCap, 0, true);
+    if (firstTank.fits && firstTank.plan) {
+      firstTank.plan.notes.push("Refuel packing could not fit the selected cap; this partial plan uses only the initial tank.");
+      return firstTank.plan;
+    }
+    throw attempt.error ?? firstTank.error ?? new Error("No partial plan could be packed within the selected shift cap.");
+  };
+
   type TankOutcome = {
     neededShifts?: number;
     proven?: boolean;
@@ -5960,8 +6039,17 @@ async function planVirtueTankLaunches(
     faster?: PlannedLaunches;
   };
   const finish = async (plan: PlannedLaunches, outcome: TankOutcome = {}): Promise<PlannedLaunches> => {
+    if (!plan.virtueTanks!.pack.feasible || packedShifts(plan) > shiftCap) {
+      const completePlanPacked = plan.virtueTanks!.pack.feasible;
+      plan = await partialWithinCap();
+      // A complete plan's time is not comparable to a partial plan's time.
+      outcome = completePlanPacked && plan.targetBreakdowns.some((goal) => goal.shortfall > 1e-6)
+        ? { neededShifts: outcome.neededShifts, proven: outcome.proven }
+        : {};
+    }
     const tanks = plan.virtueTanks!;
     const neededShifts = outcome.neededShifts;
+    const goalsUnmet = plan.targetBreakdowns.some((goal) => goal.shortfall > 1e-6);
     const notes = [...plan.notes];
     const tankNotes = [...tanks.notes];
     if (startMode === "current" && !tank.currentContents) {
@@ -5975,11 +6063,17 @@ async function planVirtueTankLaunches(
       // Only a finished search proves the count; otherwise it is only the
       // fewest the search found.
       const overCapNote = outcome.proven
-        ? `These goals need at least ${neededShifts} shifts; the slider allows ${shiftCap}. Planned with ${neededShifts} shifts.`
-        : `No plan ${shiftCap > 0 ? `within ${shiftCap} shifts` : "without shifts"} was found; this plan takes ${neededShifts} shifts, and fewer may be possible.`;
+        ? `These goals need at least ${neededShifts} shifts; the slider allows ${shiftCap}. Planned as much as possible within the selected cap.`
+        : `No complete plan ${shiftCap > 0 ? `within ${shiftCap} shifts` : "without shifts"} was found; a complete plan was found with ${neededShifts} shifts, and fewer may be possible. Planned as much as possible within the selected cap.`;
       notes.unshift(overCapNote);
       if (!outcome.proven) {
         tankNotes.push(overCapNote);
+      }
+    }
+    if (goalsUnmet) {
+      notes.push("Partial plan: maximize the sum of each goal's completion fraction, then minimize mission time, shifts and launch effort. Ingredient balances remain fully supplied.");
+      if (neededShifts === undefined) {
+        notes.unshift(`Some goals could not be reached within ${shiftCap} shifts. Planned as much as possible within the selected cap.`);
       }
     }
     const faster = outcome.faster
@@ -6002,8 +6096,9 @@ async function planVirtueTankLaunches(
       virtueTanks: {
         ...tanks,
         shiftCap,
-        plannedShiftCap: neededShifts ?? shiftCap,
-        overCap: neededShifts !== undefined,
+        plannedShiftCap: shiftCap,
+        overCap: false,
+        goalsUnmet,
         ...(neededShifts !== undefined ? { neededShifts, neededShiftsProven: Boolean(outcome.proven) } : {}),
         ...(faster ? { fasterOption: faster } : {}),
         notes: tankNotes,
@@ -6128,7 +6223,7 @@ async function planVirtueTankLaunches(
     isProvenFewest: (shifts: number) => boolean,
     noteFor?: (plan: PlannedLaunches) => string | undefined
   ): Promise<PlannedLaunches> => {
-    const withinCap = (all: PlannedLaunches[]) => fastestOf(all.filter((plan) => packedShifts(plan) <= shiftCap));
+    const withinCap = (all: PlannedLaunches[]) => fastestOf(all.filter((plan) => plan.virtueTanks!.pack.feasible && packedShifts(plan) <= shiftCap));
     const fastestWithin = withinCap(plans);
     if (fastestWithin) {
       return finishWithinCap(fastestWithin, plans, noteFor);
@@ -6228,15 +6323,14 @@ async function planVirtueTankLaunches(
     search.report.solveShifts === packedShifts(fewest) &&
     packedShifts(fewest) < 2 * (VIRTUE_TANK_INDIVIDUAL_LOOPS + 1);
   if (!fewest) {
-    // Either no shift count meets the goals (something has no drop source) or
-    // the search ran out of time. An open-cap pass that may leave goals unmet
-    // tells the two apart, and names what cannot be met.
-    const open = await runPass("budget", shiftCap, null, true);
+    // The minimum search may have timed out. Try one complete open-cap plan
+    // for an advisory count, then return a capped partial plan if none exists.
+    const open = await runPass("budget", shiftCap, null);
     if (!open.plan) {
-      throw atCap.error ?? search.error ?? open.error ?? new Error("Path of Virtue tank planning found no plan that meets the goals.");
-    }
-    if (open.plan.unmetItems.length > 0) {
-      throw new MissionCoverageError(open.plan.unmetItems.map((item) => itemIdToCanonicalKey(item.itemId)));
+      if (found.length > 0) {
+        return settle(found, () => false, noteFor);
+      }
+      return finish(await partialWithinCap());
     }
     fewest = open.plan;
     fewestProven = false;
@@ -6752,7 +6846,7 @@ async function planForNewLaunches(
     let timeBudgetExceeded = false;
     let indexFilteredActionCount = baseActionsEntry.indexFilteredCount;
     // Tank mode, which never uses the yield index to narrow the actions.
-    const virtueTankActionPruning = Boolean(tankRun) && !missionActionFilter;
+    const virtueTankActionPruning = Boolean(tankRun) && !tankRun?.softDemand && !missionActionFilter;
     const virtueTankActionCounts = { before: 0, after: 0, fullChecksWon: 0 };
     const prunedActionCache = new Map<string, MissionAction[]>();
     const dominanceActionCache = new Map<string, MissionAction[]>();
@@ -6978,7 +7072,7 @@ async function planForNewLaunches(
       unified: UnifiedPlan;
       solveMetrics: UnifiedSolveMetrics | null;
     }): TankSolveHints => {
-      if (!tankRun) {
+      if (!tankRun || tankRun.softDemand) {
         return {};
       }
       const hints: TankSolveHints = {};
@@ -7140,7 +7234,7 @@ async function planForNewLaunches(
       // missions (one 38h mission reads as 13h). When this plan's rounds say
       // it did, re-solve with them in the objective. When they do not, the
       // plan is the fastest by the rounds too, since slot time never exceeds them.
-      if (tankRun?.objective === "budget" && !lpRelaxation) {
+      if (tankRun?.objective === "budget" && !tankRun.softDemand && !lpRelaxation) {
         const baselineSlotSeconds = input.prepNoYieldSlotSeconds + baselineUnified.totalSlotSeconds;
         if (tankMakespanSeconds(input, baselineUnified) > (baselineSlotSeconds / 3) * (1 + PLAN_SCORE_TIE_TOLERANCE_FRACTION) + 1) {
           const baselineScore = virtueTankScore(input, baselineUnified, baselineSlotSeconds);
@@ -7215,7 +7309,7 @@ async function planForNewLaunches(
             objectiveMode === "virtueFuel" ? fuelRef : geRef,
             timeRef
           );
-      const unmetTotal = Object.values(unified.remainingDemand).reduce((sum, qty) => sum + Math.max(0, qty), 0);
+      const unmetTotal = unified.goalShortfallScore ?? Object.values(unified.remainingDemand).reduce((sum, qty) => sum + Math.max(0, qty), 0);
       const totalLaunches =
         Object.values(unified.missionCounts).reduce(
           (sum, launches) => sum + Math.max(0, Math.round(launches)),
@@ -7248,7 +7342,7 @@ async function planForNewLaunches(
       b: { unmetTotal: number; weightedScore: number; geCost: number; fuelCost: number; totalSlotSeconds: number; totalLaunches: number }
     ): number => {
       const unmetDiff = a.unmetTotal - b.unmetTotal;
-      if (Math.abs(unmetDiff) > 1e-6) {
+      if (Math.abs(unmetDiff) > (tankRun?.softDemand ? 1e-9 : 1e-6)) {
         return unmetDiff;
       }
 
@@ -8563,7 +8657,14 @@ async function planForNewLaunches(
           remainingDemand: outputUnified.remainingDemand,
           targetCraftedOnly,
         });
-    const unmetItems = Object.entries(outputUnified.remainingDemand)
+    const unmetByItem = tankRun?.softDemand
+      ? targetBreakdowns.reduce<Record<string, number>>((unmet, goal) => {
+          const key = itemIdToCanonicalKey(goal.itemId);
+          unmet[key] = (unmet[key] || 0) + goal.shortfall;
+          return unmet;
+        }, {})
+      : outputUnified.remainingDemand;
+    const unmetItems = Object.entries(unmetByItem)
       .filter(([, qty]) => qty > 1e-6)
       .map(([itemKey, qty]) => ({ itemId: itemKeyToId(itemKey), quantity: qty }))
       .sort((a, b) => b.quantity - a.quantity);
@@ -8579,7 +8680,7 @@ async function planForNewLaunches(
       )
       .map(([itemKey]) => itemKey);
 
-    if (uncoveredItemKeys.length > 0 && missionRows.length === 0 && craftRows.length === 0) {
+    if (!tankRun?.softDemand && uncoveredItemKeys.length > 0 && missionRows.length === 0 && craftRows.length === 0) {
       throw new MissionCoverageError(uncoveredItemKeys);
     }
 
@@ -8591,7 +8692,9 @@ async function planForNewLaunches(
       const owed = craftFloorByItem.get(itemKey) || 0;
       const label = itemKeyToTierLabel(itemKey);
       notes.push(
-        owed > 0
+        tankRun?.softDemand && owed > 0
+          ? `Craft-count goal: ${label} at ${craftedBefore.toLocaleString()} of ${goalTotal.toLocaleString()} crafts; the plan adds ${(outputUnified.crafts[itemKey] || 0).toLocaleString()} of the ${owed.toLocaleString()} still owed.`
+          : owed > 0
           ? `Craft-count goal: ${label} at ${craftedBefore.toLocaleString()} of ${goalTotal.toLocaleString()} crafts, so the plan crafts at least ${owed.toLocaleString()} more (copies consumed by higher tiers count toward it).`
           : `Craft-count goal: ${label} already at ${craftedBefore.toLocaleString()} of ${goalTotal.toLocaleString()} crafts, so the plan adds nothing for it.`
       );
@@ -8615,7 +8718,7 @@ async function planForNewLaunches(
           VIRTUE_SHIFT_PENALTY_SECONDS / 3600
         )} h of mission time and each launch as ${Math.round(
           VIRTUE_LAUNCH_EFFORT_SECONDS / 60
-        )} min, within the shift cap unless the goals need more shifts, packed into fuel tanks from ${
+        )} min, within the selected shift cap, packed into fuel tanks from ${
           tankRun.startMode === "ideal" ? "an ideal first fill (not counted toward the cap)" : "what is in the tank now"
         }. Humility is fueled live on its farm and never counted.`
       );
@@ -8692,7 +8795,7 @@ async function planForNewLaunches(
       notes.push("No eligible mission loot actions were found for your current mission options and loot dataset.");
     }
     if (unmetItems.length > 0) {
-      notes.push("Some ingredient demand remains unmet by current mission options/dataset.");
+      notes.push(tankRun?.softDemand ? "Some goals remain short within the selected shift cap; see the goal shortfalls." : "Some ingredient demand remains unmet by current mission options/dataset.");
     }
     if (uncoveredItemKeys.length > 0) {
       notes.push(

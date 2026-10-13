@@ -46,6 +46,12 @@ ingredients.
 
 **Artifact Attainment / Mission Craft Planner**
 
+- Path of Virtue plans now stay within the selected shift cap. If all goals cannot be reached,
+the planner maximizes goal completion and shows each shortfall in the prominent warning.
+  - Complete-plan shift counts remain suggestions; the user chooses whether to raise the cap.
+  - Copy, craft-count and shiny-chance goals share the cap, with ingredients fully supplied for
+every planned craft.
+
 - Added **craft-count goals** to the Goals card.
   - Each target row has a mode chip: **copies** (how many more to end up with, the old behaviour) or
 **craft count** (an all-time craft-count goal, e.g. the 300 that maxes an artifact's crafting discount).

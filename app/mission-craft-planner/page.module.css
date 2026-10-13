@@ -2102,6 +2102,12 @@
   font-weight: 700;
 }
 
+.shiftCapShortfalls {
+  margin: 0.5rem 0 0;
+  padding-left: 1.2rem;
+  line-height: 1.6;
+}
+
 .shiftCapBannerTime {
   white-space: nowrap;
 }

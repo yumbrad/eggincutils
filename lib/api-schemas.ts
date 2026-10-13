@@ -529,6 +529,7 @@ export const virtueTankPlannerResultSchema = z.object({
   shiftCap: nonNegativeIntSchema.max(MAX_VIRTUE_SHIFT_CAP),
   plannedShiftCap: nonNegativeIntSchema,
   overCap: z.boolean(),
+  goalsUnmet: z.boolean().optional(),
   neededShifts: nonNegativeIntSchema.optional(),
   neededShiftsProven: z.boolean().optional(),
   fasterOption: z

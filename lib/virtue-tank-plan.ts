@@ -37,11 +37,13 @@ export type VirtueTankPlanUnit = VirtueTankLaunchUnit & {
 export type VirtueTankPlannerResult = {
   /** Cap the user asked for. */
   shiftCap: number;
-  /** Cap the plan was built with; above `shiftCap` only when `overCap`. */
+  /** Cap the returned plan was built with; stays at the user's selected cap. */
   plannedShiftCap: number;
-  /** The goals needed more shifts than `shiftCap` allows. */
+  /** Legacy plans only: their launches exceed `shiftCap`. New plans respect it. */
   overCap: boolean;
-  /** Fewest shifts that meet the goals, when `overCap`. */
+  /** The returned plan leaves some goals short within the selected cap. */
+  goalsUnmet?: boolean;
+  /** Advisory: fewest shifts found that meet all goals when the selected cap is too low. */
   neededShifts?: number;
   /**
    * With `neededShifts`: true when the search proved no plan takes fewer;
