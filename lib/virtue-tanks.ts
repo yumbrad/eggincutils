@@ -61,6 +61,8 @@ export type VirtueTankLaunchUnit = {
   isPrep?: boolean;
   /** Dependency order among prep units, ascending (missing counts as 0). */
   prepOrder?: number;
+  /** Event launches in chronological order, after prep and before ordinary farming. */
+  launchOrder?: number;
   /** Fuel burned per launch; defaults to getVirtueFuelConfig(ship, durationType). */
   fuelPerLaunch?: VirtueFuelVector;
 };
@@ -721,6 +723,9 @@ function preparePack(input: VirtueTankPackInput): PreparedPack {
   const prepOrders = Array.from(
     new Set(rawUnits.filter((unit) => unit.isPrep).map(prepOrderOf))
   ).sort((a, b) => a - b);
+  const eventOrders = Array.from(new Set(rawUnits
+    .filter((unit) => !unit.isPrep && unit.launchOrder !== undefined)
+    .map((unit) => finiteOr(unit.launchOrder, 0)))).sort((a, b) => a - b);
   const notes: string[] = [];
   const diagnostics: string[] = [];
   if (ctx.mode === "current" && !input.currentContents) {
@@ -745,7 +750,9 @@ function preparePack(input: VirtueTankPackInput): PreparedPack {
       durationSeconds,
       orderSeconds: durationSeconds,
       launches,
-      phase: unit.isPrep ? prepOrders.indexOf(prepOrderOf(unit)) : prepOrders.length,
+      phase: unit.isPrep
+        ? prepOrders.indexOf(prepOrderOf(unit))
+        : prepOrders.length + (unit.launchOrder !== undefined ? eventOrders.indexOf(finiteOr(unit.launchOrder, 0)) : eventOrders.length),
       fuel,
       size: sumFuel(fuel),
     });

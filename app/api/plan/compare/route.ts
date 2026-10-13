@@ -30,6 +30,7 @@ export async function POST(request: Request): Promise<Response> {
       quantity: parsed.data.quantity,
       priorityTime: parsed.data.priorityTime,
       selectedCombos: parsed.data.selectedCombos,
+      includeDubcap: parsed.data.includeDubcap,
       missionDropRarities: {
         rare: parsed.data.includeDropRare,
         epic: parsed.data.includeDropEpic,

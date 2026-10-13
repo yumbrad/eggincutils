@@ -46,6 +46,14 @@ ingredients.
 
 **Artifact Attainment / Mission Craft Planner**
 
+- Added **Include one dubcap**: optimize launches in one fresh 48-hour event with exactly double
+the drops, including shorter missions where they help your goals.
+  - Shows launch and return times for all three slots, with a five-minute launch margin.
+  - Starts after prep and current missions return; calendar waiting is excluded.
+  - Fuel and leveling points count each physical launch once. Event drops use starting stars;
+ordinary missions can benefit from leveling after the event's ships return.
+  - Works with shift-capped partial plans, comparisons, saved plans and solve snapshots.
+
 - Path of Virtue plans now stay within the selected shift cap. If all goals cannot be reached,
 the planner maximizes goal completion and shows each shortfall in the prominent warning.
   - Complete-plan shift counts remain suggestions; the user chooses whether to raise the cap.

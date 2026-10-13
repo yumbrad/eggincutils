@@ -14,6 +14,7 @@ export const LOCAL_PREF_KEYS = {
   plannerVirtueStartTank: "eggincutils-planner-virtue-start-tank",
   plannerVirtueTankEdits: "eggincutils-planner-virtue-tank-edits",
   plannerFastMode: "eggincutils-planner-fast-mode",
+  plannerIncludeDubcap: "eggincutils-planner-include-dubcap",
   plannerInventorySource: "eggincutils-planner-inventory-source",
   craftInventorySource: "eggincutils-craft-inventory-source",
   craftIncludeInventoryFragments: "eggincutils-craft-include-inventory-fragments",

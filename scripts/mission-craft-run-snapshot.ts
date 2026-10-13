@@ -42,6 +42,7 @@ const solveInputSnapshotSchema = z.object({
     targetCraftedOnly: z.boolean().optional().default(false),
     priorityTime: z.number().finite().min(0).max(1),
     fastMode: z.boolean(),
+    includeDubcap: z.boolean().optional().default(false),
     allowedShipDurations: z
       .array(z.object({ ship: z.string().min(1), durationType: z.enum(["SHORT", "LONG", "EPIC"]) }))
       .optional(),
@@ -642,6 +643,7 @@ async function runCompareDiagnostics(options: {
     targetCraftedOnly: snapshot.request.targetCraftedOnly,
     priorityTime: snapshot.request.priorityTime,
     selectedCombos: combos,
+    includeDubcap: snapshot.request.includeDubcap,
     missionDropRarities: snapshotMissionDropRarities(snapshot),
     selectedConsumptionItemIds: snapshot.request.selectedConsumptionItemIds,
   });
@@ -861,6 +863,7 @@ async function run(options: CliOptions): Promise<RunDiagnostics> {
     loaded.snapshot.request.priorityTime,
     {
       fastMode: loaded.snapshot.request.fastMode,
+      includeDubcap: loaded.snapshot.request.includeDubcap,
       objectiveMode: virtue ? "virtueFuel" : "ge",
       virtueTank: virtue
         ? buildVirtueTankPlannerOptions(

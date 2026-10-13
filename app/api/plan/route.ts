@@ -64,6 +64,7 @@ export async function POST(request: Request): Promise<Response> {
             )
           : undefined,
         fastMode: parsedPayload.data.fastMode,
+        includeDubcap: parsedPayload.data.includeDubcap,
         missionDropRarities: {
           rare: parsedPayload.data.includeDropRare,
           epic: parsedPayload.data.includeDropEpic,

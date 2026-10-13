@@ -158,6 +158,7 @@ export const planRequestSchema = z
     includeDropFragments: z.union([z.boolean(), z.number(), z.string()]).optional(),
     targetCraftedOnly: z.union([z.boolean(), z.number(), z.string()]).optional(),
     fastMode: z.union([z.boolean(), z.number(), z.string()]).optional(),
+    includeDubcap: z.union([z.boolean(), z.number(), z.string()]).optional(),
     allowedShipDurations: z
       .array(z.object({ ship: z.string().min(1), durationType: z.enum(["SHORT", "LONG", "EPIC"]) }))
       .optional(),
@@ -183,6 +184,7 @@ export const planRequestSchema = z
     includeDropFragments: parseEnabledByDefault(value.includeDropFragments, true),
     targetCraftedOnly: parseDisabledByDefault(value.targetCraftedOnly),
     fastMode: parseFastMode(value.fastMode),
+    includeDubcap: parseDisabledByDefault(value.includeDubcap),
     allowedShipDurations: value.allowedShipDurations,
     selectedConsumptionItemIds: value.selectedConsumptionItemIds ?? [],
     virtueShiftCap: value.virtueShiftCap,
@@ -295,6 +297,7 @@ export const replanRequestSchema = z.object({
     .transform((value) => Math.max(0, Math.min(1, value))),
   inventorySource: z.string().optional(),
   fastMode: z.union([z.boolean(), z.number(), z.string()]).optional(),
+  includeDubcap: z.union([z.boolean(), z.number(), z.string()]).optional(),
   includeDropRare: z.union([z.boolean(), z.number(), z.string()]).optional(),
   includeDropEpic: z.union([z.boolean(), z.number(), z.string()]).optional(),
   includeDropLegendary: z.union([z.boolean(), z.number(), z.string()]).optional(),
@@ -312,6 +315,7 @@ export const replanRequestSchema = z.object({
   ...value,
   inventorySource: parseInventorySource(value.inventorySource),
   fastMode: parseFastMode(value.fastMode),
+  includeDubcap: parseDisabledByDefault(value.includeDubcap),
   includeDropRare: parseEnabledByDefault(value.includeDropRare, true),
   includeDropEpic: parseEnabledByDefault(value.includeDropEpic, true),
   includeDropLegendary: parseEnabledByDefault(value.includeDropLegendary, true),
@@ -356,6 +360,7 @@ const planMissionRowSchema = z.object({
   secondsRemaining: nonNegativeIntSchema.optional(),
   launchSecondsRemaining: z.array(nonNegativeIntSchema).optional(),
   rowKey: z.string().min(1).optional(),
+  dubcap: z.boolean().optional(),
 });
 
 const planUnmetItemSchema = z.object({
@@ -494,6 +499,7 @@ const virtueTankPlanUnitSchema = z.object({
   launches: nonNegativeIntSchema,
   isPrep: z.boolean().optional(),
   prepOrder: z.number().finite().optional(),
+  launchOrder: nonNegativeFiniteSchema.optional(),
   fuelPerLaunch: virtueFuelVectorSchema.optional(),
   missionRowKey: z.string().min(1).optional(),
   targetAfxId: z.number().int().nullable().optional(),
@@ -585,6 +591,29 @@ export const plannerResultSchema = z.object({
   notes: z.array(z.string()),
   availableCombos: z.array(availableComboSchema),
   virtueTanks: virtueTankPlannerResultSchema.optional(),
+  dubcap: z.object({
+    windowSeconds: nonNegativeIntSchema,
+    launchMarginSeconds: nonNegativeIntSchema,
+    startSeconds: nonNegativeFiniteSchema,
+    launches: nonNegativeIntSchema,
+    makespanSeconds: nonNegativeFiniteSchema,
+    missionSeconds: nonNegativeFiniteSchema,
+    lanes: z.array(z.array(z.object({
+      missionRowKey: z.string().min(1),
+      ship: z.string().min(1), durationType: z.string().min(1),
+      level: nonNegativeIntSchema, targetAfxId: z.number().int(),
+      launches: nonNegativeIntSchema, startSeconds: nonNegativeFiniteSchema, endSeconds: nonNegativeFiniteSchema,
+      tankIndex: nonNegativeIntSchema.optional(),
+    }))),
+    fullLanes: z.array(z.array(z.object({
+      missionRowKey: z.string().min(1).optional(),
+      ship: z.string().min(1), durationType: z.string().min(1),
+      level: nonNegativeIntSchema, targetAfxId: z.number().int().nullable().optional(),
+      isPrep: z.boolean(), dubcap: z.boolean(),
+      launches: nonNegativeIntSchema, startSeconds: nonNegativeFiniteSchema, endSeconds: nonNegativeFiniteSchema,
+      tankIndex: nonNegativeIntSchema.optional(),
+    }))),
+  }).optional(),
 });
 
 export const planApiResponseSchema = z.object({
@@ -622,6 +651,7 @@ export const compareRequestSchema = z.object({
     .default(0.5)
     .transform((value) => Math.max(0, Math.min(1, value))),
   selectedCombos: z.array(selectedComboSchema).min(1).max(20),
+  includeDubcap: z.union([z.boolean(), z.number(), z.string()]).optional(),
   includeDropRare: z.union([z.boolean(), z.number(), z.string()]).optional(),
   includeDropEpic: z.union([z.boolean(), z.number(), z.string()]).optional(),
   includeDropLegendary: z.union([z.boolean(), z.number(), z.string()]).optional(),
@@ -630,6 +660,7 @@ export const compareRequestSchema = z.object({
   selectedConsumptionItemIds: z.array(z.string().trim().min(1)).max(84).optional(),
 }).transform((value) => ({
   ...value,
+  includeDubcap: parseDisabledByDefault(value.includeDubcap),
   includeDropRare: parseEnabledByDefault(value.includeDropRare, true),
   includeDropEpic: parseEnabledByDefault(value.includeDropEpic, true),
   includeDropLegendary: parseEnabledByDefault(value.includeDropLegendary, true),

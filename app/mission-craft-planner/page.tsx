@@ -49,6 +49,7 @@ import useHighsWorker from "../../lib/use-highs-worker";
 import { planForTarget, computeMonolithicPaths, type PlannerProgressEvent } from "../../lib/planner";
 import { createDemoProfile, isBlankEid } from "../../lib/demo-profile";
 import type { LootJson } from "../../lib/loot-data";
+import type { DubcapPlan } from "../../lib/dubcap";
 import {
   formatVirtueFuelQuantity,
   formatVirtueTankLimit,
@@ -203,6 +204,7 @@ type PlanResponse = {
       launchSecondsRemaining?: number[];
       /** Stable row id that virtue tank units point back at. */
       rowKey?: string;
+      dubcap?: boolean;
     }>;
     unmetItems: Array<{ itemId: string; quantity: number }>;
     targetBreakdown: {
@@ -249,6 +251,7 @@ type PlanResponse = {
     }>;
     /** Path of Virtue tank mode only; absent on main-farm plans and older saved sessions. */
     virtueTanks?: VirtueTankPlannerResult;
+    dubcap?: DubcapPlan;
   };
 };
 
@@ -280,6 +283,7 @@ type SolveSnapshotRequest = {
   targetCraftedOnly: boolean;
   priorityTime: number;
   fastMode: boolean;
+  includeDubcap?: boolean;
   allowedShipDurations?: Array<{ ship: string; durationType: "SHORT" | "LONG" | "EPIC" }>;
   selectedConsumptionItemIds?: string[];
   /** Path of Virtue only: the shift-cap slider and the Initial Tank toggle. */
@@ -993,6 +997,7 @@ function sortTimelineSegmentsForLegend(segments: TimelineSegment[]): TimelineSeg
 }
 
 function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | null {
+  if (plan.dubcap) return buildDubcapTimeline(plan);
   const missionColorByKey = buildMissionColorMap(plan.missions);
   // In-air missions are not launches to schedule — they are slots already
   // occupied, so they seed the lanes instead of being packed into them.
@@ -1252,6 +1257,89 @@ function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | nul
     prepSlotSeconds,
     hiddenPrepSlotSeconds,
   };
+}
+
+function buildDubcapTimeline(plan: PlanResponse["plan"]): MissionTimeline | null {
+  const event = plan.dubcap!;
+  const colors = buildMissionColorMap(plan.missions);
+  const segments: TimelineSegment[] = [];
+  const lanes: TimelineLaneBlock[][] = event.fullLanes.map((lane, laneIndex) => lane.map((block, index) => {
+    const mission = plan.missions.find((row) => row.rowKey === block.missionRowKey);
+    const colorKey = mission ? missionColorKey(mission) : `${block.ship}|${block.durationType}`;
+    const id = `event-plan:${laneIndex}:${index}`;
+    const label = `${titleCaseShip(block.ship)} ${durationTypeWithLevelLabel(block.durationType, block.level)}`;
+    const subtitle = `${block.isPrep ? "Prep" : afxIdToTargetFamilyName(block.targetAfxId ?? 10000)}${block.dubcap ? " · dubcap ×2" : ""}`;
+    const totalSeconds = block.endSeconds - block.startSeconds;
+    const phase = block.isPrep ? "prep" : "mission";
+    const color = colors.get(colorKey) ?? prepTimelineColor(colorKey);
+    segments.push({ id, label, subtitle, phase, color, launches: block.launches,
+      durationSeconds: totalSeconds / block.launches, totalSlotSeconds: totalSeconds,
+      ship: block.ship, durationType: block.durationType, level: block.level, targetAfxId: block.targetAfxId ?? null });
+    return { id, label, subtitle, phase, color, launches: block.launches, totalSeconds,
+      startSeconds: block.startSeconds, endSeconds: block.endSeconds };
+  }));
+  const inAir = plan.missions.filter((mission) => mission.inAir)
+    .flatMap((mission) => (mission.launchSecondsRemaining ?? [mission.secondsRemaining ?? 0]).map((seconds) => ({ mission, seconds })))
+    .sort((a, b) => b.seconds - a.seconds).slice(0, 3);
+  inAir.forEach(({ mission, seconds }, lane) => {
+    lanes[lane].unshift({ id: `event-air:${lane}`, label: titleCaseShip(mission.ship), subtitle: "In air",
+      phase: "inAir", color: colors.get(missionColorKey(mission)) ?? prepTimelineColor(mission.ship),
+      launches: 1, totalSeconds: seconds, startSeconds: 0, endSeconds: seconds });
+  });
+  const missionSlotSeconds = segments.filter((segment) => segment.phase === "mission").reduce((sum, segment) => sum + segment.totalSlotSeconds, 0);
+  const prepSlotSeconds = segments.filter((segment) => segment.phase === "prep").reduce((sum, segment) => sum + segment.totalSlotSeconds, 0);
+  return event.makespanSeconds > 0 ? { lanes, segments, totalSeconds: event.makespanSeconds,
+    modelTotalSlotSeconds: missionSlotSeconds + prepSlotSeconds, missionSlotSeconds, prepSlotSeconds, hiddenPrepSlotSeconds: 0 } : null;
+}
+
+function eventClock(seconds: number): string {
+  const minutes = Math.floor(Math.max(0, seconds) / 60);
+  return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
+function DubcapTimeline({ event }: { event: DubcapPlan }) {
+  return (
+    <div className="panel">
+      <h2 style={{ marginTop: 0 }}>Dubcap launch window</h2>
+      <p className="muted">
+        {pluralize(event.launches, "launch", "launches")} with double drops. Times are hours:minutes from event start;
+        launch before 48:00, with a {event.launchMarginSeconds / 60}-minute margin.
+        {event.startSeconds > 0 && <> Prep and current missions take {formatDurationFromHours(event.startSeconds / 3600)} before the window.</>}
+        {" "}Calendar waiting is excluded. Drops use stars at event start; replan after returns.
+      </p>
+      {event.launches > 0 ? (
+        <div className={styles.dubcapLanes}>
+          {event.lanes.map((lane, index) => (
+            <div className={styles.dubcapLane} key={index}>
+              <h3>Slot {index + 1}</h3>
+              <table>
+                <thead><tr><th>Launch</th><th>Ship / target</th><th>Return</th></tr></thead>
+                <tbody>{lane.map((block, blockIndex) => {
+                  const duration = (block.endSeconds - block.startSeconds) / block.launches;
+                  const lastStart = block.endSeconds - duration;
+                  return (
+                    <tr key={`${block.missionRowKey}:${blockIndex}`}>
+                      <td className={styles.dubcapClock}>
+                        {eventClock(block.startSeconds)}{block.launches > 1 && <>–{eventClock(lastStart)}</>}
+                      </td>
+                      <td>
+                        {block.launches > 1 && <>{block.launches}× </>}{titleCaseShip(block.ship)}<br />
+                        <span className="muted">{durationTypeWithLevelLabel(block.durationType, block.level)} · {afxIdToTargetFamilyName(block.targetAfxId)}</span>
+                        {block.launches > 1 && <div className="muted">Every {formatDurationFromHours(duration / 3600)}</div>}
+                        {block.tankIndex != null && <div className="muted">{block.tankIndex === 0 ? "Initial tank" : `Tank ${block.tankIndex + 1}`}</div>}
+                      </td>
+                      <td className={styles.dubcapClock}>{eventClock(block.endSeconds)}</td>
+                    </tr>
+                  );
+                })}</tbody>
+              </table>
+              {lane.length === 0 && <p className="muted">No event launches in this slot.</p>}
+            </div>
+          ))}
+        </div>
+      ) : <p className="muted">This plan needs no launches during the event.</p>}
+    </div>
+  );
 }
 
 function buildVirtueFuelCharts(plan: PlanResponse["plan"]): FuelCharts | null {
@@ -3100,6 +3188,7 @@ function renderMissionTableRow(
             In air
           </span>
         )}
+        {mission.dubcap && <span className={styles.dubcapBadge}>dubcap ×2</span>}
         {titleCaseShip(mission.ship)}<br />
         <span className="muted">{durationTypeWithLevelLabel(mission.durationType, mission.level)}</span>
       </td>
@@ -3675,6 +3764,7 @@ export default function MissionCraftPlannerPage() {
   const [includeDropLegendary, setIncludeDropLegendary] = useState(false);
   const [includeDropFragments, setIncludeDropFragments] = useState(true);
   const [fastMode, setFastMode] = useState(false);
+  const [includeDubcap, setIncludeDubcap] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
@@ -4283,6 +4373,7 @@ export default function MissionCraftPlannerPage() {
     }
 
     response.plan.missions.forEach((mission, missionIndex) => {
+      if (mission.inAir || mission.dubcap) return;
       const missionKey = `${mission.ship}|${mission.durationType}`;
       const buckets = prepBucketsByMissionShape.get(missionKey);
       if (!buckets || buckets.length === 0) {
@@ -4432,6 +4523,7 @@ export default function MissionCraftPlannerPage() {
       }
       setVirtueTankEdits(parseStoredVirtueTankEdits(readFirstStoredString([LOCAL_PREF_KEYS.plannerVirtueTankEdits])));
       const savedFastMode = readStoredBoolean([LOCAL_PREF_KEYS.plannerFastMode]);
+      setIncludeDubcap(readStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDubcap]) ?? false);
       if (savedFastMode != null) {
         setFastMode(savedFastMode);
       }
@@ -4677,6 +4769,9 @@ export default function MissionCraftPlannerPage() {
       // Ignore localStorage persistence errors.
     }
   }, [fastMode, prefsLoaded]);
+  useEffect(() => {
+    if (prefsLoaded) writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDubcap], includeDubcap);
+  }, [includeDubcap, prefsLoaded]);
 
   useEffect(() => {
     if (!prefsLoaded) {
@@ -4832,6 +4927,7 @@ export default function MissionCraftPlannerPage() {
     targetCraftedOnly,
     priorityTime: solvePriorityTime,
     fastMode,
+    ...(includeDubcap ? { includeDubcap: true } : {}),
     allowedShipDurations: currentAllowedShipDurations,
     selectedConsumptionItemIds,
     // Left undefined in main mode so JSON.stringify drops them and main-farm
@@ -4955,6 +5051,7 @@ export default function MissionCraftPlannerPage() {
                 ? buildVirtueTankPlannerOptions(profile.plannedVirtueTank ?? profile.virtueTank, virtueShiftCap, virtueStartTank)
                 : undefined,
             fastMode,
+            includeDubcap: snapshotRequest.includeDubcap,
             missionDropRarities: {
               rare: includeDropRare,
               epic: includeDropEpic,
@@ -5142,6 +5239,7 @@ export default function MissionCraftPlannerPage() {
         targetCraftedOnly: lastSolveRequest.targetCraftedOnly,
         priorityTime: lastSolveRequest.priorityTime,
         fastMode: lastSolveRequest.fastMode,
+        includeDubcap: lastSolveRequest.includeDubcap,
         allowedShipDurations: lastSolveRequest.allowedShipDurations,
         selectedConsumptionItemIds: lastSolveRequest.selectedConsumptionItemIds,
         virtueShiftCap: lastSolveRequest.virtueShiftCap,
@@ -5209,6 +5307,7 @@ export default function MissionCraftPlannerPage() {
           priorityTime: response.plan.priorityTime,
           selectedCombos: selectedCombos as Parameters<typeof computeMonolithicPaths>[0]["selectedCombos"],
           selectedConsumptionItemIds: compareConsumptionItemIds,
+          includeDubcap: Boolean(response.plan.dubcap),
           missionDropRarities: {
             rare: compareSourceFilters.includeDropRare,
             epic: compareSourceFilters.includeDropEpic,
@@ -5228,6 +5327,7 @@ export default function MissionCraftPlannerPage() {
           targetCraftedOnly: compareTargetCraftedOnly,
           priorityTime: response.plan.priorityTime,
           selectedCombos,
+          includeDubcap: Boolean(response.plan.dubcap),
           selectedConsumptionItemIds: compareConsumptionItemIds,
           includeDropRare: compareSourceFilters.includeDropRare,
           includeDropEpic: compareSourceFilters.includeDropEpic,
@@ -5936,6 +6036,20 @@ export default function MissionCraftPlannerPage() {
                   </div>
                 </div>
               )}
+              <label className={styles.customCheck} htmlFor="includeDubcap">
+                <input
+                  id="includeDubcap"
+                  type="checkbox"
+                  checked={includeDubcap}
+                  onChange={(event) => setIncludeDubcap(event.target.checked)}
+                  aria-describedby="dubcapHint"
+                />
+                <span aria-hidden="true" />
+                <span>Include one dubcap</span>
+              </label>
+              <p className={styles.dubcapHint} id="dubcapHint">
+                One fresh 48-hour launch window with double drops, after prep. Calendar waiting is excluded.
+              </p>
               <label className={styles.customCheck} htmlFor="fastMode">
                 <input
                   id="fastMode"
@@ -6232,6 +6346,7 @@ export default function MissionCraftPlannerPage() {
             </div>
           </div>
 
+          {response.plan.dubcap && <DubcapTimeline event={response.plan.dubcap} />}
           <div className="panel">
             <div className={styles.craftPlanHeader}>
               <h2 style={{ marginTop: 0 }}>Craft plan</h2>

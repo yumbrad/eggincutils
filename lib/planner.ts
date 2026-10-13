@@ -30,6 +30,11 @@ import {
   type InFlightProjection,
 } from "./in-flight";
 import type { Inventory, PlayerProfile } from "./profile";
+import {
+  buildDubcapModel, readDubcapAllocation, scheduleAfterDubcap, scheduleDubcapPrep,
+  DUBCAP_WINDOW_SECONDS, DUBCAP_LAUNCH_MARGIN_SECONDS,
+  type DubcapAllocation, type DubcapPlan,
+} from "./dubcap";
 import { getVirtueFuelConfig, getVirtueFuelPerLaunch, TRILLION, type VirtueFuelKey } from "./virtue-fuel";
 import {
   packVirtueTanks,
@@ -39,6 +44,7 @@ import {
   VIRTUE_SHIFT_PENALTY_SECONDS,
   type VirtueFuelVector,
   type VirtueTankStartMode,
+  type VirtueTankPlan,
 } from "./virtue-tanks";
 import {
   VIRTUE_FASTER_OPTION_EXTRA_SHIFTS,
@@ -80,6 +86,7 @@ type MissionAction = {
   durationSeconds: number;
   targetAfxId: number;
   yields: Record<string, number>;
+  dubcap?: boolean;
 };
 
 type ArtifactConsumptionMap = Record<string, Record<string, number>>;
@@ -109,6 +116,8 @@ type PlanMissionRow = {
   launchSecondsRemaining?: number[];
   /** Stable row id; virtue tank units point back at rows through it. */
   rowKey?: string;
+  /** Launch during the single modeled double-capacity event. */
+  dubcap?: boolean;
 };
 
 type PlanCraftRow = {
@@ -228,6 +237,7 @@ export type PlannerResult = {
   availableCombos: AvailableCombo[];
   /** Path of Virtue tank mode only: the plan split into fuel tanks and refuel loops. */
   virtueTanks?: VirtueTankPlannerResult;
+  dubcap?: DubcapPlan;
 };
 
 /** What the solver produces: the launches still to be made, before the
@@ -242,6 +252,8 @@ export type SolverFunction = (
 ) => Promise<HighsSolveResult>;
 
 export type PlannerOptions = {
+  /** One fresh 48-hour window after prep; launch-time capacity is doubled. */
+  includeDubcap?: boolean;
   targets?: PlannerTarget[];
   objectiveMode?: MissionObjectiveMode;
   /** Path of Virtue tank mode: plan within a shift cap and pack launches into fuel tanks. */
@@ -1902,6 +1914,7 @@ type UnifiedPlan = {
   objectiveValue?: number;
   /** Partial tank plans: sum of each goal's unmet fraction (copies and craft counts). */
   goalShortfallScore?: number;
+  dubcapAllocation?: DubcapAllocation;
 };
 
 type UnifiedSolveMetrics = {
@@ -2311,6 +2324,7 @@ async function solveUnifiedCraftMissionPlan(options: {
     craftFloorByItem,
   } = craftSkeleton || buildCraftModelSkeleton({ profile, targetKey, quantity, closure, consumptionOptions });
   const missionVars = actions.map((_, index) => `m_${index}`);
+  const dubcapModel = buildDubcapModel(actions, missionVars);
   const consumptionVars = consumptionOptions.map((_, index) => `x_${index}`);
   const normalizedGeRef = Math.max(1, geRef);
   const normalizedFuelRef = Math.max(1, fuelRef);
@@ -2380,8 +2394,11 @@ async function solveUnifiedCraftMissionPlan(options: {
   const missionObjectiveWeight = strictGeObjective ? 0 : Math.max(objectiveContext.timeWeight, MIN_MISSION_TIME_OBJECTIVE_WEIGHT);
   // Tank mode with makespanRounds: mission time is the makespan bound vmk
   // blended with a little slot time (VIRTUE_TANK_SLOT_TIME_WEIGHT).
-  const tankMakespan = tankModel !== null && virtueTank!.objective === "budget" && Boolean(virtueTank!.makespanRounds) && !lpRelaxation;
-  const slotTimeWeight = tankMakespan ? VIRTUE_TANK_SLOT_TIME_WEIGHT : 1;
+  const tankMakespan = tankModel !== null && dubcapModel.groups.length === 0 && virtueTank!.objective === "budget" && Boolean(virtueTank!.makespanRounds) && !lpRelaxation;
+  const slotTimeWeight = tankMakespan || dubcapModel.groups.length > 0 ? VIRTUE_TANK_SLOT_TIME_WEIGHT : 1;
+  if (dubcapModel.groups.length > 0 && missionObjectiveWeight > 0) {
+    objectiveTerms.push({ coefficient: (1 - VIRTUE_TANK_SLOT_TIME_WEIGHT) * missionObjectiveWeight * 3600 / normalizedTimeRef, variable: "dbmk" });
+  }
   if (missionObjectiveWeight > 0) {
     // Tank mode charges each launch the player's effort
     // (VIRTUE_LAUNCH_EFFORT_SECONDS), which plan comparisons count too, in
@@ -2404,7 +2421,8 @@ async function solveUnifiedCraftMissionPlan(options: {
         fuelCoeff +
         (slotTimeWeight * missionObjectiveWeight * (actions[index].durationSeconds / 3)) / normalizedTimeRef +
         missionLaunchTiebreakCoeff +
-        (isUntargetedTargetAfxId(actions[index].targetAfxId) ? 0 : targetedTiebreakCoeff);
+        (isUntargetedTargetAfxId(actions[index].targetAfxId) ? 0 : targetedTiebreakCoeff) +
+        (dubcapModel.groups.length > 0 && !actions[index].dubcap ? missionObjectiveWeight / normalizedTimeRef : 0);
       objectiveTerms.push({
         coefficient,
         variable: missionVars[index],
@@ -2459,6 +2477,7 @@ async function solveUnifiedCraftMissionPlan(options: {
   lines.push(`  obj: ${formatLinearExpression(partialTankPlan ? goalShortfallTerms : objectiveTerms)}`);
 
   lines.push("Subject To");
+  lines.push(...dubcapModel.constraints);
   for (const model of craftModels) {
     const shortfallVar = craftShortfallVars.get(model.itemKey);
     if (shortfallVar) {
@@ -2519,7 +2538,7 @@ async function solveUnifiedCraftMissionPlan(options: {
     if (safeLaunches <= 0) {
       continue;
     }
-    const actionIndexes = actionIndexesByOption.get(optionKey) || [];
+    const actionIndexes = (actionIndexesByOption.get(optionKey) || []).filter((index) => !actions[index].dubcap);
     if (actionIndexes.length === 0) {
       throw new Error(`required prep mission option has no compatible actions: ${optionKey}`);
     }
@@ -2909,6 +2928,7 @@ async function solveUnifiedCraftMissionPlan(options: {
   const hardDemand = tankModel !== null && !virtueTank!.softDemand;
 
   lines.push("Bounds");
+  lines.push(...dubcapModel.bounds);
   for (const model of craftModels) {
     lines.push(`  ${formatLpNumber(partialTankPlan ? 0 : model.craftFloor)} <= ${model.craftVar} <= ${formatLpNumber(model.craftBound)}`);
     const shortfallVar = craftShortfallVars.get(model.itemKey);
@@ -2959,6 +2979,8 @@ async function solveUnifiedCraftMissionPlan(options: {
   // in the relaxed screening solve (a small MILP): a relaxed loop count of
   // fuel / capacity cannot tell candidates apart once whole loops are what
   // cost shifts.
+  // Event lanes may be fractional only while screening candidates. Returned
+  // plans always come from the integer solve and a checked launch timeline.
   const integerVars = lpRelaxation
     ? [...tankScreeningIntegerVars, ...tankBinaryVars]
     : [
@@ -2971,6 +2993,7 @@ async function solveUnifiedCraftMissionPlan(options: {
         ...tankBinaryVars,
         ...tankLaunchIntegerVars,
         ...makespanRoundVars,
+        ...dubcapModel.integerVars,
       ];
   if (integerVars.length > 0) {
     lines.push("General");
@@ -3017,11 +3040,11 @@ async function solveUnifiedCraftMissionPlan(options: {
     craftLinkConstraintCount +
     geConstraintCount +
     slotSecondsConstraintCount +
-    tankConstraintCount;
+    tankConstraintCount + dubcapModel.constraints.length;
 
   const solveStartedAtMs = Date.now();
   const useExactMipGap = !lpRelaxation && (strictGeObjective || hasGeCostUpperBound);
-  const effectiveTimeLimitSeconds = timeLimitSeconds ?? (tankModel ? VIRTUE_TANK_SOLVE_TIME_LIMIT_SECONDS : undefined);
+  const effectiveTimeLimitSeconds = timeLimitSeconds ?? (tankModel || dubcapModel.groups.length > 0 ? VIRTUE_TANK_SOLVE_TIME_LIMIT_SECONDS : undefined);
   // The fewest-shifts search only needs the shift count proven: stop once the
   // bound rules out one shift fewer, rather than closing 1% of a shift-sized
   // objective, which can take minutes. Mission time is re-optimized at N.
@@ -3084,7 +3107,7 @@ async function solveUnifiedCraftMissionPlan(options: {
   // incumbents are often the do-nothing plan. A timed-out tank solve is kept
   // only if it has an incumbent that meets every goal (checked below).
   const acceptTankTimeLimit =
-    tankModel !== null &&
+    (tankModel !== null || dubcapModel.groups.length > 0) &&
     status === "Time limit reached" &&
     Number.isFinite(solution.ObjectiveValue as number) &&
     Math.abs(solution.ObjectiveValue as number) < 1e20 &&
@@ -3184,6 +3207,9 @@ async function solveUnifiedCraftMissionPlan(options: {
       goalShortfallScore:
         itemKeys.reduce((sum, key) => sum + ((demandByItem.get(key) || 0) > 0 ? remainingDemand[key] / demandByItem.get(key)! : 0), 0) +
         craftModels.reduce((sum, model) => sum + (model.craftFloor > 0 ? Math.max(0, model.craftFloor - (crafts[model.itemKey] || 0)) / model.craftFloor : 0), 0),
+    } : {}),
+    ...(!lpRelaxation && dubcapModel.groups.length > 0 ? {
+      dubcapAllocation: readDubcapAllocation(dubcapModel, actions, missionCounts, solution),
     } : {}),
     ...(tankModel && Number.isFinite(solution.ObjectiveValue as number) ? { objectiveValue: solution.ObjectiveValue as number } : {}),
   };
@@ -3545,6 +3571,33 @@ function missionRowKeyBase(row: { missionId: string; level: number; targetAfxId:
   return `${row.missionId}|${row.level}|${row.targetAfxId}`;
 }
 
+function addDubcapActions(
+  actions: MissionAction[], eligibleOptions?: Set<string>, chains: PhasedChainConstraint[] = [],
+  prepCounts: Record<string, RequiredMissionLaunchConstraint> = {}
+): MissionAction[] {
+  const eventActions = actions.filter((action) => !eligibleOptions || eligibleOptions.has(action.optionKey)).flatMap((action) => {
+    const chain = chains.find((entry) => entry.chain.includes(action.optionKey));
+    const phaseKeys: string[] = [];
+    if (chain) {
+      const limit = 3 * (Math.floor((DUBCAP_WINDOW_SECONDS - DUBCAP_LAUNCH_MARGIN_SECONDS) / action.durationSeconds) + 1);
+      let previousLaunches = 0;
+      for (let index = chain.chain.indexOf(action.optionKey); index < chain.chain.length && previousLaunches < limit; index += 1) {
+        phaseKeys.push(chain.chain[index]);
+        previousLaunches += chain.caps[index] - (prepCounts[chain.chain[index]]?.launches || 0);
+      }
+    } else {
+      phaseKeys.push(`${action.optionKey}|dubcap`);
+    }
+    return phaseKeys.map((optionKey) => ({
+      ...action, key: `${action.key}|dubcap|${optionKey}`, optionKey, dubcap: true,
+      // The XP phase credits the launch once. Its drops still use only the
+      // known stars at event start, even when that launch helps level up.
+      yields: Object.fromEntries(Object.entries(action.yields).map(([key, amount]) => [key, amount * 2])),
+    }));
+  });
+  return [...actions, ...eventActions];
+}
+
 /**
  * One row per launched action, each with a stable `rowKey`. Pass
  * `actionKeyByRowKey` to learn which action each row came from.
@@ -3575,6 +3628,7 @@ function buildMissionRows(
         launches,
         durationSeconds: action.durationSeconds,
         expectedYields,
+        ...(action.dubcap ? { dubcap: true } : {}),
       };
       return { row, actionKey: key };
     })
@@ -3648,7 +3702,7 @@ function buildVirtueTankUnits(options: {
       targetAfxId: row.targetAfxId,
     };
     const optionKey = actionByKey.get(actionKeyByRowKey.get(row.rowKey) || "")?.optionKey;
-    const prepLaunches = optionKey ? Math.min(row.launches, prepLaunchesLeft.get(optionKey) || 0) : 0;
+    const prepLaunches = optionKey && !row.dubcap ? Math.min(row.launches, prepLaunchesLeft.get(optionKey) || 0) : 0;
     if (optionKey && prepLaunches > 0) {
       prepLaunchesLeft.set(optionKey, (prepLaunchesLeft.get(optionKey) || 0) - prepLaunches);
       prepUnits.push({
@@ -3683,6 +3737,127 @@ function buildVirtueTankUnits(options: {
   }
   prepUnits.sort((a, b) => (a.prepOrder ?? 0) - (b.prepOrder ?? 0));
   return [...prepUnits, ...missionUnits];
+}
+
+type DubcapUnits = {
+  units: VirtueTankPlanUnit[];
+  allocation: DubcapAllocation;
+};
+
+/** Split fuel-burning event launches so tank packing preserves their exact chronology. */
+function buildDubcapUnits(
+  units: VirtueTankPlanUnit[],
+  allocation: DubcapAllocation,
+  actionKeyByRowKey: Map<string, string>,
+  splitForTanks: boolean
+): DubcapUnits {
+  const actionByUnit = new Map(units.map((unit) => [unit.id, actionKeyByRowKey.get(unit.missionRowKey || "")]));
+  const eventKeys = new Set(allocation.lanes.flatMap((lane) => lane.map((block) => block.actionKey)));
+  const ordinary = units.filter((unit) => !eventKeys.has(actionByUnit.get(unit.id) || ""));
+  const eventUnits: VirtueTankPlanUnit[] = [];
+  const lanes = allocation.lanes.map((lane, laneIndex) => lane.flatMap((block, blockIndex) => {
+    const base = units.find((unit) => !unit.isPrep && actionByUnit.get(unit.id) === block.actionKey);
+    if (!base) throw new Error("Dubcap timeline has no matching mission row.");
+    const split = splitForTanks && getVirtueFuelPerLaunch(base.ship, base.durationType) > 0;
+    const count = split ? block.launches : 1;
+    return Array.from({ length: count }, (_, index) => {
+      const launches = split ? 1 : block.launches;
+      const startSeconds = block.startSeconds + (split ? index * base.durationSeconds : 0);
+      const id = `${base.id}|event|${laneIndex}|${blockIndex}|${index}`;
+      eventUnits.push({ ...base, id, launches, launchOrder: startSeconds });
+      return { actionKey: id, launches, startSeconds, endSeconds: startSeconds + launches * base.durationSeconds };
+    });
+  }));
+  return { units: [...ordinary, ...eventUnits], allocation: { lanes } };
+}
+
+/** Replay the event witness, with fuel-tank order retained for prep and ordinary missions. */
+function finishDubcapSchedule(
+  event: DubcapUnits,
+  inAirLaneFreeSeconds: number[],
+  pack?: VirtueTankPlan
+): DubcapPlan {
+  const unitById = new Map(event.units.map((unit) => [unit.id, unit]));
+  const keyToUnit = new Map<string, { unit: VirtueTankPlanUnit; tankIndex: number }>();
+  const entries = (pack?.launchOrder ?? event.units.map((unit) => ({ unitId: unit.id, launches: unit.launches, tankIndex: 0 })))
+    .map((entry, index) => {
+      const unit = unitById.get(entry.unitId)!;
+      const key = `${entry.unitId}|tank-entry|${index}`;
+      keyToUnit.set(key, { unit, tankIndex: entry.tankIndex });
+      return { ...unit, id: key, launches: entry.launches };
+    });
+  const prep = scheduleDubcapPrep(entries.filter((unit) => unit.isPrep), inAirLaneFreeSeconds);
+  const startSeconds = prep.makespanSeconds;
+  const eventTank = new Map<string, number>();
+  for (const entry of pack?.launchOrder ?? []) {
+    if (unitById.get(entry.unitId)?.launchOrder !== undefined) {
+      eventTank.set(entry.unitId, entry.tankIndex);
+    }
+  }
+  const ordinary = entries.filter((unit) => !unit.isPrep && unit.launchOrder === undefined);
+  if (!pack) ordinary.sort((a, b) => a.level - b.level || b.durationSeconds - a.durationSeconds);
+  const full = scheduleAfterDubcap(event.allocation, ordinary.map((unit) => ({
+    key: unit.id, durationSeconds: unit.durationSeconds, launches: unit.launches,
+    shape: `${unit.ship}|${unit.durationType}`, level: unit.level,
+  })), startSeconds);
+  const lanes = event.allocation.lanes.map((lane) => lane.map((block) => {
+    const unit = unitById.get(block.actionKey)!;
+    return {
+      missionRowKey: unit.missionRowKey!, ship: unit.ship, durationType: unit.durationType,
+      level: unit.level, targetAfxId: unit.targetAfxId ?? 10000,
+      launches: block.launches, startSeconds: block.startSeconds, endSeconds: block.endSeconds,
+      ...(pack ? { tankIndex: eventTank.get(unit.id) } : {}),
+    };
+  }));
+  const fullLanes = full.lanes.map((lane, index) => [...prep.lanes[index], ...lane].map((block) => {
+    const mapped = keyToUnit.get(block.actionKey);
+    const unit = mapped?.unit ?? unitById.get(block.actionKey)!;
+    return {
+      missionRowKey: unit.missionRowKey, ship: unit.ship, durationType: unit.durationType,
+      level: unit.level, targetAfxId: unit.targetAfxId, isPrep: Boolean(unit.isPrep),
+      dubcap: unit.launchOrder !== undefined, launches: block.launches,
+      startSeconds: block.startSeconds, endSeconds: block.endSeconds,
+      ...(pack ? { tankIndex: mapped?.tankIndex ?? eventTank.get(unit.id) ?? 0 } : {}),
+    };
+  }));
+  if (pack) {
+    const toTankBlock = (block: DubcapAllocation["lanes"][number][number]) => {
+      const mapped = keyToUnit.get(block.actionKey);
+      return {
+        unitId: mapped?.unit.id ?? block.actionKey,
+        tankIndex: mapped?.tankIndex ?? eventTank.get(block.actionKey) ?? 0,
+        launches: block.launches, startSeconds: block.startSeconds, endSeconds: block.endSeconds,
+      };
+    };
+    const scheduleLanes = full.lanes.map((lane, index) => [...prep.lanes[index].map(toTankBlock), ...lane.map(toTankBlock)]);
+    const chronological = scheduleLanes.flat().sort((a, b) => a.startSeconds - b.startSeconds || a.tankIndex - b.tankIndex);
+    let lastFuelTank = 0;
+    const counts: Record<string, number> = {};
+    for (const block of chronological) {
+      const unit = unitById.get(block.unitId)!;
+      counts[unit.id] = (counts[unit.id] || 0) + block.launches;
+      if (getVirtueFuelPerLaunch(unit.ship, unit.durationType) > 0) {
+        if (block.tankIndex < lastFuelTank) throw new Error("Dubcap timeline would reuse fuel from an earlier tank.");
+        lastFuelTank = block.tankIndex;
+      }
+    }
+    if (event.units.some((unit) => counts[unit.id] !== unit.launches)) {
+      throw new Error("Dubcap tank schedule does not contain every planned launch.");
+    }
+    pack.launchOrder = chronological.map(({ unitId, tankIndex, launches }) => ({ unitId, tankIndex, launches }));
+    for (const tank of pack.tanks) {
+      tank.launches = pack.launchOrder.filter((entry) => entry.tankIndex === tank.index)
+        .map(({ unitId, launches }) => ({ unitId, launches }));
+    }
+    pack.schedule = { lanes: scheduleLanes, makespanSeconds: full.makespanSeconds };
+  }
+  return {
+    windowSeconds: DUBCAP_WINDOW_SECONDS, launchMarginSeconds: DUBCAP_LAUNCH_MARGIN_SECONDS,
+    startSeconds, launches: lanes.flat().reduce((sum, block) => sum + block.launches, 0),
+    makespanSeconds: full.makespanSeconds,
+    missionSeconds: full.makespanSeconds - startSeconds + scheduleDubcapPrep(entries.filter((unit) => unit.isPrep)).makespanSeconds,
+    lanes, fullLanes,
+  };
 }
 
 function buildCraftRows(crafts: Record<string, number>): PlanCraftRow[] {
@@ -5737,7 +5912,9 @@ export async function planForTarget(
         targetItemId,
         quantity,
         priorityTimeRaw,
-        plannerOptions
+        plannerOptions,
+        undefined,
+        inAirLaneLoads(inFlight.rows)
       );
 
   const scheduled = withInFlightSchedule(result, inFlight);
@@ -6377,6 +6554,18 @@ function inAirLaneLoads(rows: InFlightMissionRow[]): number[] {
 }
 
 function withInFlightSchedule(result: PlannedLaunches, inFlight: InFlightProjection): PlannerResult {
+  if (result.dubcap) {
+    return {
+      ...result,
+      missions: [...result.missions, ...inAirMissionRows(result.missions, inFlight)],
+      inFlight: { missionCount: inFlight.missionCount, secondsRemaining: inFlight.secondsRemaining },
+      schedule: {
+        missionSeconds: Math.round(result.dubcap.missionSeconds),
+        inAirSeconds: inFlight.secondsRemaining,
+        totalSeconds: Math.round(result.dubcap.makespanSeconds),
+      },
+    };
+  }
   if (result.virtueTanks) {
     return withVirtueTankSchedule(result, inFlight);
   }
@@ -6467,7 +6656,8 @@ async function planForNewLaunches(
   quantity: number,
   priorityTimeRaw: number,
   plannerOptions: PlannerOptions = {},
-  tankRun?: VirtueTankRun
+  tankRun?: VirtueTankRun,
+  inAirLaneFreeSeconds: number[] = []
 ): Promise<PlannedLaunches> {
   const normalizedTargets = normalizePlannerTargets(targetItemId, quantity, plannerOptions.targets, profile.craftCounts);
   const craftFloorByItem = normalizedTargets.craftFloorByItem;
@@ -6495,6 +6685,7 @@ async function planForNewLaunches(
   const singleTargetFastQuantityAcceleration =
     fastMode &&
     !tankRun &&
+    !plannerOptions.includeDubcap &&
     !multiTarget &&
     !hasCraftGoals &&
     normalizedTargets.demandTargets.length === 1 &&
@@ -6503,6 +6694,7 @@ async function planForNewLaunches(
   const multiTargetFastQuantityAcceleration =
     fastMode &&
     !tankRun &&
+    !plannerOptions.includeDubcap &&
     multiTarget &&
     !hasCraftGoals &&
     !plannerOptions.disableFastQuantityAcceleration &&
@@ -6585,6 +6777,7 @@ async function planForNewLaunches(
     !tankRun &&
     ENABLE_NORMAL_FAST_INCUMBENT_COMPARISON &&
     !plannerOptions.disableNormalFastIncumbent &&
+    !plannerOptions.includeDubcap &&
     quantityInt >= FAST_QUANTITY_ACCELERATION_MIN_QUANTITY
   ) {
     reportProgress({
@@ -6685,7 +6878,7 @@ async function planForNewLaunches(
   // for fuel as well as time instead (pruneVirtueTankActions), the same on
   // every path.
   const missionActionFilter =
-    !tankRun && missionYieldIndexEnabled(plannerOptions.disableMissionYieldIndex, injectedLootData)
+    !tankRun && !plannerOptions.includeDubcap && missionYieldIndexEnabled(plannerOptions.disableMissionYieldIndex, injectedLootData)
     ? buildMissionActionFilterFromYieldIndex({
         relevantItems: closure,
         missionDropRarities,
@@ -6720,6 +6913,7 @@ async function planForNewLaunches(
     `consume:${consumptionOptions.map((option) => option.sourceItemKey).join(",") || "none"}`,
     `mode:${objectiveMode}:${priorityTime <= SCORE_EPS ? "ge" : "mix"}:${objectiveContext.minimumTimePriority}`,
     `fast:${fastMode ? 1 : 0}`,
+    `dubcap:${plannerOptions.includeDubcap ? 1 : 0}`,
     `filter:${missionActionFilter?.key || "none"}`,
     `tank:${
       tankRun
@@ -6846,7 +7040,7 @@ async function planForNewLaunches(
     let timeBudgetExceeded = false;
     let indexFilteredActionCount = baseActionsEntry.indexFilteredCount;
     // Tank mode, which never uses the yield index to narrow the actions.
-    const virtueTankActionPruning = Boolean(tankRun) && !tankRun?.softDemand && !missionActionFilter;
+    const virtueTankActionPruning = Boolean(tankRun) && !tankRun?.softDemand && !plannerOptions.includeDubcap && !missionActionFilter;
     const virtueTankActionCounts = { before: 0, after: 0, fullChecksWon: 0 };
     const prunedActionCache = new Map<string, MissionAction[]>();
     const dominanceActionCache = new Map<string, MissionAction[]>();
@@ -6940,6 +7134,17 @@ async function planForNewLaunches(
 
       // Build phased options for integrated leveling
       const phased = buildPhasedActionsForCandidate(profile, candidate);
+      if (plannerOptions.includeDubcap) {
+        // Phases start from post-prep XP. A prep row at those same stars is
+        // still a physical launch, but cannot credit its XP twice.
+        for (const chain of phased.phaseChains) {
+          chain.chain.forEach((key, index) => {
+            const prep = prepRequirements.get(key)?.launches || 0;
+            chain.caps[index] += prep;
+            phased.maxLaunchesByOption[key] += prep;
+          });
+        }
+      }
       const phasedOptionKeys = new Set(phased.phasedOptions.map((o) => missionOptionKey(o)));
 
       // Merge: base candidate options (excluding those replaced by phased) + prep options + phased options
@@ -7005,6 +7210,9 @@ async function planForNewLaunches(
           requirement.launches,
           !finalOptionKeys.has(optionKey)
         );
+      }
+      if (plannerOptions.includeDubcap) {
+        candidateActions = addDubcapActions(candidateActions, finalOptionKeys, phased.phaseChains, requiredMissionLaunches);
       }
       const input: CandidateEvalInput = {
         candidate,
@@ -7098,6 +7306,16 @@ async function planForNewLaunches(
         })),
         ...input.prepNoYieldOptions.map(({ option, launches }) => ({ durationSeconds: option.durationSeconds, launches })),
       ]);
+    const dubcapMakespanSeconds = (input: CandidateEvalInput, unified: UnifiedPlan): number | undefined => {
+      if (!unified.dubcapAllocation) return undefined;
+      const keys = new Map<string, string>();
+      const rows = buildMissionRows(input.candidateActions, unified.missionCounts, keys);
+      const units = buildVirtueTankUnits({ actions: input.candidateActions, missionRows: rows, actionKeyByRowKey: keys, prepSteps: input.candidate.prepSteps });
+      return finishDubcapSchedule(
+        buildDubcapUnits(units, unified.dubcapAllocation, keys, false),
+        tankRun?.inAirLaneFreeSeconds ?? inAirLaneFreeSeconds
+      ).makespanSeconds;
+    };
     // Tank mode scores a plan as mission time plus its shifts and launches:
     // VIRTUE_SHIFT_PENALTY_SECONDS per shift and VIRTUE_LAUNCH_EFFORT_SECONDS
     // per launch (prep included), with mission time the makespan bound
@@ -7118,7 +7336,8 @@ async function planForNewLaunches(
         );
       }
       const missionSeconds =
-        (1 - VIRTUE_TANK_SLOT_TIME_WEIGHT) * tankMakespanSeconds(input, unified) + (VIRTUE_TANK_SLOT_TIME_WEIGHT * totalSlotSeconds) / 3;
+        dubcapMakespanSeconds(input, unified) ??
+        ((1 - VIRTUE_TANK_SLOT_TIME_WEIGHT) * tankMakespanSeconds(input, unified) + (VIRTUE_TANK_SLOT_TIME_WEIGHT * totalSlotSeconds) / 3);
       return (missionSeconds + launchEffortSeconds + VIRTUE_SHIFT_PENALTY_SECONDS * shifts) / Math.max(1, timeRef);
     };
 
@@ -7304,7 +7523,7 @@ async function planForNewLaunches(
         ? virtueTankScore(input, unified, totalSlotSeconds)
         : normalizedObjectiveScore(
             objectiveResourceCost(objectiveContext, unified.geCost, fuelCost),
-            totalSlotSeconds / 3,
+            dubcapMakespanSeconds(input, unified) ?? totalSlotSeconds / 3,
             objectiveContext,
             objectiveMode === "virtueFuel" ? fuelRef : geRef,
             timeRef
@@ -8107,7 +8326,7 @@ async function planForNewLaunches(
       }
       // A rounded relaxed plan knows nothing about whole tanks and loops, so
       // tank mode never falls back to one.
-      if (!best && !tankRun) {
+      if (!best && !tankRun && !plannerOptions.includeDubcap) {
         const bestLp = lpScreened[0];
         if (bestLp) {
           best = {
@@ -8269,11 +8488,11 @@ async function planForNewLaunches(
       }
     }
 
-    if (best.unmetTotal <= 1e-6) {
+    if (best.unmetTotal <= 1e-6 && !plannerOptions.includeDubcap) {
       await tryScaledQuantityIncumbent();
     }
 
-    if (objectiveMode === "ge" && !geOnlyMode && !fastMode && best.unmetTotal <= 1e-6 && best.geCost > SCORE_EPS) {
+    if (!plannerOptions.includeDubcap && objectiveMode === "ge" && !geOnlyMode && !fastMode && best.unmetTotal <= 1e-6 && best.geCost > SCORE_EPS) {
       const polishInput = await prepareCandidateInput(best.candidate);
       if (polishInput) {
         const baselineExpectedHours = estimateThreeSlotExpectedHours({
@@ -8386,7 +8605,9 @@ async function planForNewLaunches(
     // Phased leveling is now integrated into every candidate evaluation via
     // buildPhasedActionsForCandidate + binary indicator constraints. The separate
     // runPhasedYieldRefinement pass is skipped.
-    refinementNotes.push("Integrated phased leveling: ship level-up yields are modeled in every candidate solve (binary indicator constraints).");
+    refinementNotes.push(plannerOptions.includeDubcap
+      ? "Dubcap drops use the ship stars available after prep. Each physical event launch credits leveling once; ordinary missions can use the resulting stars after event returns."
+      : "Integrated phased leveling: ship level-up yields are modeled in every candidate solve (binary indicator constraints).");
     reportProgress({
       phase: "refinement",
       message: "Skipped legacy refinement (integrated phased leveling active).",
@@ -8515,7 +8736,7 @@ async function planForNewLaunches(
     const comparisonAvailableActions = outputActions;
     // Tank mode skips the monolithic incumbents: they solve without the tank
     // rows, and in benchmarks never beat a tank-mode plan.
-    if (outputUnmetTotal <= 1e-6 && !tankRun) {
+    if (outputUnmetTotal <= 1e-6 && !tankRun && !plannerOptions.includeDubcap) {
       const monolithicCombos = chosenCombosForPlan(outputActions, outputUnified.missionCounts);
       if (monolithicCombos.length > 0) {
         const fullQuantityCraftSkeleton = getCraftSkeletonCached({
@@ -8851,6 +9072,13 @@ async function planForNewLaunches(
     // Tank mode: packing is the source of truth for the tanks, the shifts and
     // the schedule (it seeds the slots with the in-air ships).
     let virtueTanks: VirtueTankPlannerResult | undefined;
+    let dubcap: DubcapPlan | undefined;
+    const baseUnits = tankRun || plannerOptions.includeDubcap ? buildVirtueTankUnits({
+      actions: outputActions, missionRows, actionKeyByRowKey, prepSteps: outputPrepSteps,
+    }) : [];
+    const eventUnits = plannerOptions.includeDubcap ? buildDubcapUnits(
+      baseUnits, outputUnified.dubcapAllocation ?? { lanes: [[], [], []] }, actionKeyByRowKey, Boolean(tankRun)
+    ) : undefined;
     if (tankRun) {
       reportProgress({
         phase: "finalize",
@@ -8860,12 +9088,7 @@ async function planForNewLaunches(
         etaMs: null,
       });
       await yieldForProgressFlush();
-      const units = buildVirtueTankUnits({
-        actions: outputActions,
-        missionRows,
-        actionKeyByRowKey,
-        prepSteps: outputPrepSteps,
-      });
+      const units = eventUnits?.units ?? baseUnits;
       const pack = await packVirtueTanks({
         units,
         capacity: tankRun.capacity,
@@ -8876,6 +9099,13 @@ async function planForNewLaunches(
         solverFn: solverFn ?? (await getDefaultSolverFn()),
         timeLimitSeconds: VIRTUE_TANK_PACK_TIME_LIMIT_SECONDS,
       });
+      if (eventUnits) {
+        if (!pack.feasible) {
+          tankRun.report.inconclusive = true;
+          throw new Error("The dubcap launches could not be packed into fuel tanks.");
+        }
+        dubcap = finishDubcapSchedule(eventUnits, tankRun.inAirLaneFreeSeconds, pack);
+      }
       virtueTanks = {
         shiftCap: tankRun.shiftCap,
         plannedShiftCap: tankRun.plannedShiftCap,
@@ -8894,6 +9124,12 @@ async function planForNewLaunches(
           }; packing the launches into tanks takes ${pack.totalShifts.toLocaleString()}.`
         );
       }
+    } else if (eventUnits) {
+      dubcap = finishDubcapSchedule(eventUnits, inAirLaneFreeSeconds);
+    }
+    if (dubcap) {
+      notes.push(`Dubcap: ${dubcap.launches.toLocaleString()} launches with exactly 2× expected drops in one 48-hour event. Last launches leave at least ${DUBCAP_LAUNCH_MARGIN_SECONDS / 60} min before the cutoff. Fuel and ship launch points are unchanged.`);
+      notes.push("The fresh event starts after prep and current in-air missions return. Calendar waiting for the event is excluded; ordinary farming follows event returns, with leveling credited conservatively.");
     }
 
     reportProgress({
@@ -8905,7 +9141,9 @@ async function planForNewLaunches(
     });
     await yieldForProgressFlush();
 
-    const expectedHours = virtueTanks
+    const expectedHours = dubcap
+      ? dubcap.makespanSeconds / 3600
+      : virtueTanks
       ? virtueTanks.pack.schedule.makespanSeconds / 3600
       : estimateThreeSlotExpectedHours({
           actions: outputActions,
@@ -8940,13 +9178,14 @@ async function planForNewLaunches(
       targetBreakdown,
       targetBreakdowns,
       progression: {
-        prepHours,
+        prepHours: dubcap ? scheduleDubcapPrep(baseUnits.filter((unit) => unit.isPrep)).makespanSeconds / 3600 : prepHours,
         prepLaunches: compactedPrepLaunches,
         projectedShipLevels: progressionShipRows(projectedShipLevels),
       },
       notes,
       availableCombos,
       ...(virtueTanks ? { virtueTanks } : {}),
+      ...(dubcap ? { dubcap } : {}),
     };
     const finalResult = maybeAdoptFastIncumbentResult(result);
     reportBenchmark(finalResult, "primary");
@@ -8958,8 +9197,8 @@ async function planForNewLaunches(
     const details = error instanceof Error ? error.message : String(error);
     // The heuristic fallback is fuel-blind: it would hand back a plan that
     // ignores the tank and the shift cap, so tank mode surfaces the failure.
-    if (tankRun) {
-      throw new Error(`Path of Virtue tank planning failed (${details}).`);
+    if (tankRun || plannerOptions.includeDubcap) {
+      throw new Error(`${tankRun ? "Path of Virtue tank" : "Dubcap"} planning failed (${details}).`);
     }
     reportProgress({
       phase: "fallback",
@@ -9061,6 +9300,7 @@ export async function computeMonolithicPaths(options: {
   targets?: PlannerTarget[];
   quantity: number;
   priorityTime: number;
+  includeDubcap?: boolean;
   selectedCombos: Array<{ ship: string; durationType: DurationType; targetAfxId: number }>;
   missionDropRarities?: Partial<ShinyRaritySelection>;
   targetCraftedOnly?: boolean;
@@ -9073,6 +9313,7 @@ export async function computeMonolithicPaths(options: {
     targetItemId,
     priorityTime,
     selectedCombos,
+    includeDubcap = false,
     missionDropRarities,
     targetCraftedOnly = false,
     selectedConsumptionItemIds,
@@ -9141,7 +9382,8 @@ export async function computeMonolithicPaths(options: {
         missionDropRarities: missionDropRaritySelection,
       });
       const comboActions = comboActionsEntry.actions;
-      const filteredActions = comboActions.filter((a) => a.targetAfxId === combo.targetAfxId);
+      const selectedActions = comboActions.filter((a) => a.targetAfxId === combo.targetAfxId);
+      let filteredActions = selectedActions;
 
       if (filteredActions.length === 0) {
         results.push({
@@ -9183,6 +9425,10 @@ export async function computeMonolithicPaths(options: {
         }
         phasedChainConstraints.push({ chain, caps });
       }
+      if (includeDubcap) {
+        const knownOptions = new Set(allOptions.filter((option) => option.ship === combo.ship && option.durationType === combo.durationType).map(missionOptionKey));
+        filteredActions = addDubcapActions(filteredActions, knownOptions, phasedChainConstraints);
+      }
 
       const unified = await solveUnifiedCraftMissionPlan({
         profile,
@@ -9203,7 +9449,13 @@ export async function computeMonolithicPaths(options: {
       });
 
       const totalLaunches = Object.values(unified.missionCounts).reduce((sum, v) => sum + Math.max(0, Math.round(v)), 0);
-      const expectedHours = estimateThreeSlotExpectedHours({
+      const rowKeys = new Map<string, string>();
+      const missionRows = unified.dubcapAllocation ? buildMissionRows(filteredActions, unified.missionCounts, rowKeys) : [];
+      const event = unified.dubcapAllocation ? finishDubcapSchedule(buildDubcapUnits(
+        buildVirtueTankUnits({ actions: filteredActions, missionRows, actionKeyByRowKey: rowKeys, prepSteps: [] }),
+        unified.dubcapAllocation, rowKeys, false
+      ), []) : undefined;
+      const expectedHours = event ? event.makespanSeconds / 3600 : estimateThreeSlotExpectedHours({
         actions: filteredActions,
         missionCounts: unified.missionCounts,
       });

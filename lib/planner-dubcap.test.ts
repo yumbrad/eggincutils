@@ -1,0 +1,247 @@
+import { describe, expect, it } from "vitest";
+import { planForTarget, computeMonolithicPaths, type PlannerOptions, type PlannerResult } from "./planner";
+import { solveWithHighs } from "./highs";
+import type { LootJson } from "./loot-data";
+import type { PlayerProfile } from "./profile";
+import { buildMissionOptions, computeShipLevelsFromLaunchCounts, type MissionOption } from "./ship-data";
+import { DUBCAP_LAUNCH_MARGIN_SECONDS, DUBCAP_WINDOW_SECONDS } from "./dubcap";
+import { TRILLION as T } from "./virtue-fuel";
+import { plannerResultSchema, planRequestSchema, replanRequestSchema, compareRequestSchema } from "./api-schemas";
+
+const extended: MissionOption = { ship: "HENERPRISE", durationType: "EPIC", missionId: "henerprise-extended", level: 0, durationSeconds: 138_240, capacity: 1 };
+const short: MissionOption = { ...extended, durationType: "SHORT", missionId: "henerprise-short", durationSeconds: 34_560 };
+const chickfiant: MissionOption = { ...short, ship: "CHICKFIANT", missionId: "chickfiant-short", durationSeconds: 11_520 };
+
+function profileFor(options: MissionOption[]): PlayerProfile {
+  return { eid: "EI_TEST", inventory: {}, craftCounts: {}, craftingXp: 0,
+    epicResearchFTLLevel: 60, epicResearchZerogLevel: 0, shipLevels: [], missionOptions: options };
+}
+
+function lootFor(options: MissionOption[]): LootJson {
+  return { missions: options.map((option) => ({ afxShip: 0, afxDurationType: 0, missionId: option.missionId,
+    levels: [{ level: 0, targets: [{ totalDrops: 5000, targetAfxId: 10000,
+      items: [{ afxId: 0, afxLevel: 1, itemId: option.durationType === "EPIC" ? "puzzle-cube-1" : "gold-meteorite-1", counts: [5000, 0, 0, 0] }] }] }] })) } as LootJson;
+}
+
+async function plan(options: MissionOption[], quantity: number, extra: PlannerOptions = {}, profile = profileFor(options)): Promise<PlannerResult> {
+  return planForTarget(profile, "puzzle-cube-1", quantity, 1, { includeDubcap: true, lootData: lootFor(options), solverFn: solveWithHighs, ...extra });
+}
+
+function launches(result: PlannerResult, doubled: boolean): number {
+  return result.missions.filter((row) => !row.inAir && Boolean(row.dubcap) === doubled).reduce((sum, row) => sum + row.launches, 0);
+}
+
+function expectValidTimeline(result: PlannerResult): void {
+  const event = result.dubcap!;
+  expect(event.lanes).toHaveLength(3);
+  expect(event.launches).toBe(launches(result, true));
+  for (const lane of event.lanes) {
+    let end = 0;
+    for (const block of lane) {
+      expect(block.startSeconds).toBeGreaterThanOrEqual(end);
+      const duration = (block.endSeconds - block.startSeconds) / block.launches;
+      expect(block.endSeconds - duration).toBeLessThanOrEqual(DUBCAP_WINDOW_SECONDS - DUBCAP_LAUNCH_MARGIN_SECONDS + 1e-6);
+      end = block.endSeconds;
+    }
+  }
+  for (const lane of event.fullLanes) {
+    let end = 0;
+    for (const block of lane) {
+      expect(block.startSeconds).toBeGreaterThanOrEqual(end);
+      if (!block.isPrep && !block.dubcap) {
+        expect(block.startSeconds).toBeGreaterThanOrEqual(event.startSeconds + DUBCAP_WINDOW_SECONDS);
+      }
+      end = block.endSeconds;
+    }
+  }
+  expect(result.expectedHours * 3600).toBeCloseTo(event.makespanSeconds, 6);
+  expect(plannerResultSchema.parse(result)).toEqual(result);
+}
+
+describe("one dubcap event", () => {
+  it("finds six extended Henerprises and doubles drops without doubling fuel or launch points", async () => {
+    const result = await plan([extended], 12);
+    expect(result.unmetItems).toEqual([]);
+    expect(launches(result, true)).toBe(6);
+    expect(launches(result, false)).toBe(0);
+    expect(result.expectedHours).toBeCloseTo(76.8);
+    expect(result.totalSlotSeconds).toBe(6 * extended.durationSeconds);
+    expect(result.fuelCost).toBe(6 * 70 * T);
+    expect(result.progression.projectedShipLevels.find((ship) => ship.ship === "HENERPRISE")?.launches).toBe(6);
+    expect(result.targetBreakdown.fromMissionsExpected).toBeCloseTo(12);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("uses only one event, including in fast mode, and keeps later launches at normal capacity", async () => {
+    const result = await plan([extended], 13, { fastMode: true });
+    expect(launches(result, true)).toBe(6);
+    expect(launches(result, false)).toBe(1);
+    expect(result.expectedHours).toBeCloseTo(115.2);
+    expect(result.targetBreakdown.fromMissionsExpected).toBeCloseTo(13);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("inserts useful short missions while retaining both extended waves", async () => {
+    const result = await plan([extended, chickfiant], 12, { targets: [
+      { targetItemId: "puzzle-cube-1", quantity: 12 }, { targetItemId: "gold-meteorite-1", quantity: 6 },
+    ] });
+    expect(result.unmetItems).toEqual([]);
+    expect(result.missions.filter((row) => row.ship === "HENERPRISE" && row.dubcap).reduce((sum, row) => sum + row.launches, 0)).toBe(6);
+    expect(result.missions.filter((row) => row.ship === "CHICKFIANT" && row.dubcap).reduce((sum, row) => sum + row.launches, 0)).toBe(3);
+    expect(launches(result, false)).toBe(0);
+    expect(result.expectedHours).toBeCloseTo(80);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("rejects the short Henerprise insertion that would launch the last extended ship at hour 48", async () => {
+    const result = await plan([extended, short], 12, { targets: [
+      { targetItemId: "puzzle-cube-1", quantity: 12 }, { targetItemId: "gold-meteorite-1", quantity: 1 },
+    ] });
+    expect(launches(result, true)).toBe(6);
+    expect(result.missions.filter((row) => row.durationType === "SHORT").map((row) => [row.dubcap ?? false, row.launches])).toEqual([[false, 1]]);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("allows a final mission longer than the event and waits for in-air slots before the fresh window", async () => {
+    const long = { ...extended, durationSeconds: 96 * 3600 };
+    const profile = profileFor([long]);
+    profile.inFlightMissions = [{ ship: "HENERPRISE", durationType: "EPIC", status: "EXPLORING", level: 0,
+      capacity: 1, targetAfxId: 10000, secondsRemaining: 24 * 3600 }];
+    const result = await plan([long], 7, {}, profile);
+    expect(result.dubcap!.startSeconds).toBe(24 * 3600);
+    expect(launches(result, true)).toBe(3);
+    expect(launches(result, false)).toBe(1);
+    expect(result.missions.find((row) => row.inAir)?.dubcap).toBeUndefined();
+    expect(result.dubcap!.lanes.every((lane) => lane.length === 1 && lane[0].startSeconds === 0)).toBe(true);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("doubles attainable goals while honoring a zero-shift cap", async () => {
+    const result = await plan([extended], 12, { objectiveMode: "virtueFuel", virtueTank: {
+      shiftCap: 0, startMode: "current", capacity: 500 * T,
+      currentContents: { curiosity: 60 * T, kindness: 60 * T, resilience: 40 * T },
+    } });
+    expect(result.virtueTanks!.pack.totalShifts).toBe(0);
+    expect(result.virtueTanks!.goalsUnmet).toBe(true);
+    expect(result.targetBreakdown).toMatchObject({ fromMissionsExpected: 4, shortfall: 8 });
+    expect(result.fuelCost).toBe(140 * T);
+    expect(result.virtueTanks!.pack.feasible).toBe(true);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("packs event launches before ordinary farming within the selected shift cap", async () => {
+    const result = await plan([extended, chickfiant], 13, { objectiveMode: "virtueFuel", virtueTank: {
+      shiftCap: 4, startMode: "current", capacity: 500 * T,
+      currentContents: { curiosity: 60 * T, kindness: 60 * T, resilience: 40 * T },
+    }, targets: [{ targetItemId: "puzzle-cube-1", quantity: 13 }, { targetItemId: "gold-meteorite-1", quantity: 6 }] });
+    expect(result.unmetItems).toEqual([]);
+    expect(result.virtueTanks!.pack.totalShifts).toBeLessThanOrEqual(4);
+    expect(result.virtueTanks!.pack.schedule.makespanSeconds).toBe(result.dubcap!.makespanSeconds);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("keeps the original behavior when the checkbox is off", async () => {
+    const result = await plan([extended], 12, { includeDubcap: false });
+    expect(result.dubcap).toBeUndefined();
+    expect(launches(result, true)).toBe(0);
+    expect(launches(result, false)).toBe(12);
+  }, 120_000);
+
+  it("shares the three physical slots across different targets on the same ship", async () => {
+    const lootData = lootFor([extended]);
+    const targets = lootData.missions[0].levels[0].targets;
+    targets.push({ ...targets[0], targetAfxId: 12, items: [
+      { afxId: 0, afxLevel: 1, itemId: "gold-meteorite-1", counts: [5000, 0, 0, 0] },
+    ] });
+    const result = await plan([extended], 12, { lootData, targets: [
+      { targetItemId: "puzzle-cube-1", quantity: 12 }, { targetItemId: "gold-meteorite-1", quantity: 12 },
+    ] });
+    expect(result.unmetItems).toEqual([]);
+    expect(launches(result, true)).toBe(6);
+    expect(launches(result, false)).toBe(12);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("waits for unlock prep to return and counts each physical launch once", async () => {
+    const shipLevels = computeShipLevelsFromLaunchCounts({
+      CHICKEN_ONE: { SHORT: 4 }, CHICKEN_NINE: { SHORT: 6 }, CHICKEN_HEAVY: { SHORT: 12 }, BCR: { SHORT: 15 },
+      MILLENIUM_CHICKEN: { SHORT: 18 }, CORELLIHEN_CORVETTE: { SHORT: 21 }, GALEGGTICA: { SHORT: 24 },
+      CHICKFIANT: { SHORT: 27 }, VOYEGGER: { SHORT: 28 },
+    });
+    const profile = { ...profileFor([]), shipLevels, missionOptions: buildMissionOptions(shipLevels, 60, 0) };
+    expect(shipLevels.find((ship) => ship.ship === "HENERPRISE")!.unlocked).toBe(false);
+    const result = await plan([extended], 500, {}, profile);
+    expect(result.progression.prepLaunches.length).toBeGreaterThan(0);
+    const prep = result.dubcap!.fullLanes.flat().filter((block) => block.isPrep);
+    expect(result.dubcap!.startSeconds).toBe(Math.max(...prep.map((block) => block.endSeconds)));
+    const plannedHenerprises = launches(result, true) + launches(result, false);
+    expect(result.progression.projectedShipLevels.find((ship) => ship.ship === "HENERPRISE")!.launches).toBe(plannedHenerprises);
+    expect(result.dubcap!.launches).toBeGreaterThan(0);
+    const eventReturns = result.dubcap!.startSeconds + Math.max(...result.dubcap!.lanes.flat().map((block) => block.endSeconds));
+    expect(result.dubcap!.fullLanes.flat().filter((block) => !block.isPrep && !block.dubcap).every((block) => block.startSeconds >= eventReturns)).toBe(true);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("uses doubled ingredients for a partial craft-count goal without fabricating crafts", async () => {
+    const profile = profileFor([extended]);
+    profile.inventory = { puzzle_cube_1: 2 };
+    profile.craftCounts = { puzzle_cube_2: 1 };
+    const result = await plan([extended], 4, { objectiveMode: "virtueFuel", virtueTank: {
+      shiftCap: 0, startMode: "current", capacity: 500 * T,
+      currentContents: { curiosity: 60 * T, kindness: 60 * T, resilience: 40 * T },
+    }, targets: [{ targetItemId: "puzzle-cube-2", quantity: 4, craftGoal: true }] }, profile);
+    expect(result.crafts).toEqual([{ itemId: "puzzle-cube-2", count: 2 }]);
+    expect(result.targetBreakdown).toMatchObject({ requested: 3, fromCraft: 2, shortfall: 1 });
+    expect(result.virtueTanks!.pack.totalShifts).toBe(0);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("applies the same finite window to monolithic comparisons", async () => {
+    const [comparison] = await computeMonolithicPaths({ profile: profileFor([extended]), targetItemId: "puzzle-cube-1",
+      quantity: 13, priorityTime: 1, includeDubcap: true,
+      selectedCombos: [{ ship: "HENERPRISE", durationType: "EPIC", targetAfxId: 10000 }],
+      lootData: lootFor([extended]), solverFn: solveWithHighs });
+    expect(comparison.feasible).toBe(true);
+    expect(comparison.totalLaunches).toBe(7);
+    expect(comparison.expectedHours).toBeCloseTo(115.2);
+  }, 120_000);
+
+  it("keeps event yields at starting stars and credits leveling to ordinary missions once", async () => {
+    const launchCounts = {
+      CHICKEN_ONE: { SHORT: 4 }, CHICKEN_NINE: { SHORT: 6 }, CHICKEN_HEAVY: { SHORT: 12 }, BCR: { SHORT: 15 },
+      MILLENIUM_CHICKEN: { SHORT: 18 }, CORELLIHEN_CORVETTE: { SHORT: 21 }, GALEGGTICA: { SHORT: 24 },
+      CHICKFIANT: { SHORT: 27 }, VOYEGGER: { SHORT: 30 }, HENERPRISE: { SHORT: 9 },
+    };
+    const shipLevels = computeShipLevelsFromLaunchCounts(launchCounts);
+    const missionOptions = buildMissionOptions(shipLevels, 60, 0);
+    const option = missionOptions.find((mission) => mission.ship === "HENERPRISE" && mission.durationType === "EPIC")!;
+    expect(option.level).toBe(0);
+    const lootData = lootFor([option]);
+    lootData.missions[0].levels[0].targets[0].items[0].counts[0] = 5000 / option.capacity;
+    const profile = { ...profileFor(missionOptions), shipLevels };
+    const result = await plan([option], 13, { lootData,
+      allowedShipDurations: [{ ship: "HENERPRISE", durationType: "EPIC" }],
+      // Exclude optional prep to isolate leveling caused by the event itself.
+      solverFn: (model, options) => /\n  r_\d+:/.test(model)
+        ? Promise.resolve({ Status: "Infeasible" }) : solveWithHighs(model, options),
+    }, profile);
+    expect(result.unmetItems).toEqual([]);
+    expect(launches(result, true)).toBe(6);
+    expect(launches(result, false)).toBe(1);
+    expect(result.missions.filter((row) => row.dubcap).every((row) => row.level === 0)).toBe(true);
+    expect(result.missions.filter((row) => !row.dubcap).every((row) => row.level === 1)).toBe(true);
+    const final = result.progression.projectedShipLevels.find((ship) => ship.ship === "HENERPRISE")!;
+    expect(final.launches).toBe(16);
+    expect(final.launchPoints).toBeCloseTo(9 + 7 * 1.8);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("defaults old API requests to no event and preserves explicit event requests", () => {
+    const request = { targetItemId: "puzzle-cube-1", quantity: 12 };
+    expect(planRequestSchema.parse(request).includeDubcap).toBe(false);
+    expect(planRequestSchema.parse({ ...request, includeDubcap: "true" }).includeDubcap).toBe(true);
+    expect(replanRequestSchema.parse({ ...request, profile: profileFor([extended]), includeDubcap: true }).includeDubcap).toBe(true);
+    expect(compareRequestSchema.parse({ ...request, profile: profileFor([extended]), includeDubcap: true,
+      selectedCombos: [{ ship: "HENERPRISE", durationType: "EPIC", targetAfxId: 10000 }] }).includeDubcap).toBe(true);
+  });
+});

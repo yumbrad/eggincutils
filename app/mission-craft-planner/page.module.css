@@ -2108,6 +2108,44 @@
   line-height: 1.6;
 }
 
+.dubcapHint {
+  margin: -4px 0 8px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.dubcapLanes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 310px), 1fr));
+  gap: 16px;
+}
+
+.dubcapLane {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.dubcapLane h3 {
+  margin: 0 0 8px;
+}
+
+.dubcapClock {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.dubcapBadge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--ok), transparent 85%);
+  color: var(--ok);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
 .shiftCapBannerTime {
   white-space: nowrap;
 }
