@@ -1262,21 +1262,48 @@ function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | nul
 function buildDubcapTimeline(plan: PlanResponse["plan"]): MissionTimeline | null {
   const event = plan.dubcap!;
   const colors = buildMissionColorMap(plan.missions);
-  const segments: TimelineSegment[] = [];
+  // One legend entry per mission row (event launches apart from ordinary
+  // ones) or prep shape; lane blocks are the runs that make it up.
+  const segmentsById = new Map<string, TimelineSegment>();
   const lanes: TimelineLaneBlock[][] = event.fullLanes.map((lane, laneIndex) => lane.map((block, index) => {
     const mission = plan.missions.find((row) => row.rowKey === block.missionRowKey);
     const colorKey = mission ? missionColorKey(mission) : `${block.ship}|${block.durationType}`;
-    const id = `event-plan:${laneIndex}:${index}`;
-    const label = `${titleCaseShip(block.ship)} ${durationTypeWithLevelLabel(block.durationType, block.level)}`;
-    const subtitle = `${block.isPrep ? "Prep" : afxIdToTargetFamilyName(block.targetAfxId ?? 10000)}${block.dubcap ? " · dubcap ×2" : ""}`;
-    const totalSeconds = block.endSeconds - block.startSeconds;
     const phase = block.isPrep ? "prep" : "mission";
-    const color = colors.get(colorKey) ?? prepTimelineColor(colorKey);
-    segments.push({ id, label, subtitle, phase, color, launches: block.launches,
-      durationSeconds: totalSeconds / block.launches, totalSlotSeconds: totalSeconds,
-      ship: block.ship, durationType: block.durationType, level: block.level, targetAfxId: block.targetAfxId ?? null });
-    return { id, label, subtitle, phase, color, launches: block.launches, totalSeconds,
-      startSeconds: block.startSeconds, endSeconds: block.endSeconds };
+    const id = block.isPrep
+      ? `event-prep:${block.ship}|${block.durationType}|${block.level}`
+      : `event-plan:${block.missionRowKey ?? colorKey}:${block.dubcap ? "dubcap" : "ordinary"}`;
+    const totalSeconds = block.endSeconds - block.startSeconds;
+    let segment = segmentsById.get(id);
+    if (!segment) {
+      segment = {
+        id,
+        label: `${titleCaseShip(block.ship)} ${durationTypeWithLevelLabel(block.durationType, block.level)}`,
+        subtitle: `${block.isPrep ? "Prep" : afxIdToTargetFamilyName(block.targetAfxId ?? 10000)}${block.dubcap ? " · dubcap ×2" : ""}`,
+        phase,
+        color: colors.get(colorKey) ?? prepTimelineColor(colorKey),
+        launches: 0,
+        durationSeconds: totalSeconds / block.launches,
+        totalSlotSeconds: 0,
+        ship: block.ship,
+        durationType: block.durationType,
+        level: block.level,
+        targetAfxId: block.targetAfxId ?? null,
+      };
+      segmentsById.set(id, segment);
+    }
+    segment.launches += block.launches;
+    segment.totalSlotSeconds += totalSeconds;
+    return {
+      id: `${id}:lane:${laneIndex}:${index}`,
+      label: segment.label,
+      subtitle: segment.subtitle,
+      phase,
+      color: segment.color,
+      launches: block.launches,
+      totalSeconds,
+      startSeconds: block.startSeconds,
+      endSeconds: block.endSeconds,
+    };
   }));
   const inAir = plan.missions.filter((mission) => mission.inAir)
     .flatMap((mission) => (mission.launchSecondsRemaining ?? [mission.secondsRemaining ?? 0]).map((seconds) => ({ mission, seconds })))
@@ -1286,10 +1313,22 @@ function buildDubcapTimeline(plan: PlanResponse["plan"]): MissionTimeline | null
       phase: "inAir", color: colors.get(missionColorKey(mission)) ?? prepTimelineColor(mission.ship),
       launches: 1, totalSeconds: seconds, startSeconds: 0, endSeconds: seconds });
   });
-  const missionSlotSeconds = segments.filter((segment) => segment.phase === "mission").reduce((sum, segment) => sum + segment.totalSlotSeconds, 0);
-  const prepSlotSeconds = segments.filter((segment) => segment.phase === "prep").reduce((sum, segment) => sum + segment.totalSlotSeconds, 0);
-  return event.makespanSeconds > 0 ? { lanes, segments, totalSeconds: event.makespanSeconds,
-    modelTotalSlotSeconds: missionSlotSeconds + prepSlotSeconds, missionSlotSeconds, prepSlotSeconds, hiddenPrepSlotSeconds: 0 } : null;
+  const segments = Array.from(segmentsById.values());
+  const slotSeconds = (phase: TimelineSegment["phase"]) =>
+    segments.filter((segment) => segment.phase === phase).reduce((sum, segment) => sum + segment.totalSlotSeconds, 0);
+  const missionSlotSeconds = slotSeconds("mission");
+  const prepSlotSeconds = slotSeconds("prep");
+  return event.makespanSeconds > 0
+    ? {
+        lanes,
+        segments: sortTimelineSegmentsForLegend(segments),
+        totalSeconds: event.makespanSeconds,
+        modelTotalSlotSeconds: missionSlotSeconds + prepSlotSeconds,
+        missionSlotSeconds,
+        prepSlotSeconds,
+        hiddenPrepSlotSeconds: 0,
+      }
+    : null;
 }
 
 function eventClock(seconds: number): string {
@@ -1297,21 +1336,23 @@ function eventClock(seconds: number): string {
   return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}`;
 }
 
-function DubcapTimeline({ event }: { event: DubcapPlan }) {
+/** The event's launches per slot, timed from the event's start. `tankLabels` names the fuel tanks in Path of Virtue. */
+function DubcapTimeline({ event, tankLabels }: { event: DubcapPlan; tankLabels?: string[] }) {
   return (
-    <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Dubcap launch window</h2>
+    <section className={styles.timelinePanel}>
+      <h3 style={{ marginTop: 0 }}>Dubcap launch window</h3>
       <p className="muted">
-        {pluralize(event.launches, "launch", "launches")} with double drops. Times are hours:minutes from event start;
-        launch before 48:00, with a {event.launchMarginSeconds / 60}-minute margin.
-        {event.startSeconds > 0 && <> Prep and current missions take {formatDurationFromHours(event.startSeconds / 3600)} before the window.</>}
-        {" "}Calendar waiting is excluded. Drops use stars at event start; replan after returns.
+        {pluralize(event.launches, "launch", "launches")} with double drops. Times are from the event&apos;s start; last
+        launch by {eventClock(event.windowSeconds - event.launchMarginSeconds)}.
+        {event.startSeconds > 0 && (
+          <> Prep and current missions take {formatDurationFromHours(event.startSeconds / 3600)} first.</>
+        )}
       </p>
       {event.launches > 0 ? (
         <div className={styles.dubcapLanes}>
           {event.lanes.map((lane, index) => (
             <div className={styles.dubcapLane} key={index}>
-              <h3>Slot {index + 1}</h3>
+              <h4>Slot {index + 1}</h4>
               <table>
                 <thead><tr><th>Launch</th><th>Ship / target</th><th>Return</th></tr></thead>
                 <tbody>{lane.map((block, blockIndex) => {
@@ -1326,7 +1367,9 @@ function DubcapTimeline({ event }: { event: DubcapPlan }) {
                         {block.launches > 1 && <>{block.launches}× </>}{titleCaseShip(block.ship)}<br />
                         <span className="muted">{durationTypeWithLevelLabel(block.durationType, block.level)} · {afxIdToTargetFamilyName(block.targetAfxId)}</span>
                         {block.launches > 1 && <div className="muted">Every {formatDurationFromHours(duration / 3600)}</div>}
-                        {block.tankIndex != null && <div className="muted">{block.tankIndex === 0 ? "Initial tank" : `Tank ${block.tankIndex + 1}`}</div>}
+                        {block.tankIndex != null && (
+                          <div className="muted">{tankLabels?.[block.tankIndex] ?? `Tank ${block.tankIndex + 1}`}</div>
+                        )}
                       </td>
                       <td className={styles.dubcapClock}>{eventClock(block.endSeconds)}</td>
                     </tr>
@@ -1338,7 +1381,7 @@ function DubcapTimeline({ event }: { event: DubcapPlan }) {
           ))}
         </div>
       ) : <p className="muted">This plan needs no launches during the event.</p>}
-    </div>
+    </section>
   );
 }
 
@@ -1465,6 +1508,47 @@ const VIRTUE_TANK_NOTES_SHOWN_ELSEWHERE = [
   "No plan without shifts",
   "No complete plan",
 ];
+
+/**
+ * The shift-cap banner's bold headline and the sentence after it. Current
+ * plans stay within the cap and only warn about goal shortfalls; the other
+ * cases are older saved plans whose launches exceed the cap.
+ */
+function shiftCapBannerCopy(
+  tanks: VirtueTankPlannerResult,
+  neededShifts: number | null,
+  proven: boolean,
+  hasShortfalls: boolean
+): { headline: string; detail: string } {
+  const cap = tanks.shiftCap;
+  const withinCap = cap > 0 ? `within ${cap} shifts` : "without shifts";
+  const provenNeed = `These goals need at least ${neededShifts} shifts; the slider allows ${cap}.`;
+  if (hasShortfalls) {
+    return {
+      headline: neededShifts != null && proven ? provenNeed : `Some goals could not be reached ${withinCap}.`,
+      detail:
+        `Planned as much as possible within your cap (${pluralize(tanks.pack.totalShifts, "shift")}).` +
+        (neededShifts != null && !proven ? ` A complete plan was found with ${neededShifts} shifts; fewer may be possible.` : ""),
+    };
+  }
+  if (tanks.overCap) {
+    return proven
+      ? { headline: provenNeed, detail: `Planned with ${neededShifts} shifts.` }
+      : {
+          headline: `No plan ${withinCap} was found in the time allowed.`,
+          detail: `This plan takes ${neededShifts} shifts; fewer may be possible.`,
+        };
+  }
+  return {
+    headline: `This plan takes ${neededShifts} shifts; the slider allows ${cap}.`,
+    detail: "Packing its launches into tanks took more shifts than the solve counted.",
+  };
+}
+
+/** Goal amounts in the shortfall list: crafts are whole, copies are expected values. */
+function formatGoalAmount(value: number, craftGoal?: boolean): string {
+  return value.toLocaleString(undefined, { maximumFractionDigits: craftGoal ? 0 : 2 });
+}
 
 type VirtueTankUnitView = {
   unit: VirtueTankPlanUnit;
@@ -5435,7 +5519,14 @@ export default function MissionCraftPlannerPage() {
   const planNeededShiftsDetent = planNeededShifts != null ? shiftCapDetentFor(planNeededShifts) : null;
   const virtueBannerShown = Boolean(virtueTankView && planVirtueTanks && (planHasGoalShortfalls || planNeededShifts != null));
   // Only a finished search establishes a minimum; otherwise it is a suggestion.
-  const planNeededShiftsProven = planVirtueTanks?.neededShiftsProven === true;
+  // Older over-cap plans don't say; they read as proven, as they always have.
+  const planNeededShiftsProven = planVirtueTanks?.overCap
+    ? planVirtueTanks.neededShiftsProven !== false
+    : planVirtueTanks?.neededShiftsProven === true;
+  const shiftCapBanner =
+    virtueBannerShown && planVirtueTanks
+      ? shiftCapBannerCopy(planVirtueTanks, planNeededShifts, planNeededShiftsProven, planHasGoalShortfalls)
+      : null;
 
   const setShiftCapToPlanNeed = () => {
     if (planNeededShiftsDetent == null) {
@@ -5964,8 +6055,10 @@ export default function MissionCraftPlannerPage() {
                             left: `calc(9px + (100% - 18px) * ${shiftCapNeedIndex / (VIRTUE_SHIFT_CAP_DETENTS.length - 1)})`,
                           }}
                         >
+                          {/* A proven minimum, or a found plan that fewer shifts may also manage. */}
                           <span>
-                            all goals {planNeededShiftsProven ? "need" : "fit"} {planNeededShifts}
+                            all goals: {planNeededShiftsProven ? "" : "≤"}
+                            {planNeededShifts}
                           </span>
                         </div>
                       )}
@@ -6048,7 +6141,8 @@ export default function MissionCraftPlannerPage() {
                 <span>Include one dubcap</span>
               </label>
               <p className={styles.dubcapHint} id="dubcapHint">
-                One fresh 48-hour launch window with double drops, after prep. Calendar waiting is excluded.
+                One fresh 48-hour window with double drops, once prep and current missions return. Calendar
+                waiting is excluded.
               </p>
               <label className={styles.customCheck} htmlFor="fastMode">
                 <input
@@ -6133,52 +6227,23 @@ export default function MissionCraftPlannerPage() {
       {/* Mounted empty in virtue mode, before any plan, so the banner is announced when it appears. */}
       {(inventorySource === "virtue" || virtueTankView) && (
         <div role="status">
-          {virtueBannerShown && planVirtueTanks && (
+          {shiftCapBanner && (
             <div className={styles.shiftCapBanner} data-tone="warn">
               {VIRTUE_WARN_ICON}
               <div className={styles.shiftCapBannerText}>
-                {planHasGoalShortfalls ? (
-                  <>
-                    <strong>
-                      {planNeededShifts != null && planNeededShiftsProven
-                        ? `These goals need at least ${planNeededShifts} shifts; the slider allows ${planVirtueTanks.shiftCap}.`
-                        : `Some goals could not be reached ${planVirtueTanks.shiftCap > 0 ? `within ${planVirtueTanks.shiftCap} shifts` : "without shifts"}.`}
-                    </strong>{" "}
-                    Planned as much as possible within your cap ({pluralize(planVirtueTanks.pack.totalShifts, "shift")}).
-                    {planNeededShifts != null && !planNeededShiftsProven && (
-                      <> A complete plan was found with {planNeededShifts} shifts; fewer may be possible.</>
-                    )}
-                    <ul className={styles.shiftCapShortfalls}>
-                      {planGoalShortfalls.map((goal, index) => (
-                        <li key={`${goal.itemId}:${index}`}>
-                          {itemIdToLabel(goal.itemId)}: expected {(goal.requested - goal.shortfall).toFixed(2)} of{" "}
-                          {goal.requested.toLocaleString()}{goal.craftGoal ? " additional crafts" : ""} · short by {goal.shortfall.toFixed(2)}
-                        </li>
-                      ))}
-                    </ul>
-                  </>
-                ) : planVirtueTanks.overCap && planNeededShiftsProven ? (
-                  <>
-                    <strong>
-                      These goals need at least {planNeededShifts} shifts; the slider allows {planVirtueTanks.shiftCap}.
-                    </strong>{" "}
-                    Planned with {planNeededShifts} shifts.
-                  </>
-                ) : planVirtueTanks.overCap ? (
-                  <>
-                    <strong>
-                      No plan {planVirtueTanks.shiftCap > 0 ? `within ${planVirtueTanks.shiftCap} shifts` : "without shifts"}{" "}
-                      was found in the time allowed.
-                    </strong>{" "}
-                    This plan takes {planNeededShifts} shifts; fewer may be possible.
-                  </>
-                ) : (
-                  <>
-                    <strong>
-                      This plan takes {planNeededShifts} shifts; the slider allows {planVirtueTanks.shiftCap}.
-                    </strong>{" "}
-                    Packing its launches into tanks took more shifts than the solve counted.
-                  </>
+                <strong>{shiftCapBanner.headline}</strong> {shiftCapBanner.detail}
+                {planHasGoalShortfalls && (
+                  <ul className={styles.shiftCapShortfalls}>
+                    {planGoalShortfalls.map((goal, index) => (
+                      <li key={`${goal.itemId}:${index}`}>
+                        {itemIdToLabel(goal.itemId)}: expected{" "}
+                        {formatGoalAmount(goal.requested - goal.shortfall, goal.craftGoal)} of{" "}
+                        {formatGoalAmount(goal.requested, goal.craftGoal)}
+                        {goal.craftGoal ? " additional crafts" : ""} · short by{" "}
+                        {formatGoalAmount(goal.shortfall, goal.craftGoal)}
+                      </li>
+                    ))}
+                  </ul>
                 )}
                 {planFasterOption && (
                   <>
@@ -6346,7 +6411,6 @@ export default function MissionCraftPlannerPage() {
             </div>
           </div>
 
-          {response.plan.dubcap && <DubcapTimeline event={response.plan.dubcap} />}
           <div className="panel">
             <div className={styles.craftPlanHeader}>
               <h2 style={{ marginTop: 0 }}>Craft plan</h2>
@@ -6531,7 +6595,9 @@ export default function MissionCraftPlannerPage() {
             {missionTimeline && (
               <div className={styles.timelinePanel}>
                 <p className={`muted ${styles.timelineIntro}`}>
-                  Heuristic 3-slot timeline view of recommended launches. Exact ordering can vary, but total workload matches the plan.
+                  {response.plan.dubcap
+                    ? "3-slot launch schedule: prep, then the dubcap window, then ordinary missions once the event's ships return."
+                    : "Heuristic 3-slot timeline view of recommended launches. Exact ordering can vary, but total workload matches the plan."}
                 </p>
                 <div className={styles.timelineStats}>
                   <span>
@@ -6616,6 +6682,12 @@ export default function MissionCraftPlannerPage() {
                   ))}
                 </div>
               </div>
+            )}
+            {response.plan.dubcap && (
+              <DubcapTimeline
+                event={response.plan.dubcap}
+                tankLabels={response.plan.virtueTanks?.pack.tanks.map((tank) => tank.label)}
+              />
             )}
             {response.plan.missions.length === 0 ? (
               <p className="muted" style={{ margin: 0 }}>No mission launches required by the current model.</p>

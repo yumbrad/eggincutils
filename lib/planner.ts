@@ -348,6 +348,12 @@ const VIRTUE_TANK_SOLVE_TIME_LIMIT_SECONDS = 30;
 /** Normalized objective weight per shift in the fewest-shifts search (demand is hard there). */
 const VIRTUE_TANK_MIN_SHIFT_WEIGHT = 1000;
 const VIRTUE_TANK_PACK_TIME_LIMIT_SECONDS = 1.5;
+/**
+ * A partial tank plan solves twice (most goal completion, then time and
+ * shifts at that completion) within one solve's time limit; the second
+ * solve always gets at least this long.
+ */
+const VIRTUE_TANK_PARTIAL_POLISH_MIN_SECONDS = 5;
 /** Re-solves with a lower loop budget when packing needs more shifts than the solve counted. */
 const VIRTUE_TANK_MAX_PACK_RETRIES = 2;
 /**
@@ -2324,7 +2330,18 @@ async function solveUnifiedCraftMissionPlan(options: {
     craftFloorByItem,
   } = craftSkeleton || buildCraftModelSkeleton({ profile, targetKey, quantity, closure, consumptionOptions });
   const missionVars = actions.map((_, index) => `m_${index}`);
-  const dubcapModel = buildDubcapModel(actions, missionVars);
+  const dubcapModel = buildDubcapModel(actions, missionVars, (() => {
+    const prep = { launches: 0, seconds: 0 };
+    for (const [optionKey, requirement] of Object.entries(requiredMissionLaunches)) {
+      const action = actions.find((entry) => !entry.dubcap && entry.optionKey === optionKey);
+      const launches = Math.max(0, Math.round(requirement.launches));
+      if (action && launches > 0) {
+        prep.launches += launches;
+        prep.seconds += launches * action.durationSeconds;
+      }
+    }
+    return prep;
+  })());
   const consumptionVars = consumptionOptions.map((_, index) => `x_${index}`);
   const normalizedGeRef = Math.max(1, geRef);
   const normalizedFuelRef = Math.max(1, fuelRef);
@@ -3078,8 +3095,11 @@ async function solveUnifiedCraftMissionPlan(options: {
     polishLines[polishLines.findIndex((line) => line.startsWith("  obj:"))] = `  obj: ${formatLinearExpression(objectiveTerms)}`;
     polishLines.splice(polishLines.indexOf("Bounds"), 0,
       `  goal_completion: ${formatLinearExpression(goalShortfallTerms)} <= ${formatLpNumber(shortfallBound + 1e-4)}`);
+    const polishTimeLimit = "time_limit" in solveOptions
+      ? { time_limit: Math.max(VIRTUE_TANK_PARTIAL_POLISH_MIN_SECONDS, effectiveTimeLimitSeconds! - (Date.now() - solveStartedAtMs) / 1000) }
+      : {};
     try {
-      const polished = await solve(polishLines.join("\n"), { ...solveOptions, mip_rel_gap: 0.01 });
+      const polished = await solve(polishLines.join("\n"), { ...solveOptions, mip_rel_gap: 0.01, ...polishTimeLimit });
       if (usableIncumbent(polished)) {
         // Completion optimality still depends on the first pass finishing.
         solution = { ...polished, Status: solution.Status === "Optimal" ? polished.Status : solution.Status };
@@ -3771,6 +3791,26 @@ function buildDubcapUnits(
   return { units: [...ordinary, ...eventUnits], allocation: { lanes } };
 }
 
+/**
+ * Joins back-to-back launches of the same mission from the same tank, which
+ * tank packing splits into single launches, so each lane reads as runs.
+ */
+function mergeDubcapRuns<T extends { launches: number; startSeconds: number; endSeconds: number }>(
+  lane: T[],
+  runKey: (block: T) => string
+): T[] {
+  const merged: T[] = [];
+  for (const block of lane) {
+    const last = merged.at(-1);
+    if (last && last.endSeconds === block.startSeconds && runKey(last) === runKey(block)) {
+      merged[merged.length - 1] = { ...last, launches: last.launches + block.launches, endSeconds: block.endSeconds };
+    } else {
+      merged.push(block);
+    }
+  }
+  return merged;
+}
+
 /** Replay the event witness, with fuel-tank order retained for prep and ordinary missions. */
 function finishDubcapSchedule(
   event: DubcapUnits,
@@ -3799,7 +3839,7 @@ function finishDubcapSchedule(
   const full = scheduleAfterDubcap(event.allocation, ordinary.map((unit) => ({
     key: unit.id, durationSeconds: unit.durationSeconds, launches: unit.launches,
     shape: `${unit.ship}|${unit.durationType}`, level: unit.level,
-  })), startSeconds);
+  })), startSeconds, Boolean(pack));
   const lanes = event.allocation.lanes.map((lane) => lane.map((block) => {
     const unit = unitById.get(block.actionKey)!;
     return {
@@ -3856,7 +3896,9 @@ function finishDubcapSchedule(
     startSeconds, launches: lanes.flat().reduce((sum, block) => sum + block.launches, 0),
     makespanSeconds: full.makespanSeconds,
     missionSeconds: full.makespanSeconds - startSeconds + scheduleDubcapPrep(entries.filter((unit) => unit.isPrep)).makespanSeconds,
-    lanes, fullLanes,
+    lanes: lanes.map((lane) => mergeDubcapRuns(lane, (block) => `${block.missionRowKey}|${block.tankIndex}`)),
+    fullLanes: fullLanes.map((lane) => mergeDubcapRuns(lane, (block) =>
+      `${block.missionRowKey ?? `${block.ship}|${block.durationType}|${block.level}`}|${block.isPrep}|${block.dubcap}|${block.tankIndex}`)),
   };
 }
 
@@ -6217,11 +6259,14 @@ async function planVirtueTankLaunches(
   };
   const finish = async (plan: PlannedLaunches, outcome: TankOutcome = {}): Promise<PlannedLaunches> => {
     if (!plan.virtueTanks!.pack.feasible || packedShifts(plan) > shiftCap) {
-      const completePlanPacked = plan.virtueTanks!.pack.feasible;
+      // A packed complete plan over the cap still says how many shifts would
+      // meet every goal, even when the caller had no count for it.
+      const completeShifts = plan.virtueTanks!.pack.feasible ? outcome.neededShifts ?? packedShifts(plan) : undefined;
+      const proven = outcome.neededShifts !== undefined && outcome.proven;
       plan = await partialWithinCap();
       // A complete plan's time is not comparable to a partial plan's time.
-      outcome = completePlanPacked && plan.targetBreakdowns.some((goal) => goal.shortfall > 1e-6)
-        ? { neededShifts: outcome.neededShifts, proven: outcome.proven }
+      outcome = completeShifts !== undefined && plan.targetBreakdowns.some((goal) => goal.shortfall > 1e-6)
+        ? { neededShifts: completeShifts, proven }
         : {};
     }
     const tanks = plan.virtueTanks!;
@@ -6405,7 +6450,11 @@ async function planVirtueTankLaunches(
     if (fastestWithin) {
       return finishWithinCap(fastestWithin, plans, noteFor);
     }
-    const extra = await fasterPass(packedShifts(fewestOf(plans)), false);
+    // Past the cap the plan becomes a partial one, which drops the faster
+    // option; the pass is still worth running when the search did not prove
+    // its fewest shifts, since it can find a plan within the cap or a lower count.
+    const fewestFound = packedShifts(fewestOf(plans));
+    const extra = isProvenFewest(fewestFound) ? undefined : await fasterPass(fewestFound, false);
     const all = extra ? [...plans, extra] : plans;
     const passWithin = withinCap(all);
     if (passWithin) {

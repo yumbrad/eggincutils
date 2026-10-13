@@ -4,7 +4,7 @@ import { solveWithHighs } from "./highs";
 import type { LootJson } from "./loot-data";
 import type { PlayerProfile } from "./profile";
 import { buildMissionOptions, computeShipLevelsFromLaunchCounts, type MissionOption } from "./ship-data";
-import { DUBCAP_LAUNCH_MARGIN_SECONDS, DUBCAP_WINDOW_SECONDS } from "./dubcap";
+import { DUBCAP_LAUNCH_MARGIN_SECONDS, DUBCAP_WINDOW_SECONDS, scheduleAfterDubcap } from "./dubcap";
 import { TRILLION as T } from "./virtue-fuel";
 import { plannerResultSchema, planRequestSchema, replanRequestSchema, compareRequestSchema } from "./api-schemas";
 
@@ -37,6 +37,12 @@ function expectValidTimeline(result: PlannerResult): void {
   expect(event.launches).toBe(launches(result, true));
   for (const lane of event.lanes) {
     let end = 0;
+    lane.forEach((block, index) => {
+      const previous = lane[index - 1];
+      // Back-to-back launches of one mission from one tank read as one run.
+      expect(previous && previous.endSeconds === block.startSeconds && previous.missionRowKey === block.missionRowKey &&
+        previous.tankIndex === block.tankIndex).toBeFalsy();
+    });
     for (const block of lane) {
       expect(block.startSeconds).toBeGreaterThanOrEqual(end);
       const duration = (block.endSeconds - block.startSeconds) / block.launches;
@@ -235,6 +241,37 @@ describe("one dubcap event", () => {
     expect(final.launchPoints).toBeCloseTo(9 + 7 * 1.8);
     expectValidTimeline(result);
   }, 120_000);
+
+  it("does not follow the event with an ordinary launch that event launches alone would beat", async () => {
+    // Every mission drops cubes; one ordinary launch after the event would
+    // wait out the 48-hour window, so the event launches should cover it all.
+    const options = [extended, short, chickfiant];
+    const cubes = { EPIC: 5000, SHORT: 1500 } as Record<string, number>;
+    const lootData = { missions: options.map((option) => ({ afxShip: 0, afxDurationType: 0, missionId: option.missionId,
+      levels: [{ level: 0, targets: [{ totalDrops: 5000, targetAfxId: 10000, items: [{ afxId: 0, afxLevel: 1, itemId: "puzzle-cube-1",
+        counts: [option.ship === "CHICKFIANT" ? 600 : cubes[option.durationType], 0, 0, 0] }] }] }] })) } as LootJson;
+    const result = await planForTarget(profileFor(options), "puzzle-cube-1", 8, 1, { includeDubcap: true, lootData, solverFn: solveWithHighs });
+    expect(launches(result, false)).toBe(0);
+    expect(result.expectedHours).toBeCloseTo(38.4, 1);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("keeps ordinary launches in tank order when a level-up delays an earlier tank's launch", () => {
+    const hour = 3600;
+    // Tank 0 levels ship X up; tank 1 flies ship Y. Y must not launch before X's level-up launch.
+    const rows = [
+      { key: "x0|tank0", durationSeconds: 10 * hour, launches: 1, shape: "X", level: 0 },
+      { key: "x1|tank0", durationSeconds: 10 * hour, launches: 1, shape: "X", level: 1 },
+      { key: "y0|tank1", durationSeconds: 10 * hour, launches: 1, shape: "Y", level: 0 },
+    ];
+    const startOf = (lanes: ReturnType<typeof scheduleAfterDubcap>["lanes"], key: string) =>
+      lanes.flat().find((block) => block.actionKey === key)!.startSeconds / hour;
+    const free = scheduleAfterDubcap({ lanes: [[], [], []] }, rows).lanes;
+    expect(startOf(free, "y0|tank1")).toBe(48);
+    const ordered = scheduleAfterDubcap({ lanes: [[], [], []] }, rows, 0, true).lanes;
+    expect(startOf(ordered, "x1|tank0")).toBe(58);
+    expect(startOf(ordered, "y0|tank1")).toBe(58);
+  });
 
   it("defaults old API requests to no event and preserves explicit event requests", () => {
     const request = { targetItemId: "puzzle-cube-1", quantity: 12 };

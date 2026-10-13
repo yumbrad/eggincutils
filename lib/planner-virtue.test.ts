@@ -819,7 +819,9 @@ describe("Path of Virtue tank mode", () => {
       expect(result.missions).toEqual([]);
       expect(result.expectedHours).toBe(0);
       expect(tanks.fasterOption).toBeUndefined();
-      expect(events).toContain("Checking whether up to 6 shifts is much faster…");
+      // The minimum is proven, so no faster pass: its plan could only be a
+      // faster option, which a partial plan does not offer.
+      expect(events).not.toContain("Checking whether up to 6 shifts is much faster…");
       expect(result.notes[0]).toBe("These goals need at least 2 shifts; the slider allows 0. Planned as much as possible within the selected cap.");
 
       const { result: atMinimum } = await planTank([HENERPRISE_EPIC, CORVETTE_EPIC], 6, tankOptions({ shiftCap: 2, currentContents: {} }));
