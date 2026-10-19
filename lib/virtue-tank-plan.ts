@@ -1,4 +1,4 @@
-import { MILLION, VIRTUE_TANK_CAPACITIES, type VirtueTankSnapshot } from "./virtue-fuel";
+import { MILLION, VIRTUE_TANK_CAPACITIES, type VirtueFuelingShip, type VirtueTankSnapshot } from "./virtue-fuel";
 import {
   nearestVirtueShiftCapDetent,
   VIRTUE_SHIFT_PENALTY_SECONDS,
@@ -24,6 +24,8 @@ export type VirtueTankPlannerOptions = {
   currentContents?: VirtueFuelVector;
   /** Humility sitting in the tank now. Only drives the drain instruction. */
   currentHumility?: number;
+  /** The ship partly fueled now: launched first, drawing only the fuel it still lacks from the tank. */
+  fuelingShip?: VirtueFuelingShip;
 };
 
 /** A packed launch unit plus the mission row it belongs to. */
@@ -176,6 +178,8 @@ export function snapVirtueTankReading(value: number): number {
  *   so a full-looking tank does not plan a drain of a stray egg or two.
  * - Humility is passed apart from C/I/K/R: it never counts against the tank
  *   and only drives the drain instruction.
+ * - A partly fueled ship rides along whichever start tank is picked: its fuel
+ *   is out of the tank either way.
  */
 export function buildVirtueTankPlannerOptions(
   tank: VirtueTankSnapshot | null | undefined,
@@ -200,5 +204,6 @@ export function buildVirtueTankPlannerOptions(
       resilience: snapVirtueTankReading(tank.fuels.resilience),
     },
     currentHumility: snapVirtueTankReading(tank.fuels.humility),
+    ...(tank.fuelingShip ? { fuelingShip: tank.fuelingShip } : {}),
   };
 }

@@ -190,6 +190,24 @@ export type VirtueTankSnapshot = {
   currentEgg: VirtueTankEggKey | null;
   /** Unix seconds of the backup the snapshot came from; null for synthetic profiles. */
   backupTimeSeconds: number | null;
+  /** A ship partly fueled from the tank and not launched yet; absent when there is none. */
+  fuelingShip?: VirtueFuelingShip;
+};
+
+/**
+ * The ship being fueled (`virtue_afx_db.fueling_mission`). The game keeps one,
+ * with its duration and target picked before fueling started; the fuel in it has
+ * already left the tank and cannot come back, so the planner launches it first
+ * and only draws the rest of its fuel from the tank. Stars are not read from it:
+ * the ship flies at the stars it has at launch.
+ */
+export type VirtueFuelingShip = {
+  ship: string;
+  durationType: string;
+  /** null when it is fueled to fly without a target. */
+  targetAfxId: number | null;
+  /** C/I/K/R already loaded into it. Humility is fueled straight from its farm and is left out. */
+  loaded: VirtueFuelConfig;
 };
 
 export function virtueTankCapacityForLevel(level: number): number {

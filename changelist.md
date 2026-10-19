@@ -46,6 +46,12 @@ ingredients.
 
 **Artifact Attainment / Mission Craft Planner**
 
+- Path of Virtue plans now read a **partly fueled ship** from your backup and launch it first, with
+the target it was fueled for and at the stars its ship has now.
+  - Only the fuel it still lacks comes from the tank, so the eggs already in it no longer take tank room.
+  - Its drops count toward the plan like a ship in the air, and its launch counts toward leveling.
+  - The tank card shows the ship and what it holds.
+
 - Added **Include one dubcap**: optimize launches in one fresh 48-hour event with exactly double
 the drops, including shorter missions where they help your goals.
   - Shows launch and return times for all three slots, with a five-minute launch margin.

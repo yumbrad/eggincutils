@@ -65,6 +65,11 @@ export type VirtueTankLaunchUnit = {
   launchOrder?: number;
   /** Fuel burned per launch; defaults to getVirtueFuelConfig(ship, durationType). */
   fuelPerLaunch?: VirtueFuelVector;
+  /**
+   * The ship the player is partly through fueling (VirtueFuelingShip): fuel already in it, which
+   * `fuelPerLaunch` leaves out. Its one launch goes first, as a prep unit ordered before the rest.
+   */
+  preFueled?: VirtueFuelVector;
 };
 
 export type VirtueTankPackInput = {

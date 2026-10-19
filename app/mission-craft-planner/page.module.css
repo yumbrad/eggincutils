@@ -1801,6 +1801,21 @@
   background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--egg), transparent 30%) 0 3px, transparent 3px 6px);
 }
 
+.tankFuelingNote {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tankFuelingNote .fieldLabel {
+  margin: 0 4px 0 0;
+}
+
+.tankFuelingNote b {
+  color: var(--ink);
+}
+
 .tankEggList {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));

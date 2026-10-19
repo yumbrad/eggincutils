@@ -22,6 +22,7 @@ import {
   MissionOption,
   ShipLaunchCounts,
   ShipLevelInfo,
+  shipDisplayName,
   shipLevelsToLaunchCounts,
 } from "./ship-data";
 import {
@@ -35,7 +36,13 @@ import {
   DUBCAP_WINDOW_SECONDS, DUBCAP_LAUNCH_MARGIN_SECONDS,
   type DubcapAllocation, type DubcapPlan,
 } from "./dubcap";
-import { getVirtueFuelConfig, getVirtueFuelPerLaunch, TRILLION, type VirtueFuelKey } from "./virtue-fuel";
+import {
+  getVirtueFuelConfig,
+  getVirtueFuelPerLaunch,
+  TRILLION,
+  type VirtueFuelingShip,
+  type VirtueFuelKey,
+} from "./virtue-fuel";
 import {
   packVirtueTanks,
   scheduleVirtueLaunches,
@@ -2106,8 +2113,17 @@ type VirtueTankSolveOptions = {
    * Goals are hard unless softDemand requests a partial plan within the cap.
    */
   objective: "budget" | "minShift";
-  /** Launches with no mission variable that still burn tank fuel and hold slots: prep steps with no useful drops. */
-  fixedLaunches?: Array<{ ship: string; durationType: string; durationSeconds: number; launches: number }>;
+  /**
+   * Launches with no mission variable that still burn tank fuel and hold slots: prep steps with no
+   * useful drops, and the partly fueled ship, whose `fuelPerLaunch` is only what it still lacks.
+   */
+  fixedLaunches?: Array<{
+    ship: string;
+    durationType: string;
+    durationSeconds: number;
+    launches: number;
+    fuelPerLaunch?: VirtueFuelVector;
+  }>;
   /** Maximize goal completion, then minimize time/effort; ingredient balances remain hard. */
   softDemand?: boolean;
   /**
@@ -2162,13 +2178,15 @@ function buildVirtueTankModel(actions: MissionAction[], tank: VirtueTankSolveOpt
   const capacity = Math.max(1, tank.capacity);
   const groupByKey = new Map<string, VirtueTankFuelGroup>();
   const groups: VirtueTankFuelGroup[] = [];
-  const groupFor = (ship: string, durationType: string): VirtueTankFuelGroup | null => {
-    const key = `${ship}|${durationType}`;
+  const groupFor = (ship: string, durationType: string, fuelPerLaunch?: VirtueFuelVector): VirtueTankFuelGroup | null => {
+    const key = fuelPerLaunch
+      ? `${ship}|${durationType}|${VIRTUE_REFILL_ROUTE_ORDER.map((egg) => fuelPerLaunch[egg] || 0).join(",")}`
+      : `${ship}|${durationType}`;
     const existing = groupByKey.get(key);
     if (existing) {
       return existing;
     }
-    const config = getVirtueFuelConfig(ship, durationType);
+    const config = fuelPerLaunch ?? getVirtueFuelConfig(ship, durationType);
     const fuelPct: Partial<Record<VirtueFuelKey, number>> = {};
     const eggs: VirtueFuelKey[] = [];
     let totalPct = 0;
@@ -2193,7 +2211,7 @@ function buildVirtueTankModel(actions: MissionAction[], tank: VirtueTankSolveOpt
   }
   for (const fixed of tank.fixedLaunches || []) {
     const launches = Math.max(0, Math.round(fixed.launches));
-    const group = launches > 0 ? groupFor(fixed.ship, fixed.durationType) : null;
+    const group = launches > 0 ? groupFor(fixed.ship, fixed.durationType, fixed.fuelPerLaunch) : null;
     if (group) {
       group.fixedLaunches += launches;
     }
@@ -3727,8 +3745,9 @@ function buildVirtueTankUnits(options: {
   missionRows: PlanMissionRow[];
   actionKeyByRowKey: Map<string, string>;
   prepSteps: PrepProgressionStep[];
+  fuelingLaunch?: VirtueFuelingLaunch;
 }): VirtueTankPlanUnit[] {
-  const { actions, missionRows, actionKeyByRowKey, prepSteps } = options;
+  const { actions, missionRows, actionKeyByRowKey, prepSteps, fuelingLaunch } = options;
   const actionByKey = new Map(actions.map((action) => [action.key, action]));
   const actionOptionKeys = new Set(actions.map((action) => action.optionKey));
   const prepOrderByOption = new Map<string, number>();
@@ -3792,7 +3811,22 @@ function buildVirtueTankUnits(options: {
     });
   }
   prepUnits.sort((a, b) => (a.prepOrder ?? 0) - (b.prepOrder ?? 0));
-  return [...prepUnits, ...missionUnits];
+  const fuelingUnits: VirtueTankPlanUnit[] = fuelingLaunch
+    ? [{
+        id: claimUniqueRowKey("fueling", usedIds),
+        ship: fuelingLaunch.ship,
+        durationType: fuelingLaunch.durationType,
+        level: fuelingLaunch.level,
+        durationSeconds: fuelingLaunch.durationSeconds,
+        launches: 1,
+        isPrep: true,
+        prepOrder: Math.min(-1, ...prepUnits.map((unit) => (unit.prepOrder ?? 0) - 1)),
+        fuelPerLaunch: fuelingLaunch.fuelPerLaunch,
+        preFueled: fuelingLaunch.preFueled,
+        targetAfxId: fuelingLaunch.targetAfxId,
+      }]
+    : [];
+  return [...fuelingUnits, ...prepUnits, ...missionUnits];
 }
 
 type DubcapUnits = {
@@ -5990,6 +6024,90 @@ async function planForTargetHeuristic(
 }
 
 /**
+ * The partly fueled ship as a VirtueFuelingLaunch, with its expected drops and
+ * the ship levels once it has launched. It flies at the stars its ship has now
+ * (the game sets them at launch, not when fueling started), and its launch
+ * counts toward the ship's level like any other: the profile's ship levels only
+ * move up, so custom stars are never lowered. Null when the ship is not
+ * unlocked or the duration does not exist.
+ */
+async function prepareVirtueFuelingLaunch(
+  profile: PlayerProfile,
+  fuelingShip: VirtueFuelingShip,
+  projection: { lootData?: LootJson; includeRarities: ShinyRaritySelection; includeStoneFragments: boolean }
+): Promise<{
+  launch: VirtueFuelingLaunch;
+  yields: Record<string, number>;
+  shipLevels: ShipLevelInfo[];
+  missionOptions: MissionOption[];
+} | null> {
+  const option = profile.missionOptions.find(
+    (candidate) => candidate.ship === fuelingShip.ship && candidate.durationType === fuelingShip.durationType
+  );
+  if (!option) {
+    return null;
+  }
+  const fullFuel = getVirtueFuelConfig(option.ship, option.durationType);
+  const fuelPerLaunch: VirtueFuelVector = {};
+  const preFueled: VirtueFuelVector = {};
+  for (const egg of VIRTUE_REFILL_ROUTE_ORDER) {
+    const full = Math.max(0, fullFuel[egg] || 0);
+    const loaded = Math.min(full, Math.max(0, fuelingShip.loaded[egg] || 0));
+    if (loaded > 0) {
+      preFueled[egg] = loaded;
+    }
+    if (full - loaded > 0) {
+      fuelPerLaunch[egg] = full - loaded;
+    }
+  }
+  const projected = await projectInFlightMissions(
+    [{
+      ship: option.ship,
+      durationType: option.durationType,
+      status: "FUELING",
+      level: option.level,
+      capacity: option.capacity,
+      targetAfxId: fuelingShip.targetAfxId,
+      secondsRemaining: option.durationSeconds,
+    }],
+    projection
+  );
+
+  const launchCounts = shipLevelsToLaunchCounts(profile.shipLevels);
+  incrementLaunchCounts(launchCounts, option.ship, option.durationType, 1);
+  const counted = new Map(computeShipLevelsFromLaunchCounts(launchCounts).map((info) => [info.ship, info]));
+  let levelsMoved = false;
+  const shipLevels = profile.shipLevels.map((info) => {
+    const after = counted.get(info.ship);
+    if (!after) {
+      return info;
+    }
+    const level = Math.max(info.level, after.level);
+    const unlocked = info.unlocked || after.unlocked;
+    levelsMoved ||= level !== info.level || unlocked !== info.unlocked;
+    return info.ship === option.ship
+      ? { ...info, level, unlocked, launches: after.launches, launchPoints: after.launchPoints, launchesByDuration: after.launchesByDuration }
+      : { ...info, level, unlocked };
+  });
+  return {
+    launch: {
+      ship: option.ship,
+      durationType: option.durationType,
+      level: option.level,
+      durationSeconds: option.durationSeconds,
+      targetAfxId: fuelingShip.targetAfxId,
+      fuelPerLaunch,
+      preFueled,
+    },
+    yields: projected.yields,
+    shipLevels,
+    missionOptions: levelsMoved
+      ? buildMissionOptions(shipLevels, profile.epicResearchFTLLevel, profile.epicResearchZerogLevel)
+      : profile.missionOptions,
+  };
+}
+
+/**
  * Fold the player's outstanding missions into the plan.
  *
  * Their drops are added to the supply the solver plans against, so it stops
@@ -6020,12 +6138,24 @@ export async function planForTarget(
     includeStoneFragments: missionDropRarities.fragments,
   });
 
+  const virtueTank = plannerOptions.objectiveMode === "virtueFuel" ? plannerOptions.virtueTank : undefined;
+  const fueling = virtueTank?.fuelingShip
+    ? await prepareVirtueFuelingLaunch(profile, virtueTank.fuelingShip, {
+        lootData: plannerOptions.lootData,
+        includeRarities: missionDropRarities,
+        includeStoneFragments: missionDropRarities.fragments,
+      })
+    : null;
+  const supplyYields = fueling ? mergeInventory(inFlight.yields, fueling.yields) : inFlight.yields;
   const planningProfile: PlayerProfile =
-    Object.keys(inFlight.yields).length > 0
-      ? { ...profile, inventory: mergeInventory(profile.inventory, inFlight.yields) }
+    Object.keys(supplyYields).length > 0 || fueling
+      ? {
+          ...profile,
+          inventory: mergeInventory(profile.inventory, supplyYields),
+          ...(fueling ? { shipLevels: fueling.shipLevels, missionOptions: fueling.missionOptions } : {}),
+        }
       : profile;
 
-  const virtueTank = plannerOptions.objectiveMode === "virtueFuel" ? plannerOptions.virtueTank : undefined;
   const result = virtueTank
     ? await planVirtueTankLaunches(
         planningProfile,
@@ -6034,7 +6164,8 @@ export async function planForTarget(
         priorityTimeRaw,
         plannerOptions,
         virtueTank,
-        inAirLaneLoads(inFlight.rows)
+        inAirLaneLoads(inFlight.rows),
+        fueling?.launch
       )
     : await planForNewLaunches(
         planningProfile,
@@ -6163,10 +6294,30 @@ type VirtueTankRun = {
   softDemand?: boolean;
   /** Seconds until each mission slot held by an in-air virtue mission frees up. */
   inAirLaneFreeSeconds: number[];
+  /** The partly fueled ship, launched first. */
+  fuelingLaunch?: VirtueFuelingLaunch;
   /** Start of the whole tank-mode search, for progress timing. */
   startedAtMs: number;
   /** Filled in by the pass. */
   report: VirtueTankPassReport;
+};
+
+/**
+ * The partly fueled ship (VirtueFuelingShip) as the launch it commits the
+ * player to: the first launch, at the stars its ship has now, drawing from the
+ * tank only the fuel not already in it. Its drops join the supply up front,
+ * like an in-air mission's, and its launch counts toward ship levels.
+ */
+type VirtueFuelingLaunch = {
+  ship: string;
+  durationType: DurationType;
+  level: number;
+  durationSeconds: number;
+  targetAfxId: number | null;
+  /** Fuel still to load from the tank. */
+  fuelPerLaunch: VirtueFuelVector;
+  /** Fuel already in the ship. */
+  preFueled: VirtueFuelVector;
 };
 
 /** What a tank-mode pass tells planVirtueTankLaunches besides its plan. */
@@ -6199,7 +6350,8 @@ async function planVirtueTankLaunches(
   priorityTimeRaw: number,
   plannerOptions: PlannerOptions,
   tank: VirtueTankPlannerOptions,
-  inAirLaneFreeSeconds: number[]
+  inAirLaneFreeSeconds: number[],
+  fuelingLaunch?: VirtueFuelingLaunch
 ): Promise<PlannedLaunches> {
   const startedAtMs = Date.now();
   const capacity = Number(tank.capacity);
@@ -6245,6 +6397,7 @@ async function planVirtueTankLaunches(
         objective,
         softDemand,
         inAirLaneFreeSeconds,
+        fuelingLaunch,
         startedAtMs,
         report,
       });
@@ -7060,6 +7213,15 @@ async function planForNewLaunches(
             tankRun.startMode,
             tankRun.capacity,
             ...VIRTUE_REFILL_ROUTE_ORDER.map((egg) => Math.round(tankRun.currentContents[egg] || 0)),
+            tankRun.fuelingLaunch
+              ? [
+                  tankRun.fuelingLaunch.ship,
+                  tankRun.fuelingLaunch.durationType,
+                  tankRun.fuelingLaunch.level,
+                  tankRun.fuelingLaunch.targetAfxId ?? "none",
+                  ...VIRTUE_REFILL_ROUTE_ORDER.map((egg) => Math.round(tankRun.fuelingLaunch!.fuelPerLaunch[egg] || 0)),
+                ].join(",")
+              : "nofueling",
           ].join(":")
         : "none"
     }`,
@@ -7379,11 +7541,16 @@ async function planForNewLaunches(
       return pruned.length < candidateActions.length ? { ...input, solveActions: pruned } : input;
     };
 
-    // What a candidate's no-yield prep adds to its tank score, which its
-    // solve objective leaves out: that share of the prep's slot time over
-    // three slots, plus its launch effort.
+    // The partly fueled ship is one more launch every candidate makes.
+    const fuelingLaunch = tankRun?.fuelingLaunch;
+    const fuelingSlotSeconds = fuelingLaunch?.durationSeconds ?? 0;
+    const fuelingLaunches = fuelingLaunch ? 1 : 0;
+    // What a candidate's no-yield prep (and the partly fueled ship) adds to
+    // its tank score, which its solve objective leaves out: that share of the
+    // slot time over three slots, plus the launch effort.
     const tankPrepObjective = (input: CandidateEvalInput, slotTimeWeight: number): number =>
-      ((slotTimeWeight * input.prepNoYieldSlotSeconds) / 3 + VIRTUE_LAUNCH_EFFORT_SECONDS * input.prepNoYieldLaunches) /
+      ((slotTimeWeight * (input.prepNoYieldSlotSeconds + fuelingSlotSeconds)) / 3 +
+        VIRTUE_LAUNCH_EFFORT_SECONDS * (input.prepNoYieldLaunches + fuelingLaunches)) /
       Math.max(1, timeRef);
     type TankSolveHints = Pick<VirtueTankSolveOptions, "shiftFloor" | "objectiveCutoff">;
     const tankSolveOptions = (input: CandidateEvalInput, hints: TankSolveHints = {}): VirtueTankSolveOptions | undefined =>
@@ -7395,12 +7562,23 @@ async function planForNewLaunches(
             shiftCap: tankRun.solveShiftCap,
             objective: tankRun.objective,
             softDemand: tankRun.softDemand,
-            fixedLaunches: input.prepNoYieldOptions.map(({ option, launches }) => ({
-              ship: option.ship,
-              durationType: option.durationType,
-              durationSeconds: option.durationSeconds,
-              launches,
-            })),
+            fixedLaunches: [
+              ...input.prepNoYieldOptions.map(({ option, launches }) => ({
+                ship: option.ship,
+                durationType: option.durationType,
+                durationSeconds: option.durationSeconds,
+                launches,
+              })),
+              ...(fuelingLaunch
+                ? [{
+                    ship: fuelingLaunch.ship,
+                    durationType: fuelingLaunch.durationType,
+                    durationSeconds: fuelingLaunch.durationSeconds,
+                    launches: 1,
+                    fuelPerLaunch: fuelingLaunch.fuelPerLaunch,
+                  }]
+                : []),
+            ],
             ...hints,
           }
         : undefined;
@@ -7441,12 +7619,15 @@ async function planForNewLaunches(
           launches: unified.missionCounts[action.key] || 0,
         })),
         ...input.prepNoYieldOptions.map(({ option, launches }) => ({ durationSeconds: option.durationSeconds, launches })),
+        ...(fuelingLaunch ? [{ durationSeconds: fuelingLaunch.durationSeconds, launches: 1 }] : []),
       ]);
     const dubcapMakespanSeconds = (input: CandidateEvalInput, unified: UnifiedPlan): number | undefined => {
       if (!unified.dubcapAllocation) return undefined;
       const keys = new Map<string, string>();
       const rows = buildMissionRows(input.candidateActions, unified.missionCounts, keys);
-      const units = buildVirtueTankUnits({ actions: input.candidateActions, missionRows: rows, actionKeyByRowKey: keys, prepSteps: input.candidate.prepSteps });
+      const units = buildVirtueTankUnits({
+        actions: input.candidateActions, missionRows: rows, actionKeyByRowKey: keys, prepSteps: input.candidate.prepSteps, fuelingLaunch,
+      });
       return finishDubcapSchedule(
         buildDubcapUnits(units, unified.dubcapAllocation, keys, false),
         tankRun?.inAirLaneFreeSeconds ?? inAirLaneFreeSeconds
@@ -7459,11 +7640,13 @@ async function planForNewLaunches(
     // or slot time, launch effort and an overwhelming weight per shift in the
     // fewest-shifts search. Either way it is at least the solve objective's
     // slot time and launch effort.
-    const virtueTankScore = (input: CandidateEvalInput, unified: UnifiedPlan, totalSlotSeconds: number): number => {
+    const virtueTankScore = (input: CandidateEvalInput, unified: UnifiedPlan, planSlotSeconds: number): number => {
       const shifts = Math.max(0, unified.virtueShifts || 0);
+      const totalSlotSeconds = planSlotSeconds + fuelingSlotSeconds;
       const launches =
         Object.values(unified.missionCounts).reduce((sum, count) => sum + Math.max(0, Math.round(count)), 0) +
-        input.prepNoYieldLaunches;
+        input.prepNoYieldLaunches +
+        fuelingLaunches;
       const launchEffortSeconds = VIRTUE_LAUNCH_EFFORT_SECONDS * launches;
       if (tankRun?.objective === "minShift") {
         return (
@@ -9080,6 +9263,11 @@ async function planForNewLaunches(
           tankRun.startMode === "ideal" ? "an ideal first fill (not counted toward the cap)" : "what is in the tank now"
         }. Humility is fueled live on its farm and never counted.`
       );
+      if (tankRun.fuelingLaunch) {
+        notes.push(
+          `Your partly fueled ${shipDisplayName(tankRun.fuelingLaunch.ship)} launches first, at its current ${tankRun.fuelingLaunch.level} stars and with the target it was fueled for; only the fuel it still lacks comes from the tank.`
+        );
+      }
     } else if (objectiveMode === "virtueFuel") {
       notes.push(
         `Path of Virtue objective optimizes non-Humility fuel versus mission time; the fuel end keeps at least ${Math.round(
@@ -9211,7 +9399,7 @@ async function planForNewLaunches(
     let virtueTanks: VirtueTankPlannerResult | undefined;
     let dubcap: DubcapPlan | undefined;
     const baseUnits = tankRun || plannerOptions.includeDubcap ? buildVirtueTankUnits({
-      actions: outputActions, missionRows, actionKeyByRowKey, prepSteps: outputPrepSteps,
+      actions: outputActions, missionRows, actionKeyByRowKey, prepSteps: outputPrepSteps, fuelingLaunch: tankRun?.fuelingLaunch,
     }) : [];
     const eventUnits = plannerOptions.includeDubcap ? buildDubcapUnits(
       baseUnits, shown.allocation ?? { lanes: [[], [], []] }, actionKeyByRowKey, Boolean(tankRun)
@@ -9291,7 +9479,12 @@ async function planForNewLaunches(
     // Tank mode also counts prep launches with no useful drops: they burn fuel too.
     const outputFuelCost = virtueTanks
       ? virtueTanks.units.reduce(
-          (sum, unit) => sum + unit.launches * getVirtueFuelPerLaunch(unit.ship, unit.durationType),
+          (sum, unit) =>
+            sum +
+            unit.launches *
+              (unit.fuelPerLaunch
+                ? VIRTUE_REFILL_ROUTE_ORDER.reduce((total, egg) => total + Math.max(0, unit.fuelPerLaunch![egg] || 0), 0)
+                : getVirtueFuelPerLaunch(unit.ship, unit.durationType)),
           0
         )
       : missionFuelCost(outputActions, outputUnified.missionCounts);
@@ -9316,7 +9509,7 @@ async function planForNewLaunches(
       targetBreakdown,
       targetBreakdowns,
       progression: {
-        prepHours: dubcap ? scheduleDubcapPrep(baseUnits.filter((unit) => unit.isPrep)).makespanSeconds / 3600 : prepHours,
+        prepHours: dubcap ? scheduleDubcapPrep(baseUnits.filter((unit) => unit.isPrep && !unit.preFueled)).makespanSeconds / 3600 : prepHours,
         prepLaunches: compactedPrepLaunches,
         projectedShipLevels: progressionShipRows(projectedShipLevels),
       },

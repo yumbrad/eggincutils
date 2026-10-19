@@ -1,3 +1,5 @@
+import path from "path";
+import protobuf from "protobufjs";
 import { describe, expect, it } from "vitest";
 
 import { playerProfileSchema } from "./api-schemas";
@@ -10,6 +12,7 @@ import {
   parseCraftCounts,
   parseInventory,
   parseMissions,
+  parseVirtueFuelingShip,
   parseVirtueTank,
 } from "./profile";
 
@@ -388,6 +391,71 @@ describe("parseVirtueTank", () => {
     expect(parsed.virtueTank).toEqual(tank);
     expect(parsed.shinyIngredientCount).toBe(2);
     expect(parsed.inFlightMissions).toEqual(demo.inFlightMissions);
+  });
+});
+
+describe("parseVirtueFuelingShip", () => {
+  const T = 1e12;
+  const afxIds = { PUZZLE_CUBE: 1, BOOK_OF_BASAN: 5 };
+
+  it("reads a fueling mission off the wire, as the profile fetch decodes it", async () => {
+    const root = await protobuf.load(path.join(process.cwd(), "data", "ei.proto"));
+    const MissionInfo = root.lookupType("ei.MissionInfo");
+    const encoded = MissionInfo.encode(
+      MissionInfo.fromObject({
+        ship: "HENERPRISE",
+        durationType: "EPIC",
+        status: "FUELING",
+        level: 6,
+        targetArtifact: "BOOK_OF_BASAN",
+        fuel: [
+          { egg: "CURIOSITY", amount: 12 * T },
+          { egg: "KINDNESS", amount: 10 * T },
+          { egg: "HUMILITY", amount: 3 * T },
+        ],
+      })
+    ).finish();
+    const sparse = MissionInfo.toObject(MissionInfo.decode(encoded), { enums: String, defaults: false });
+
+    expect(parseVirtueFuelingShip(sparse, afxIds)).toEqual({
+      ship: "HENERPRISE",
+      durationType: "EPIC",
+      targetAfxId: 5,
+      // Humility comes straight from its farm and is left out.
+      loaded: { curiosity: 12 * T, kindness: 10 * T },
+    });
+  });
+
+  it("reads absent fields as their proto zero values", () => {
+    // A Chicken One SHORT burns no tank fuel, so nothing in it commits the tank.
+    expect(parseVirtueFuelingShip({ fuel: [{ egg: "INTEGRITY", amount: 1e6 }] }, afxIds)).toBeNull();
+    // An absent target is an untargeted launch, not the enum's zero value.
+    expect(
+      parseVirtueFuelingShip({ ship: "BCR", durationType: "LONG", fuel: [{ egg: "INTEGRITY", amount: 5e6 }] }, afxIds)
+    ).toEqual({ ship: "BCR", durationType: "LONG", targetAfxId: null, loaded: { integrity: 5e6 } });
+  });
+
+  it("ignores a ship with nothing in it yet, a launched one, and none at all", () => {
+    expect(parseVirtueFuelingShip({ ship: "HENERPRISE", durationType: "EPIC", fuel: [] }, afxIds)).toBeNull();
+    expect(
+      parseVirtueFuelingShip({ ship: "HENERPRISE", durationType: "EPIC", fuel: [{ egg: "HUMILITY", amount: 3 * T }] }, afxIds)
+    ).toBeNull();
+    expect(
+      parseVirtueFuelingShip(
+        { ship: "HENERPRISE", durationType: "EPIC", status: "EXPLORING", fuel: [{ egg: "CURIOSITY", amount: T }] },
+        afxIds
+      )
+    ).toBeNull();
+    expect(parseVirtueFuelingShip(null, afxIds)).toBeNull();
+  });
+
+  it("rides along on the tank snapshot through profile validation", () => {
+    const fuelingShip = { ship: "HENERPRISE", durationType: "EPIC", targetAfxId: 5, loaded: { curiosity: 22 * T } };
+    const tank = parseVirtueTank({ virtue: { afx: null } }, fuelingShip);
+    const parsed = playerProfileSchema.parse({ ...createDemoProfile("virtue"), virtueTank: tank });
+
+    expect(parsed.virtueTank?.fuelingShip).toEqual(fuelingShip);
+    expect(parseVirtueTank({ virtue: { afx: null } }, null)).not.toHaveProperty("fuelingShip");
   });
 });
 

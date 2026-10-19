@@ -1262,3 +1262,119 @@ describe("Path of Virtue tank mode", () => {
     SOLVER_TIMEOUT_MS
   );
 });
+
+describe("Path of Virtue tank mode with a partly fueled ship", () => {
+  // Henerprise EPIC burns C25 K25 R20. This one already holds C25 K25, so it
+  // needs only R20 more; the tank's C60 K60 R60 then fits two more launches.
+  // Its drops count like an in-air ship's: owed to the player, so a goal of
+  // N more copies still asks for N launches beyond it.
+  const fuelingShip = {
+    ship: "HENERPRISE",
+    durationType: "EPIC",
+    targetAfxId: null,
+    loaded: { curiosity: 25 * T, kindness: 25 * T },
+  };
+  const tank = (startMode: "current" | "ideal") =>
+    tankOptions({
+      shiftCap: 0,
+      startMode,
+      currentContents: { curiosity: 60 * T, kindness: 60 * T, resilience: 60 * T },
+      fuelingShip,
+    });
+  const totalUsed = (result: PlannerResult) =>
+    result.virtueTanks!.pack.tanks.reduce(
+      (sum, packed) => sum + VIRTUE_FUEL_DISPLAY.reduce((eggs, fuel) => eggs + (packed.used[fuel.key] || 0), 0),
+      0
+    );
+
+  it(
+    "launches it first from the current tank, drawing only what it still lacks",
+    async () => {
+      const { result } = await planTank([HENERPRISE_EPIC], 2, tank("current"));
+      const tanks = result.virtueTanks!;
+      expect(result.unmetItems).toEqual([]);
+      expect(plannedLaunches(result, "HENERPRISE")).toBe(2);
+      expect(tanks.pack.feasible).toBe(true);
+      expect(tanks.pack.totalShifts).toBe(0);
+      const fueling = tanks.units.find((unit) => unit.preFueled);
+      expect(fueling).toMatchObject({
+        ship: "HENERPRISE",
+        durationType: "EPIC",
+        launches: 1,
+        isPrep: true,
+        fuelPerLaunch: { resilience: 20 * T },
+        preFueled: { curiosity: 25 * T, kindness: 25 * T },
+        targetAfxId: null,
+      });
+      expect(tanks.pack.launchOrder[0]).toMatchObject({ unitId: fueling!.id, tankIndex: 0, launches: 1 });
+      expect(tanks.pack.tanks[0].used).toMatchObject({ curiosity: 50 * T, kindness: 50 * T, resilience: 60 * T });
+      // Three launches over three slots: everything returns after one Henerprise EPIC.
+      expect(result.expectedHours).toBeCloseTo(HENERPRISE_EPIC_SECONDS / 3600, 6);
+      expect(result.fuelCost).toBe(plannedFuel(result) + 20 * T);
+      expect(result.notes).toContain(
+        "Your partly fueled Henerprise launches first, at its current 0 stars and with the target it was fueled for; only the fuel it still lacks comes from the tank."
+      );
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
+    "credits its drops toward the ingredients a goal needs",
+    async () => {
+      // A Puzzle Cube T2 takes three T1 cubes. The ship brings one, and the
+      // tank fits two more launches beside it; without the ship, three
+      // launches need C75 K75 from a tank holding C60 K60.
+      const plan = (tankOptionsFor: VirtueTankPlannerOptions) =>
+        planForTarget(profileFor([HENERPRISE_EPIC]), "puzzle-cube-2", 1, 1, {
+          objectiveMode: "virtueFuel",
+          virtueTank: tankOptionsFor,
+          lootData: lootFor([HENERPRISE_EPIC]),
+          solverFn: solveWithHighs,
+        });
+      const withShip = await plan(tank("current"));
+      expect(withShip.unmetItems).toEqual([]);
+      expect(plannedLaunches(withShip, "HENERPRISE")).toBe(2);
+
+      const { fuelingShip: _ship, ...withoutShipTank } = tank("current");
+      const withoutShip = await plan(withoutShipTank);
+      expect(withoutShip.virtueTanks!.goalsUnmet).toBe(true);
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
+    "fills what it still lacks into an ideal first tank",
+    async () => {
+      const { result } = await planTank([HENERPRISE_EPIC], 6, tank("ideal"));
+      const tanks = result.virtueTanks!;
+      expect(result.unmetItems).toEqual([]);
+      expect(plannedLaunches(result, "HENERPRISE")).toBe(6);
+      const fueling = tanks.units.find((unit) => unit.preFueled)!;
+      expect(tanks.pack.launchOrder[0]).toMatchObject({ unitId: fueling.id, tankIndex: 0 });
+      expect(tanks.pack.tanks).toHaveLength(1);
+      expect(tanks.pack.tanks[0].used).toMatchObject({ curiosity: 150 * T, kindness: 150 * T, resilience: 140 * T });
+      expect(tanks.pack.tanks[0].idealFill?.fillTo.resilience).toBeGreaterThanOrEqual(140 * T);
+      expect(totalUsed(result)).toBe(6 * 70 * T + 20 * T);
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
+    "waits for a refill when the tank cannot finish fueling it",
+    async () => {
+      // No Resilience in the tank for the ship's R20: nothing launches before the refill.
+      const { result } = await planTank([HENERPRISE_EPIC], 1, {
+        ...tank("current"),
+        shiftCap: 4,
+        currentContents: { curiosity: 60 * T, kindness: 60 * T },
+      });
+      const tanks = result.virtueTanks!;
+      expect(result.unmetItems).toEqual([]);
+      expect(plannedLaunches(result, "HENERPRISE")).toBe(1);
+      expect(tanks.pack.tanks[0].launches).toEqual([]);
+      expect(tanks.pack.launchOrder[0]).toMatchObject({ tankIndex: 1, unitId: tanks.units.find((unit) => unit.preFueled)!.id });
+      expect(tanks.pack.tanks[1].refill?.route).toEqual(["resilience", "humility"]);
+    },
+    SOLVER_TIMEOUT_MS
+  );
+});

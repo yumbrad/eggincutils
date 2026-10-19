@@ -60,6 +60,7 @@ import {
   virtueShiftsCostSoulEggs,
   VIRTUE_FUEL_DISPLAY,
   VIRTUE_HUMILITY_DISPLAY,
+  type VirtueFuelingShip,
   type VirtueFuelKey,
   type VirtueTankEggKey,
   type VirtueTankSnapshot,
@@ -1780,6 +1781,8 @@ function buildVirtueTankPlanView(
     const prepReason = prepReasonByShape.get(`${unit.ship}|${unit.durationType}`);
     const subtitle = mission
       ? `${afxIdToTargetFamilyName(mission.targetAfxId)}${mission.dubcap ? " · dubcap ×2" : ""}`
+      : unit.preFueled
+        ? `Partly fueled · ${afxIdToTargetFamilyName(unit.targetAfxId ?? 10000)} · add the rest and launch`
       : unit.isPrep && prepReason
         ? prepReasonLabel(prepReason)
         : unit.targetAfxId != null
@@ -2272,7 +2275,29 @@ function VirtueTankReadout({
           );
         })}
       </ul>
+      {tank.fuelingShip && <VirtueFuelingShipNote ship={tank.fuelingShip} capacity={capacity} />}
     </div>
+  );
+}
+
+/** The ship the player is partway through fueling: plans launch it first, with what it holds. */
+function VirtueFuelingShipNote({ ship, capacity }: { ship: VirtueFuelingShip; capacity: number }) {
+  const loaded = VIRTUE_FUEL_DISPLAY.filter((fuel) => (ship.loaded[fuel.key] || 0) > VIRTUE_FUEL_NOISE);
+  return (
+    <p className={styles.tankFuelingNote}>
+      <span className={styles.fieldLabel}>Partly fueled</span>{" "}
+      <b>
+        {titleCaseShip(ship.ship)} {durationTypeLabel(ship.durationType)}
+      </b>{" "}
+      for {ship.targetAfxId != null ? afxIdToTargetFamilyName(ship.targetAfxId) : "no target"}, holding{" "}
+      {loaded.map((fuel, index) => (
+        <span key={fuel.key}>
+          {index > 0 ? ", " : ""}
+          {formatTankFuel(ship.loaded[fuel.key] || 0, capacity)} {fuel.label}
+        </span>
+      ))}
+      . Plans launch it first and only fuel what it still lacks.
+    </p>
   );
 }
 
@@ -3430,12 +3455,21 @@ function VirtueTankMissionRows({
               return (
                 <tr key={`${tank.index}:${row.key}`}>
                   <td>
-                    <span
-                      className={styles.prepBadge}
-                      title="Ship-leveling launch with no target drops; see the Horizon progression plan"
-                    >
-                      Prep
-                    </span>
+                    {unit?.preFueled ? (
+                      <span
+                        className={styles.prepBadge}
+                        title="The ship you are partway through fueling: finish fueling it and launch it first"
+                      >
+                        Fueled
+                      </span>
+                    ) : (
+                      <span
+                        className={styles.prepBadge}
+                        title="Ship-leveling launch with no target drops; see the Horizon progression plan"
+                      >
+                        Prep
+                      </span>
+                    )}
                     {unit ? titleCaseShip(unit.ship) : row.key}
                     <br />
                     <span className="muted">{unit ? durationTypeWithLevelLabel(unit.durationType, unit.level) : ""}</span>

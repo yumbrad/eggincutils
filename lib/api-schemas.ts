@@ -249,6 +249,19 @@ export const virtueTankSnapshotSchema = z.object({
   soulEggs: nonNegativeFiniteSchema,
   currentEgg: z.enum(VIRTUE_TANK_EGGS).nullable(),
   backupTimeSeconds: nonNegativeFiniteSchema.nullable(),
+  fuelingShip: z
+    .object({
+      ship: z.string().min(1),
+      durationType: z.string().min(1),
+      targetAfxId: nonNegativeIntSchema.nullable(),
+      loaded: z.object({
+        curiosity: nonNegativeFiniteSchema.optional(),
+        integrity: nonNegativeFiniteSchema.optional(),
+        kindness: nonNegativeFiniteSchema.optional(),
+        resilience: nonNegativeFiniteSchema.optional(),
+      }),
+    })
+    .optional(),
 });
 
 export const playerProfileSchema = z.object({
@@ -501,6 +514,7 @@ const virtueTankPlanUnitSchema = z.object({
   prepOrder: z.number().finite().optional(),
   launchOrder: nonNegativeFiniteSchema.optional(),
   fuelPerLaunch: virtueFuelVectorSchema.optional(),
+  preFueled: virtueFuelVectorSchema.optional(),
   missionRowKey: z.string().min(1).optional(),
   targetAfxId: z.number().int().nullable().optional(),
 });

@@ -8,7 +8,10 @@ import {
   parseVirtueTankFuels,
   parseVirtueTankLimits,
   virtueTankCapacityForLevel,
+  getVirtueFuelConfig,
   VIRTUE_TANK_CAPACITIES,
+  type VirtueFuelConfig,
+  type VirtueFuelingShip,
   type VirtueTankEggKey,
   type VirtueTankSnapshot,
 } from "./virtue-fuel";
@@ -311,7 +314,13 @@ export async function getPlayerProfile(
         missionOptions,
         inFlightMissions,
         shinyIngredientCount,
-        virtueTank: parseVirtueTank(data.backup),
+        virtueTank: parseVirtueTank(
+          data.backup,
+          parseVirtueFuelingShip(
+            sparseVirtueFuelingMission(decodedResponse, root),
+            root.lookupEnum("ei.ArtifactSpec.Name").values
+          )
+        ),
       };
     } catch (error) {
       lastError = error;
@@ -408,7 +417,10 @@ function finiteNonNegative(value: number | null | undefined): number {
  * decodes as 0. The virtue eggs' contents and fill caps do live in
  * `virtue.afx`.
  */
-export function parseVirtueTank(backup: BackupVirtueTankSource | null | undefined): VirtueTankSnapshot | undefined {
+export function parseVirtueTank(
+  backup: BackupVirtueTankSource | null | undefined,
+  fuelingShip?: VirtueFuelingShip | null
+): VirtueTankSnapshot | undefined {
   const virtue = backup?.virtue;
   if (!virtue) {
     return undefined;
@@ -428,7 +440,50 @@ export function parseVirtueTank(backup: BackupVirtueTankSource | null | undefine
     soulEggs: finiteNonNegative(backup.game?.soulEggsD),
     currentEgg: currentVirtueEgg(backup.farms),
     backupTimeSeconds: approxTime > 0 ? approxTime : null,
+    ...(fuelingShip ? { fuelingShip } : {}),
   };
+}
+
+/** A fueling mission decoded sparsely (see SparseMissionInfo), with the fuel already in it. */
+type SparseFuelingMission = SparseMissionInfo & {
+  fuel?: Array<{ egg?: string; amount?: number }>;
+};
+
+/**
+ * The virtue ship being fueled, or null when there is none or nothing is in it
+ * yet. Decoded sparsely, so absent fields are their proto zero values: ship
+ * CHICKEN_ONE, duration SHORT, status FUELING; an absent target means none.
+ * A ship that holds no C/I/K/R commits nothing the planner has to honor.
+ */
+export function parseVirtueFuelingShip(
+  item: SparseFuelingMission | null | undefined,
+  artifactAfxIdByName: Record<string, number>
+): VirtueFuelingShip | null {
+  if (!item) {
+    return null;
+  }
+  const status = item.status ?? "FUELING";
+  if (status !== "FUELING" && status !== "PREPARE_TO_LAUNCH") {
+    return null;
+  }
+  const ship = item.ship ?? "CHICKEN_ONE";
+  const durationType = item.durationType ?? "SHORT";
+  if (Object.keys(getVirtueFuelConfig(ship, durationType)).length === 0) {
+    return null;
+  }
+  const loaded: VirtueFuelConfig = {};
+  for (const fuel of item.fuel || []) {
+    const egg = virtueEggForEggType(fuel.egg);
+    const amount = finiteNonNegative(fuel.amount);
+    if (egg && egg !== "humility" && amount > 0) {
+      loaded[egg] = (loaded[egg] || 0) + amount;
+    }
+  }
+  if (Object.keys(loaded).length === 0) {
+    return null;
+  }
+  const targetAfxId = item.targetArtifact != null ? artifactAfxIdByName[item.targetArtifact] : undefined;
+  return { ship, durationType, targetAfxId: typeof targetAfxId === "number" ? targetAfxId : null, loaded };
 }
 
 async function getProtoRoot(): Promise<protobuf.Root> {
@@ -688,6 +743,18 @@ function sparseMissionInfos(decodedResponse: protobuf.Message, root: protobuf.Ro
   return raw.map(
     (mission) => missionInfoType.toObject(mission, { enums: String, defaults: false }) as SparseMissionInfo
   );
+}
+
+function sparseVirtueFuelingMission(decodedResponse: protobuf.Message, root: protobuf.Root): SparseFuelingMission | null {
+  const raw = (
+    decodedResponse as unknown as {
+      backup?: { artifactsDb?: { virtueAfxDb?: { fuelingMission?: protobuf.Message | null } } };
+    }
+  ).backup?.artifactsDb?.virtueAfxDb?.fuelingMission;
+  if (!raw) {
+    return null;
+  }
+  return root.lookupType("ei.MissionInfo").toObject(raw, { enums: String, defaults: false }) as SparseFuelingMission;
 }
 
 export function formatSpecName(spec?: { name?: string; level?: string | number }): string | null {
