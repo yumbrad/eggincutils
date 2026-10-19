@@ -61,6 +61,14 @@ Zero-G 10) before the planner can choose it, as wasmegg's optimizer asks.
   - Shiny odds tooltips show the chance from crafting alone and from drops alone, and say when crafts
 can no longer come out exactly rare.
 
+- **Include one dubcap** now plans into a dubcap that is already running.
+  - The event's end time, multiplier and Ultra-only flag come from the game's event calendar (the same
+feed wasmegg's events page uses); Ultra-only events count only for Ultra subscribers.
+  - Free slots launch right away; a slot with a ship in the air (or prep) joins when it returns, and
+every event launch leaves at least five minutes before the event ends.
+  - Ships already in the air during the event keep the doubled drops recorded at launch.
+  - With no event running, plans use one fresh 48-hour event as before.
+
 - Added **Include one dubcap**: optimize launches in one fresh 48-hour event with exactly double
 the drops, including shorter missions where they help your goals.
   - Shows launch and return times for all three slots, with a five-minute launch margin.

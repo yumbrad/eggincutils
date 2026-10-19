@@ -50,6 +50,7 @@ import { planForTarget, computeMonolithicPaths, type PlannerProgressEvent } from
 import { createDemoProfile, isBlankEid } from "../../lib/demo-profile";
 import type { LootJson } from "../../lib/loot-data";
 import type { DubcapPlan } from "../../lib/dubcap";
+import type { LiveDubcapEvent } from "../../lib/dubcap-events";
 import {
   formatVirtueFuelQuantity,
   formatVirtueTankLimit,
@@ -148,6 +149,10 @@ type ProfileSnapshot = {
   virtueTank?: VirtueTankSnapshot;
   /** The tank the plan was solved from: `virtueTank` with the card's hand edits, when there were any. */
   plannedVirtueTank?: VirtueTankSnapshot;
+  /** The dubcap running when the profile was read. */
+  liveDubcap?: LiveDubcapEvent;
+  /** Client-side: when that dubcap ends, from when the page read the profile. */
+  liveDubcapEndsAtMs?: number;
 };
 
 type PlannerSourceFilters = {
@@ -1286,7 +1291,7 @@ function buildDubcapTimeline(plan: PlanResponse["plan"]): MissionTimeline | null
       segment = {
         id,
         label: `${titleCaseShip(block.ship)} ${durationTypeWithLevelLabel(block.durationType, block.level)}`,
-        subtitle: `${block.isPrep ? "Prep" : afxIdToTargetFamilyName(block.targetAfxId ?? 10000)}${block.dubcap ? " · dubcap ×2" : ""}`,
+        subtitle: `${block.isPrep ? "Prep" : afxIdToTargetFamilyName(block.targetAfxId ?? 10000)}${block.dubcap ? ` · dubcap ×${event.multiplier}` : ""}`,
         phase,
         color: colors.get(colorKey) ?? prepTimelineColor(colorKey),
         launches: 0,
@@ -1344,18 +1349,33 @@ function eventClock(seconds: number): string {
   return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}`;
 }
 
-/** The event's launches per slot, timed from the event's start. `tankLabels` names the fuel tanks in Path of Virtue. */
+/**
+ * The event's launches per slot, timed from the event's start (a fresh event)
+ * or from when the profile was read (a live one). `tankLabels` names the fuel
+ * tanks in Path of Virtue.
+ */
 function DubcapTimeline({ event, tankLabels }: { event: DubcapPlan; tankLabels?: string[] }) {
+  const drops = event.multiplier === 2 ? "double" : `${event.multiplier}×`;
+  // A live event's clock counts from now, so it reads "+h:mm".
+  const clock = (seconds: number) => `${event.live ? "+" : ""}${eventClock(seconds)}`;
   return (
     <section className={styles.timelinePanel}>
-      <h3 style={{ marginTop: 0 }}>Dubcap launch window</h3>
-      <p className="muted">
-        {pluralize(event.launches, "launch", "launches")} with double drops. Times are from the event&apos;s start; last
-        launch by {eventClock(event.windowSeconds - event.launchMarginSeconds)}.
-        {event.startSeconds > 0 && (
-          <> Prep and current missions take {formatDurationFromHours(event.startSeconds / 3600)} first.</>
-        )}
-      </p>
+      <h3 style={{ marginTop: 0 }}>{event.live ? "Live dubcap launches" : "Dubcap launch window"}</h3>
+      {event.live ? (
+        <p className="muted">
+          {pluralize(event.launches, "launch", "launches")} with {drops} drops in the event running now. Times are from
+          when your profile was read; the event ends at {clock(event.windowSeconds)}, so the last launch leaves by{" "}
+          {clock(event.windowSeconds - event.launchMarginSeconds)}. Each slot joins once its ship in the air returns.
+        </p>
+      ) : (
+        <p className="muted">
+          {pluralize(event.launches, "launch", "launches")} with {drops} drops. Times are from the event&apos;s start; last
+          launch by {eventClock(event.windowSeconds - event.launchMarginSeconds)}.
+          {event.startSeconds > 0 && (
+            <> Prep and current missions take {formatDurationFromHours(event.startSeconds / 3600)} first.</>
+          )}
+        </p>
+      )}
       {event.launches > 0 ? (
         <div className={styles.dubcapLanes}>
           {event.lanes.map((lane, index) => (
@@ -1369,7 +1389,7 @@ function DubcapTimeline({ event, tankLabels }: { event: DubcapPlan; tankLabels?:
                   return (
                     <tr key={`${block.missionRowKey}:${blockIndex}`}>
                       <td className={styles.dubcapClock}>
-                        {eventClock(block.startSeconds)}{block.launches > 1 && <>–{eventClock(lastStart)}</>}
+                        {clock(block.startSeconds)}{block.launches > 1 && <>–{clock(lastStart)}</>}
                       </td>
                       <td>
                         {block.launches > 1 && <>{block.launches}× </>}{titleCaseShip(block.ship)}<br />
@@ -1379,7 +1399,7 @@ function DubcapTimeline({ event, tankLabels }: { event: DubcapPlan; tankLabels?:
                           <div className="muted">{tankLabels?.[block.tankIndex] ?? `Tank ${block.tankIndex + 1}`}</div>
                         )}
                       </td>
-                      <td className={styles.dubcapClock}>{eventClock(block.endSeconds)}</td>
+                      <td className={styles.dubcapClock}>{clock(block.endSeconds)}</td>
                     </tr>
                   );
                 })}</tbody>
@@ -1787,7 +1807,7 @@ function buildVirtueTankPlanView(
     const mission = missionIndex != null ? plan.missions[missionIndex] : null;
     const prepReason = prepReasonByShape.get(`${unit.ship}|${unit.durationType}`);
     const subtitle = mission
-      ? `${afxIdToTargetFamilyName(mission.targetAfxId)}${mission.dubcap ? " · dubcap ×2" : ""}`
+      ? `${afxIdToTargetFamilyName(mission.targetAfxId)}${mission.dubcap ? ` · dubcap ×${plan.dubcap?.multiplier ?? 2}` : ""}`
       : unit.preFueled
         ? `Partly fueled · ${afxIdToTargetFamilyName(unit.targetAfxId ?? 10000)} · add the rest and launch`
       : unit.isPrep && prepReason
@@ -3304,7 +3324,7 @@ function renderMissionTableRow(
             In air
           </span>
         )}
-        {mission.dubcap && <span className={styles.dubcapBadge}>dubcap ×2</span>}
+        {mission.dubcap && <span className={styles.dubcapBadge}>dubcap</span>}
         {titleCaseShip(mission.ship)}<br />
         <span className="muted">{durationTypeWithLevelLabel(mission.durationType, mission.level)}</span>
       </td>
@@ -3758,7 +3778,9 @@ async function fetchProfileSnapshot(eid: string, filters: PlannerSourceFilters):
           : "";
     throw new Error(detailText || payload.error || "profile refresh failed");
   }
-  return payload;
+  return payload.liveDubcap
+    ? { ...payload, liveDubcapEndsAtMs: Date.now() + payload.liveDubcap.secondsRemaining * 1000 }
+    : payload;
 }
 
 function buildReplanDeltas(previous: ProfileSnapshot, current: ProfileSnapshot): {
@@ -3935,6 +3957,11 @@ export default function MissionCraftPlannerPage() {
   const [profileOverrides, setProfileOverrides] = useProfileOverrides(eid);
   // The backup's own values (before any customizing), for the customize dialog.
   const [fetchedProfileSummary, setFetchedProfileSummary] = useState<{ eid: string; summary: ProfileSummary } | null>(null);
+  // The live dubcap the last profile read for this EID showed, while it lasts.
+  const knownLiveDubcap =
+    profileSnapshot?.eid === trimmedEid && profileSnapshot.liveDubcap && (profileSnapshot.liveDubcapEndsAtMs ?? 0) > Date.now()
+      ? { ...profileSnapshot.liveDubcap, endsAtMs: profileSnapshot.liveDubcapEndsAtMs! }
+      : null;
   const isDemoMode = trimmedEid.length === 0;
   const demoProfileSummary = useMemo(
     () => (isDemoMode ? summarizeProfile(createDemoProfile(inventorySource)) : null),
@@ -6182,8 +6209,19 @@ export default function MissionCraftPlannerPage() {
                 <span>Include one dubcap</span>
               </label>
               <p className={styles.dubcapHint} id="dubcapHint">
-                One fresh 48-hour window with double drops, once prep and current missions return. Calendar
-                waiting is excluded.
+                {knownLiveDubcap ? (
+                  <>
+                    A {knownLiveDubcap.multiplier === 2 ? "double" : `${knownLiveDubcap.multiplier}×`} capacity event
+                    {knownLiveDubcap.ultra ? " (Ultra)" : ""} is running until{" "}
+                    {new Date(knownLiveDubcap.endsAtMs).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}.
+                    Plans launch into the time left as each slot frees up.
+                  </>
+                ) : (
+                  <>
+                    Uses the dubcap running when you build the plan, if there is one. Otherwise one fresh 48-hour window
+                    with double drops, once prep and current missions return; calendar waiting is excluded.
+                  </>
+                )}
               </p>
               <label className={styles.customCheck} htmlFor="fastMode">
                 <input

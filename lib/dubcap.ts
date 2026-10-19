@@ -3,11 +3,55 @@ import type { HighsSolveResult } from "./highs";
 export const DUBCAP_WINDOW_SECONDS = 48 * 3600;
 export const DUBCAP_LAUNCH_MARGIN_SECONDS = 5 * 60;
 
+/**
+ * The event a plan's dubcap launches fly in. A fresh event starts once prep
+ * and current missions return, and every slot gets its whole window. A live
+ * event is running now: its zero is now, it ends `windowSeconds` from now,
+ * and each slot opens when its in-air ship (and any prep) returns.
+ */
+export type DubcapWindow = {
+  windowSeconds: number;
+  multiplier: number;
+  live: boolean;
+  /** When each slot is free for the event, from the window's zero. */
+  laneStartSeconds: number[];
+};
+
+export const FRESH_DUBCAP_WINDOW: DubcapWindow = {
+  windowSeconds: DUBCAP_WINDOW_SECONDS,
+  multiplier: 2,
+  live: false,
+  laneStartSeconds: [0, 0, 0],
+};
+
+/** Seconds of a slot's event before its last launch has to leave (negative: none can). */
+export function dubcapLaneCutoffSeconds(window: DubcapWindow, lane: number): number {
+  return window.windowSeconds - DUBCAP_LAUNCH_MARGIN_SECONDS - (window.laneStartSeconds[lane] || 0);
+}
+
+/** A live event's window, or null when too little of it is left for a launch. */
+export function liveDubcapWindow(
+  event: { secondsRemaining: number; multiplier: number } | null | undefined,
+  laneStartSeconds: number[] = [0, 0, 0]
+): DubcapWindow | null {
+  if (!event || !(event.multiplier > 1) || !(event.secondsRemaining > DUBCAP_LAUNCH_MARGIN_SECONDS)) {
+    return null;
+  }
+  return {
+    windowSeconds: event.secondsRemaining,
+    multiplier: event.multiplier,
+    live: true,
+    laneStartSeconds: [0, 1, 2].map((lane) => Math.max(0, laneStartSeconds[lane] || 0)),
+  };
+}
+
 export type DubcapAction = {
   key: string;
   optionKey: string;
   durationSeconds: number;
   dubcap?: boolean;
+  /** Event copies carry their event (the same for every copy in a solve). */
+  dubcapWindow?: DubcapWindow;
 };
 
 export type DubcapAllocationBlock = {
@@ -17,7 +61,7 @@ export type DubcapAllocationBlock = {
   endSeconds: number;
 };
 
-export type DubcapAllocation = { lanes: DubcapAllocationBlock[][] };
+export type DubcapAllocation = { lanes: DubcapAllocationBlock[][]; window?: DubcapWindow };
 
 export type DubcapTimelineBlock = Omit<DubcapAllocationBlock, "actionKey"> & {
   missionRowKey: string;
@@ -36,16 +80,20 @@ export type DubcapScheduleBlock = Omit<DubcapTimelineBlock, "missionRowKey" | "t
 };
 
 export type DubcapPlan = {
+  /** A fresh event's length, or what was left of a live one when the profile was read. */
   windowSeconds: number;
   launchMarginSeconds: number;
-  /** From the plan's start until prep and existing in-air missions have returned. */
+  multiplier: number;
+  /** A live event: times are from when the profile was read, and slots open as their ships return. */
+  live: boolean;
+  /** Fresh events: from the plan's start until prep and existing in-air missions have returned. Live: 0. */
   startSeconds: number;
   launches: number;
   /** Full plan completion, including prep, this event and subsequent ordinary launches. */
   makespanSeconds: number;
   /** Same launch plan timed without current in-air ships holding slots. */
   missionSeconds: number;
-  /** Launch and return times relative to the event start, one lane per ship slot. */
+  /** Launch and return times from the event's start (fresh) or now (live), one lane per ship slot. */
   lanes: DubcapTimelineBlock[][];
   /** Actual plan schedule, including prep and ordinary launches, from now. */
   fullLanes: DubcapScheduleBlock[][];
@@ -78,6 +126,25 @@ export function scheduleDubcapPrep(
   return { makespanSeconds: Math.max(...free), lanes };
 }
 
+/**
+ * When each slot is free for a live event: once its in-air ship returns and,
+ * when the plan has prep, once every prep launch has returned (event drops
+ * use post-prep stars). The partly fueled ship (`preFueled`) only holds the
+ * slot it flies from. finishDubcapSchedule replays the same prep, so a solve
+ * and its schedule agree on these.
+ */
+export function liveDubcapLaneStarts(
+  prepUnits: Array<{ id: string; launches: number; durationSeconds: number; prepOrder?: number; preFueled?: unknown }>,
+  inAirLaneFreeSeconds: number[] = []
+): number[] {
+  const prep = scheduleDubcapPrep(prepUnits, inAirLaneFreeSeconds);
+  const fueled = new Set(prepUnits.filter((unit) => unit.preFueled).map((unit) => unit.id));
+  const prepEnd = Math.max(0, ...prep.lanes.flat().filter((block) => !fueled.has(block.actionKey)).map((block) => block.endSeconds));
+  return [0, 1, 2].map((lane) =>
+    Math.max(prepEnd, inAirLaneFreeSeconds[lane] || 0, prep.lanes[lane].at(-1)?.endSeconds ?? 0)
+  );
+}
+
 type DubcapGroup = {
   indexes: number[];
   seconds: number;
@@ -86,6 +153,7 @@ type DubcapGroup = {
 };
 
 export type DubcapModel = {
+  window: DubcapWindow;
   groups: DubcapGroup[];
   constraints: string[];
   bounds: string[];
@@ -104,10 +172,12 @@ const DUBCAP_ORDINARY_LAUNCH_BOUND = 100_000;
  * cutoff. Its final mission can return later: the event applies at launch.
  * Target choices share a physical ship/duration/level group's lane budget.
  *
- * `dbmk` (hours from event start) bounds the plan's finish as the schedule
- * builds it (scheduleAfterDubcap): ordinary launches start only once every
- * event lane has returned and the window has closed, so any ordinary launch
- * costs the rest of the 48 hours plus its share of three slots.
+ * `dbmk` (hours from the window's zero) bounds the plan's finish as the
+ * schedule builds it (scheduleAfterDubcap): ordinary launches start only once
+ * every event lane has returned and the window has closed, so any ordinary
+ * launch costs the rest of the window plus its share of three slots. A live
+ * event's slots start late by their in-air ships and prep, which shortens
+ * their budget.
  */
 export function buildDubcapModel(
   actions: DubcapAction[],
@@ -128,15 +198,16 @@ export function buildDubcapModel(
     prefixes: [0, 1, 2].map((lane) => `dbp_${lane}_${group}`),
     finals: [0, 1, 2].map((lane) => `dbf_${lane}_${group}`),
   }));
-  const cutoff = DUBCAP_WINDOW_SECONDS - DUBCAP_LAUNCH_MARGIN_SECONDS;
+  const window = actions.find((action) => action.dubcap && action.dubcapWindow)?.dubcapWindow ?? FRESH_DUBCAP_WINDOW;
+  const cutoffs = [0, 1, 2].map((lane) => dubcapLaneCutoffSeconds(window, lane));
   const constraints: string[] = [];
   const bounds: string[] = [];
   const integerVars: string[] = [];
   groups.forEach((group, index) => {
     constraints.push(`  db_count_${index}: ${group.indexes.map((i) => missionVars[i]).join(" + ")} - ${[...group.prefixes, ...group.finals].join(" - ")} = 0`);
     for (let lane = 0; lane < 3; lane += 1) {
-      bounds.push(`  0 <= ${group.prefixes[lane]} <= ${Math.floor(cutoff / group.seconds)}`);
-      bounds.push(`  0 <= ${group.finals[lane]} <= 1`);
+      bounds.push(`  0 <= ${group.prefixes[lane]} <= ${Math.floor(Math.max(0, cutoffs[lane]) / group.seconds)}`);
+      bounds.push(`  0 <= ${group.finals[lane]} <= ${cutoffs[lane] >= 0 ? 1 : 0}`);
       integerVars.push(group.prefixes[lane], group.finals[lane]);
     }
   });
@@ -149,18 +220,18 @@ export function buildDubcapModel(
     const ordinaryWork = ordinary.map(({ action, variable }) => `${action.durationSeconds / (3 * 3600)} ${variable}`);
     const prepWorkHours = prep.seconds / (3 * 3600);
     for (let lane = 0; lane < 3; lane += 1) {
-      constraints.push(`  db_time_${lane}: ${groups.map((group) => `${group.seconds / 3600} ${group.prefixes[lane]}`).join(" + ")} <= ${cutoff / 3600}`);
+      constraints.push(`  db_time_${lane}: ${groups.map((group) => `${group.seconds / 3600} ${group.prefixes[lane]}`).join(" + ")} <= ${Math.max(0, cutoffs[lane]) / 3600}`);
       constraints.push(`  db_last_${lane}: ${groups.map((group) => group.finals[lane]).join(" + ")} <= 1`);
       constraints.push(`  db_finish_${lane}: dbmk - ${[...groups.flatMap((group) => [
         `${group.seconds / 3600} ${group.prefixes[lane]}`, `${group.seconds / 3600} ${group.finals[lane]}`,
-      ]), ...ordinaryWork].join(" - ")} >= ${-prepWorkHours}`);
+      ]), ...ordinaryWork].join(" - ")} >= ${(window.laneStartSeconds[lane] || 0) / 3600 - prepWorkHours}`);
     }
     if (ordinary.length > 0) {
       constraints.push(`  db_any: ${ordinary.map(({ variable }) => variable).join(" + ")} - ${DUBCAP_ORDINARY_LAUNCH_BOUND} dbor <= ${prep.launches}`);
-      constraints.push(`  db_after: dbmk - ${DUBCAP_WINDOW_SECONDS / 3600} dbor - ${ordinaryWork.join(" - ")} >= ${-prepWorkHours}`);
+      constraints.push(`  db_after: dbmk - ${window.windowSeconds / 3600} dbor - ${ordinaryWork.join(" - ")} >= ${-prepWorkHours}`);
     }
   }
-  return { groups, constraints, bounds, integerVars };
+  return { window, groups, constraints, bounds, integerVars };
 }
 
 /** Assign the solver's target counts to its physical lane packing. */
@@ -177,7 +248,7 @@ export function readDubcapAllocation(
       const key = actions[index].key;
       const launches = Math.min(count, Math.max(0, left[key] || 0));
       if (launches > 0) {
-        const startSeconds = lanes[lane].at(-1)?.endSeconds ?? 0;
+        const startSeconds = lanes[lane].at(-1)?.endSeconds ?? (model.window.laneStartSeconds[lane] || 0);
         lanes[lane].push({ actionKey: key, launches, startSeconds, endSeconds: startSeconds + launches * group.seconds });
         left[key] -= launches;
         count -= launches;
@@ -204,17 +275,18 @@ export function readDubcapAllocation(
   for (const lane of lanes) {
     for (const block of lane) {
       const seconds = (block.endSeconds - block.startSeconds) / block.launches;
-      if (block.endSeconds - seconds > DUBCAP_WINDOW_SECONDS - DUBCAP_LAUNCH_MARGIN_SECONDS + 1e-6) {
+      if (block.endSeconds - seconds > model.window.windowSeconds - DUBCAP_LAUNCH_MARGIN_SECONDS + 1e-6) {
         throw new Error("A dubcap launch would miss the event cutoff.");
       }
     }
   }
-  return { lanes };
+  return { lanes, window: model.window };
 }
 
 /**
  * Continue after the reserved window and event returns, retaining lane
- * occupancy. `inOrder` keeps launch starts in the given order (fuel-tank
+ * occupancy. A fresh event's lanes shift to `startSeconds`; a live event's
+ * are already timed from now, and an empty slot opens at its lane start. `inOrder` keeps launch starts in the given order (fuel-tank
  * order), as scheduleVirtueLaunches does: a level-up wait on one ship must
  * not let a later tank's launch go first.
  */
@@ -224,11 +296,13 @@ export function scheduleAfterDubcap(
   startSeconds = 0,
   inOrder = false
 ): { makespanSeconds: number; lanes: Array<Array<DubcapAllocationBlock>> } {
+  const window = allocation.window ?? FRESH_DUBCAP_WINDOW;
+  const offset = window.live ? 0 : startSeconds;
   const lanes = allocation.lanes.map((lane) => lane.map((block) => ({
-    ...block, startSeconds: block.startSeconds + startSeconds, endSeconds: block.endSeconds + startSeconds,
+    ...block, startSeconds: block.startSeconds + offset, endSeconds: block.endSeconds + offset,
   })));
-  const free = lanes.map((lane) => lane.at(-1)?.endSeconds ?? startSeconds);
-  const eventReturns = Math.max(startSeconds + DUBCAP_WINDOW_SECONDS, ...free);
+  const free = lanes.map((lane, index) => lane.at(-1)?.endSeconds ?? (window.live ? Math.max(startSeconds, window.laneStartSeconds[index] || 0) : startSeconds));
+  const eventReturns = Math.max(offset + window.windowSeconds, ...free);
   const phaseByShape = new Map<string, { level: number; endSeconds: number; readySeconds: number }>();
   let previousStart = 0;
   for (const row of ordinary) {

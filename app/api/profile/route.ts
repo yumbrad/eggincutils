@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 
 import { formatZodIssues, playerProfileSchema, profileQuerySchema } from "../../../lib/api-schemas";
+import { withLiveDubcap } from "../../../lib/dubcap-events";
 import { getPlayerProfile } from "../../../lib/profile";
 
 export const runtime = "nodejs";
@@ -35,7 +36,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       },
       includeStoneFragments: parsedQuery.data.includeInventoryFragments,
     });
-    const validatedProfile = playerProfileSchema.safeParse(profile);
+    const validatedProfile = playerProfileSchema.safeParse(await withLiveDubcap(profile));
     if (!validatedProfile.success) {
       return new Response(
         JSON.stringify({

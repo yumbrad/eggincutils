@@ -3,6 +3,7 @@ import protobuf from "protobufjs";
 import path from "path";
 import zlib from "zlib";
 
+import type { LiveDubcapEvent } from "./dubcap-events";
 import { buildMissionOptions, computeShipLevels, MissionRecord, ShipLevelInfo } from "./ship-data";
 import {
   parseVirtueTankFuels,
@@ -40,6 +41,10 @@ export type PlayerProfile = {
   shinyIngredientCount?: number;
   /** Path of Virtue fuel tank and shift state; absent when the player has no virtue data. */
   virtueTank?: VirtueTankSnapshot;
+  /** An active Ultra subscription, which unlocks Ultra-only events. */
+  isUltra?: boolean;
+  /** The dubcap running when the profile was read, if any (withLiveDubcap). */
+  liveDubcap?: LiveDubcapEvent;
 };
 
 /**
@@ -245,6 +250,7 @@ export async function getPlayerProfile(
         backup?: {
           /** Unix seconds of the client's last sync. */
           approxTime?: number;
+          subInfo?: { status?: string } | null;
           artifacts?: {
             craftingXp?: number;
             tankLevel?: number;
@@ -314,6 +320,7 @@ export async function getPlayerProfile(
         missionOptions,
         inFlightMissions,
         shinyIngredientCount,
+        isUltra: data.backup?.subInfo?.status === "ACTIVE",
         virtueTank: parseVirtueTank(
           data.backup,
           parseVirtueFuelingShip(

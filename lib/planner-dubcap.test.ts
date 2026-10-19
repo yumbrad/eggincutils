@@ -4,7 +4,7 @@ import { solveWithHighs } from "./highs";
 import type { LootJson } from "./loot-data";
 import type { PlayerProfile } from "./profile";
 import { buildMissionOptions, computeShipLevelsFromLaunchCounts, type MissionOption } from "./ship-data";
-import { DUBCAP_LAUNCH_MARGIN_SECONDS, DUBCAP_WINDOW_SECONDS, scheduleAfterDubcap } from "./dubcap";
+import { DUBCAP_LAUNCH_MARGIN_SECONDS, DUBCAP_WINDOW_SECONDS, liveDubcapLaneStarts, scheduleAfterDubcap } from "./dubcap";
 import { TRILLION as T } from "./virtue-fuel";
 import { plannerResultSchema, planRequestSchema, replanRequestSchema, compareRequestSchema } from "./api-schemas";
 
@@ -46,7 +46,7 @@ function expectValidTimeline(result: PlannerResult): void {
     for (const block of lane) {
       expect(block.startSeconds).toBeGreaterThanOrEqual(end);
       const duration = (block.endSeconds - block.startSeconds) / block.launches;
-      expect(block.endSeconds - duration).toBeLessThanOrEqual(DUBCAP_WINDOW_SECONDS - DUBCAP_LAUNCH_MARGIN_SECONDS + 1e-6);
+      expect(block.endSeconds - duration).toBeLessThanOrEqual(event.windowSeconds - DUBCAP_LAUNCH_MARGIN_SECONDS + 1e-6);
       end = block.endSeconds;
     }
   }
@@ -55,7 +55,7 @@ function expectValidTimeline(result: PlannerResult): void {
     for (const block of lane) {
       expect(block.startSeconds).toBeGreaterThanOrEqual(end);
       if (!block.isPrep && !block.dubcap) {
-        expect(block.startSeconds).toBeGreaterThanOrEqual(event.startSeconds + DUBCAP_WINDOW_SECONDS);
+        expect(block.startSeconds).toBeGreaterThanOrEqual(event.startSeconds + event.windowSeconds);
       }
       end = block.endSeconds;
     }
@@ -320,4 +320,108 @@ describe("one dubcap event", () => {
     expect(compareRequestSchema.parse({ ...request, profile: profileFor([extended]), includeDubcap: true,
       selectedCombos: [{ ship: "HENERPRISE", durationType: "EPIC", targetAfxId: 10000 }] }).includeDubcap).toBe(true);
   });
+});
+
+describe("a live dubcap event", () => {
+  const live = (secondsRemaining: number, multiplier = 2) => ({
+    id: "event-test", message: "DOUBLE CAPACITY!", multiplier, secondsRemaining, durationSeconds: 48 * 3600, ultra: false,
+  });
+  const inAirExtended = (secondsRemaining: number) => ({ ship: "HENERPRISE", durationType: "EPIC", status: "EXPLORING",
+    level: 0, capacity: 1, targetAfxId: 10000, secondsRemaining });
+
+  it("launches now from free slots and joins each busy slot when its ship returns", async () => {
+    const profile = { ...profileFor([extended]), liveDubcap: live(30 * 3600), inFlightMissions: [inAirExtended(24 * 3600)] };
+    // In-air drops feed ingredients, not a goal's own copies: 6 cubes from new launches.
+    const result = await plan([extended], 6, {}, profile);
+    const event = result.dubcap!;
+    expect(event).toMatchObject({ live: true, multiplier: 2, startSeconds: 0, windowSeconds: 30 * 3600 });
+    // The in-air ship's slot opens at hour 24, still inside the event.
+    expect(event.lanes.map((lane) => lane.map((block) => block.startSeconds))).toEqual([[24 * 3600], [0], [0]]);
+    expect(launches(result, true)).toBe(3);
+    expect(launches(result, false)).toBe(0);
+    expect(result.expectedHours).toBeCloseTo(24 + 38.4);
+    expect(result.notes.some((note) => note.includes("the event running now, which ends in 30h 00m"))).toBe(true);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("leaves a slot out of the event when its ship returns after the last launch time", async () => {
+    const profile = { ...profileFor([extended]), liveDubcap: live(30 * 3600), inFlightMissions: [inAirExtended(31 * 3600)] };
+    const result = await plan([extended], 7, {}, profile);
+    const event = result.dubcap!;
+    expect(event.lanes[0]).toEqual([]);
+    expect(launches(result, true)).toBe(2);
+    // 4 cubes from the event and 3 ordinary launches once the event's ships are back.
+    expect(launches(result, false)).toBe(3);
+    expect(result.expectedHours).toBeCloseTo(76.8);
+    expect(Math.min(...event.fullLanes[0].map((block) => block.startSeconds))).toBeGreaterThanOrEqual(31 * 3600);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("uses the event's multiplier", async () => {
+    const profile = { ...profileFor([extended]), liveDubcap: live(30 * 3600, 3) };
+    const result = await plan([extended], 9, {}, profile);
+    expect(result.dubcap!.multiplier).toBe(3);
+    expect(launches(result, true)).toBe(3);
+    expect(result.targetBreakdown.fromMissionsExpected).toBeCloseTo(9);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("plans a fresh event when too little of the live one is left to launch", async () => {
+    const profile = { ...profileFor([extended]), liveDubcap: live(DUBCAP_LAUNCH_MARGIN_SECONDS - 1) };
+    const result = await plan([extended], 12, {}, profile);
+    expect(result.dubcap).toMatchObject({ live: false, windowSeconds: DUBCAP_WINDOW_SECONDS });
+    expect(launches(result, true)).toBe(6);
+  }, 120_000);
+
+  it("opens the event's slots once unlock prep returns", async () => {
+    const shipLevels = computeShipLevelsFromLaunchCounts({
+      CHICKEN_ONE: { SHORT: 4 }, CHICKEN_NINE: { SHORT: 6 }, CHICKEN_HEAVY: { SHORT: 12 }, BCR: { SHORT: 15 },
+      MILLENIUM_CHICKEN: { SHORT: 18 }, CORELLIHEN_CORVETTE: { SHORT: 21 }, GALEGGTICA: { SHORT: 24 },
+      CHICKFIANT: { SHORT: 27 }, VOYEGGER: { SHORT: 28 },
+    });
+    const profile = { ...profileFor([]), shipLevels, missionOptions: buildMissionOptions(shipLevels, 60, 0),
+      liveDubcap: live(40 * 3600) };
+    const result = await plan([extended], 500, {}, profile);
+    const event = result.dubcap!;
+    expect(event.live).toBe(true);
+    const prepEnd = Math.max(...event.fullLanes.flat().filter((block) => block.isPrep).map((block) => block.endSeconds));
+    expect(prepEnd).toBeGreaterThan(0);
+    expect(event.launches).toBeGreaterThan(0);
+    expect(event.lanes.flat().every((block) => block.startSeconds >= prepEnd)).toBe(true);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("packs a live event's launches into tanks with an in-air ship holding a slot", async () => {
+    const profile = { ...profileFor([extended, chickfiant]), liveDubcap: live(30 * 3600),
+      inFlightMissions: [inAirExtended(10 * 3600)] };
+    // One extended wave fits in 30 hours, so most cubes come from the event's 3 launches.
+    const result = await plan([extended, chickfiant], 8, { objectiveMode: "virtueFuel", virtueTank: {
+      shiftCap: 4, startMode: "current", capacity: 500 * T,
+      currentContents: { curiosity: 60 * T, kindness: 60 * T, resilience: 40 * T },
+    }, targets: [{ targetItemId: "puzzle-cube-1", quantity: 8 }, { targetItemId: "gold-meteorite-1", quantity: 6 }] }, profile);
+    expect(result.unmetItems).toEqual([]);
+    expect(result.dubcap!.live).toBe(true);
+    expect(result.dubcap!.lanes[0].every((block) => block.startSeconds >= 10 * 3600)).toBe(true);
+    expect(result.virtueTanks!.pack.schedule.makespanSeconds).toBe(result.dubcap!.makespanSeconds);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("keeps the partly fueled ship to its own slot but holds every slot for prep", () => {
+    const H = 3600;
+    const fueling = { id: "fueling", launches: 1, durationSeconds: 10 * H, prepOrder: -1, preFueled: true };
+    expect(liveDubcapLaneStarts([fueling], [5 * H])).toEqual([5 * H, 10 * H, 0]);
+    const prep = { id: "prep", launches: 2, durationSeconds: 4 * H, prepOrder: 0 };
+    expect(liveDubcapLaneStarts([fueling, prep], [5 * H])).toEqual([14 * H, 14 * H, 14 * H]);
+  });
+
+  it("gives comparisons the time left in the event", async () => {
+    const [comparison] = await computeMonolithicPaths({ profile: { ...profileFor([extended]), liveDubcap: live(30 * 3600) },
+      targetItemId: "puzzle-cube-1", quantity: 6, priorityTime: 1, includeDubcap: true,
+      selectedCombos: [{ ship: "HENERPRISE", durationType: "EPIC", targetAfxId: 10000 }],
+      lootData: lootFor([extended]), solverFn: solveWithHighs });
+    expect(comparison.feasible).toBe(true);
+    // Only one extended wave fits in 30 hours: 3 event launches.
+    expect(comparison.totalLaunches).toBe(3);
+    expect(comparison.expectedHours).toBeCloseTo(38.4);
+  }, 120_000);
 });

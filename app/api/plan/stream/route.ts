@@ -1,6 +1,7 @@
 import { formatZodIssues, planApiResponseSchema, planRequestSchema, playerProfileSchema } from "../../../../lib/api-schemas";
 import { createDemoProfile, isBlankEid } from "../../../../lib/demo-profile";
 import { LootDataError } from "../../../../lib/loot-data";
+import { withLiveDubcap } from "../../../../lib/dubcap-events";
 import { getPlayerProfile } from "../../../../lib/profile";
 import { MissionCoverageError, planForTarget, type PlannerProgressEvent } from "../../../../lib/planner";
 import { buildVirtueTankPlannerOptions } from "../../../../lib/virtue-tank-plan";
@@ -126,7 +127,7 @@ export async function POST(request: Request): Promise<Response> {
                 },
                 includeStoneFragments: parsedPayload.data.includeInventoryFragments,
               });
-          const validatedProfile = playerProfileSchema.safeParse(profile);
+          const validatedProfile = playerProfileSchema.safeParse(await withLiveDubcap(profile));
           if (!validatedProfile.success) {
             safeEnqueue({
               type: "error",

@@ -34,8 +34,9 @@ import {
 import type { Inventory, PlayerProfile } from "./profile";
 import {
   buildDubcapModel, readDubcapAllocation, scheduleAfterDubcap, scheduleDubcapPrep,
-  DUBCAP_WINDOW_SECONDS, DUBCAP_LAUNCH_MARGIN_SECONDS,
-  type DubcapAllocation, type DubcapPlan,
+  dubcapLaneCutoffSeconds, liveDubcapLaneStarts, liveDubcapWindow,
+  DUBCAP_LAUNCH_MARGIN_SECONDS, FRESH_DUBCAP_WINDOW,
+  type DubcapAllocation, type DubcapPlan, type DubcapWindow,
 } from "./dubcap";
 import {
   getVirtueFuelConfig,
@@ -97,6 +98,8 @@ type MissionAction = {
   dubcap?: boolean;
   /** Event copies: the action they copy, shared by its copies for each leveling phase. */
   dubcapOf?: string;
+  /** Event copies: the event they fly in. */
+  dubcapWindow?: DubcapWindow;
 };
 
 type ArtifactConsumptionMap = Record<string, Record<string, number>>;
@@ -3639,13 +3642,18 @@ function missionRowKeyBase(row: { missionId: string; level: number; targetAfxId:
 
 function addDubcapActions(
   actions: MissionAction[], eligibleOptions?: Set<string>, chains: PhasedChainConstraint[] = [],
-  prepCounts: Record<string, RequiredMissionLaunchConstraint> = {}
+  prepCounts: Record<string, RequiredMissionLaunchConstraint> = {}, window: DubcapWindow = FRESH_DUBCAP_WINDOW
 ): MissionAction[] {
+  const cutoffs = [0, 1, 2].map((lane) => dubcapLaneCutoffSeconds(window, lane)).filter((cutoff) => cutoff >= 0);
+  if (cutoffs.length === 0) {
+    // Every slot is busy until the live event ends.
+    return actions;
+  }
   const eventActions = actions.filter((action) => !eligibleOptions || eligibleOptions.has(action.optionKey)).flatMap((action) => {
     const chain = chains.find((entry) => entry.chain.includes(action.optionKey));
     const phaseKeys: string[] = [];
     if (chain) {
-      const limit = 3 * (Math.floor((DUBCAP_WINDOW_SECONDS - DUBCAP_LAUNCH_MARGIN_SECONDS) / action.durationSeconds) + 1);
+      const limit = cutoffs.reduce((sum, cutoff) => sum + Math.floor(cutoff / action.durationSeconds) + 1, 0);
       let previousLaunches = 0;
       for (let index = chain.chain.indexOf(action.optionKey); index < chain.chain.length && previousLaunches < limit; index += 1) {
         phaseKeys.push(chain.chain[index]);
@@ -3655,10 +3663,10 @@ function addDubcapActions(
       phaseKeys.push(`${action.optionKey}|dubcap`);
     }
     return phaseKeys.map((optionKey) => ({
-      ...action, key: `${action.key}|dubcap|${optionKey}`, optionKey, dubcap: true, dubcapOf: action.key,
+      ...action, key: `${action.key}|dubcap|${optionKey}`, optionKey, dubcap: true, dubcapOf: action.key, dubcapWindow: window,
       // The XP phase credits the launch once. Its drops still use only the
       // known stars at event start, even when that launch helps level up.
-      yields: Object.fromEntries(Object.entries(action.yields).map(([key, amount]) => [key, amount * 2])),
+      yields: Object.fromEntries(Object.entries(action.yields).map(([key, amount]) => [key, amount * window.multiplier])),
     }));
   });
   return [...actions, ...eventActions];
@@ -3691,6 +3699,7 @@ function foldDubcapCopies(
   return {
     missionCounts: folded,
     allocation: allocation && {
+      ...allocation,
       lanes: allocation.lanes.map((lane) =>
         mergeDubcapRuns(lane.map((block) => ({ ...block, actionKey: keyOf(block.actionKey) })), (block) => block.actionKey)
       ),
@@ -3855,6 +3864,41 @@ function buildVirtueTankUnits(options: {
   return [...fuelingUnits, ...prepUnits, ...missionUnits];
 }
 
+/**
+ * The prep launches (and the partly fueled ship) buildVirtueTankUnits will
+ * make for these prep steps, by option, so a live event's slot starts can be
+ * known before the solve. Prep phases each hold one option's launches, so
+ * how the plan later splits them into units doesn't change their schedule.
+ */
+function dubcapPrepUnits(prepSteps: PrepProgressionStep[], fuelingLaunch?: VirtueFuelingLaunch) {
+  const prepOrderByOption = new Map<string, number>();
+  prepSteps.forEach((step, index) => {
+    const optionKey = missionOptionKey(step.option);
+    if (!prepOrderByOption.has(optionKey)) {
+      prepOrderByOption.set(optionKey, index);
+    }
+  });
+  const units: Array<{ id: string; launches: number; durationSeconds: number; prepOrder: number; preFueled?: boolean }> =
+    Array.from(aggregatePrepOptionRequirements(prepSteps).entries())
+      .filter(([, requirement]) => requirement.launches > 0)
+      .map(([optionKey, requirement]) => ({
+        id: `prep|${optionKey}`,
+        launches: requirement.launches,
+        durationSeconds: requirement.option.durationSeconds,
+        prepOrder: prepOrderByOption.get(optionKey) ?? 0,
+      }));
+  if (fuelingLaunch) {
+    units.unshift({
+      id: "fueling",
+      launches: 1,
+      durationSeconds: fuelingLaunch.durationSeconds,
+      prepOrder: Math.min(-1, ...units.map((unit) => unit.prepOrder - 1)),
+      preFueled: true,
+    });
+  }
+  return units;
+}
+
 type DubcapUnits = {
   units: VirtueTankPlanUnit[];
   allocation: DubcapAllocation;
@@ -3888,7 +3932,7 @@ function buildDubcapUnits(
       return { actionKey: id, launches, startSeconds, endSeconds: startSeconds + launches * base.durationSeconds };
     });
   }));
-  return { units: [...ordinary, ...eventUnits], allocation: { lanes }, eventRunIds };
+  return { units: [...ordinary, ...eventUnits], allocation: { ...allocation, lanes }, eventRunIds };
 }
 
 /**
@@ -3958,6 +4002,11 @@ function mergeDubcapRuns<T extends { launches: number; startSeconds: number; end
   return merged;
 }
 
+function formatDubcapHours(seconds: number): string {
+  const minutes = Math.max(0, Math.round(seconds / 60));
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
 /** Replay the event witness, with fuel-tank order retained for prep and ordinary missions. */
 function finishDubcapSchedule(
   event: DubcapUnits,
@@ -3973,8 +4022,14 @@ function finishDubcapSchedule(
       keyToUnit.set(key, { unit, tankIndex: entry.tankIndex });
       return { ...unit, id: key, launches: entry.launches };
     });
+  const window = event.allocation.window ?? FRESH_DUBCAP_WINDOW;
   const prep = scheduleDubcapPrep(entries.filter((unit) => unit.isPrep), inAirLaneFreeSeconds);
-  const startSeconds = prep.makespanSeconds;
+  // A live event is under way: its slots open as their ships return (the
+  // solve's lane starts, from the same prep), not after all of them.
+  if (window.live && prep.lanes.some((lane, index) => (lane.at(-1)?.endSeconds ?? 0) > (window.laneStartSeconds[index] || 0) + 1e-6)) {
+    throw new Error("Prep would overlap the live dubcap's launches.");
+  }
+  const startSeconds = window.live ? 0 : prep.makespanSeconds;
   const eventTank = new Map<string, number>();
   for (const entry of pack?.launchOrder ?? []) {
     if (unitById.get(entry.unitId)?.launchOrder !== undefined) {
@@ -4039,10 +4094,14 @@ function finishDubcapSchedule(
     pack.schedule = { lanes: scheduleLanes, makespanSeconds: full.makespanSeconds };
   }
   return {
-    windowSeconds: DUBCAP_WINDOW_SECONDS, launchMarginSeconds: DUBCAP_LAUNCH_MARGIN_SECONDS,
+    windowSeconds: window.windowSeconds, launchMarginSeconds: DUBCAP_LAUNCH_MARGIN_SECONDS,
+    multiplier: window.multiplier, live: window.live,
     startSeconds, launches: lanes.flat().reduce((sum, block) => sum + block.launches, 0),
     makespanSeconds: full.makespanSeconds,
-    missionSeconds: full.makespanSeconds - startSeconds + scheduleDubcapPrep(entries.filter((unit) => unit.isPrep)).makespanSeconds,
+    // A live event's in-air ships are part of its timing, so its plan is timed as is.
+    missionSeconds: window.live
+      ? full.makespanSeconds
+      : full.makespanSeconds - startSeconds + scheduleDubcapPrep(entries.filter((unit) => unit.isPrep)).makespanSeconds,
     lanes: lanes.map((lane) => mergeDubcapRuns(lane, (block) => `${block.missionRowKey}|${block.tankIndex}`)),
     fullLanes: fullLanes.map((lane) => mergeDubcapRuns(lane, (block) =>
       `${block.missionRowKey ?? `${block.ship}|${block.durationType}|${block.level}`}|${block.isPrep}|${block.dubcap}|${block.tankIndex}`)),
@@ -7228,7 +7287,7 @@ async function planForNewLaunches(
     `consume:${consumptionOptions.map((option) => option.sourceItemKey).join(",") || "none"}`,
     `mode:${objectiveMode}:${priorityTime <= SCORE_EPS ? "ge" : "mix"}:${objectiveContext.minimumTimePriority}`,
     `fast:${fastMode ? 1 : 0}`,
-    `dubcap:${plannerOptions.includeDubcap ? 1 : 0}`,
+    `dubcap:${plannerOptions.includeDubcap ? (profile.liveDubcap ? `live:${Math.round(profile.liveDubcap.secondsRemaining)}:${profile.liveDubcap.multiplier}` : 1) : 0}`,
     `filter:${missionActionFilter?.key || "none"}`,
     `tank:${
       tankRun
@@ -7536,7 +7595,18 @@ async function planForNewLaunches(
         );
       }
       if (plannerOptions.includeDubcap) {
-        candidateActions = addDubcapActions(candidateActions, finalOptionKeys, phased.phaseChains, requiredMissionLaunches);
+        const window = liveDubcapWindow(
+          profile.liveDubcap,
+          profile.liveDubcap
+            ? liveDubcapLaneStarts(
+                dubcapPrepUnits(candidate.prepSteps, tankRun?.fuelingLaunch),
+                tankRun?.inAirLaneFreeSeconds ?? inAirLaneFreeSeconds
+              )
+            : undefined
+        );
+        candidateActions = addDubcapActions(
+          candidateActions, finalOptionKeys, phased.phaseChains, requiredMissionLaunches, window ?? FRESH_DUBCAP_WINDOW
+        );
       }
       const input: CandidateEvalInput = {
         candidate,
@@ -9480,8 +9550,16 @@ async function planForNewLaunches(
       dubcap = finishDubcapSchedule(eventUnits, inAirLaneFreeSeconds);
     }
     if (dubcap) {
-      notes.push(`Dubcap: ${dubcap.launches.toLocaleString()} launches with exactly 2× expected drops in one 48-hour event. Last launches leave at least ${DUBCAP_LAUNCH_MARGIN_SECONDS / 60} min before the cutoff. Fuel and ship launch points are unchanged.`);
-      notes.push("The fresh event starts after prep and current in-air missions return. Calendar waiting for the event is excluded; ordinary farming follows event returns, with leveling credited conservatively.");
+      notes.push(
+        dubcap.live
+          ? `Dubcap: ${dubcap.launches.toLocaleString()} launches with exactly ${dubcap.multiplier}× expected drops in the event running now, which ends in ${formatDubcapHours(dubcap.windowSeconds)}. Last launches leave at least ${DUBCAP_LAUNCH_MARGIN_SECONDS / 60} min before it ends. Fuel and ship launch points are unchanged.`
+          : `Dubcap: ${dubcap.launches.toLocaleString()} launches with exactly ${dubcap.multiplier}× expected drops in one ${Math.round(dubcap.windowSeconds / 3600)}-hour event. Last launches leave at least ${DUBCAP_LAUNCH_MARGIN_SECONDS / 60} min before the cutoff. Fuel and ship launch points are unchanged.`
+      );
+      notes.push(
+        dubcap.live
+          ? "Each slot joins the event when its in-air ship returns (and after any prep); ordinary farming follows event returns, with leveling credited conservatively."
+          : "The fresh event starts after prep and current in-air missions return. Calendar waiting for the event is excluded; ordinary farming follows event returns, with leveling credited conservatively."
+      );
     }
 
     reportProgress({
@@ -9784,7 +9862,10 @@ export async function computeMonolithicPaths(options: {
       }
       if (includeDubcap) {
         const knownOptions = new Set(allOptions.filter((option) => option.ship === combo.ship && option.durationType === combo.durationType).map(missionOptionKey));
-        filteredActions = addDubcapActions(filteredActions, knownOptions, phasedChainConstraints);
+        // Comparisons leave in-air ships out, so a live event's slots are all free now.
+        filteredActions = addDubcapActions(
+          filteredActions, knownOptions, phasedChainConstraints, {}, liveDubcapWindow(profile.liveDubcap) ?? FRESH_DUBCAP_WINDOW
+        );
       }
 
       const unified = await solveUnifiedCraftMissionPlan({

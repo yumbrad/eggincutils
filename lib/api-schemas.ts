@@ -276,6 +276,17 @@ export const playerProfileSchema = z.object({
   inFlightMissions: z.array(inFlightMissionSchema).optional(),
   shinyIngredientCount: nonNegativeIntSchema.optional(),
   virtueTank: virtueTankSnapshotSchema.optional(),
+  isUltra: z.boolean().optional(),
+  liveDubcap: z
+    .object({
+      id: z.string(),
+      message: z.string(),
+      multiplier: z.number().finite().min(1),
+      secondsRemaining: nonNegativeFiniteSchema,
+      durationSeconds: nonNegativeFiniteSchema,
+      ultra: z.boolean(),
+    })
+    .optional(),
 });
 
 const observedReturnSchema = z.object({
@@ -606,8 +617,11 @@ export const plannerResultSchema = z.object({
   availableCombos: z.array(availableComboSchema),
   virtueTanks: virtueTankPlannerResultSchema.optional(),
   dubcap: z.object({
-    windowSeconds: nonNegativeIntSchema,
+    windowSeconds: nonNegativeFiniteSchema,
     launchMarginSeconds: nonNegativeIntSchema,
+    // Plans saved before live events were fresh 2× events.
+    multiplier: z.number().finite().min(1).default(2),
+    live: z.boolean().default(false),
     startSeconds: nonNegativeFiniteSchema,
     launches: nonNegativeIntSchema,
     makespanSeconds: nonNegativeFiniteSchema,
