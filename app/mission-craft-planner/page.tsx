@@ -557,13 +557,15 @@ function buildShinyOddsPills(odds: ShinyOdds[], goal: ShinyGoalPlan | undefined,
           ? `crafting level ${rolls.startLevel}`
           : `crafting level ${rolls.startLevel} → ${rolls.endLevel}`;
       lines.push(
-        `From ${rolls.crafts.toLocaleString()} planned ${rolls.crafts === 1 ? "craft" : "crafts"}: ${each} each (crafted ${rolls.craftedBefore.toLocaleString()} → ${(rolls.craftedBefore + rolls.crafts).toLocaleString()}, ${levels}).`
+        `From ${rolls.crafts.toLocaleString()} planned ${rolls.crafts === 1 ? "craft" : "crafts"}: ${each} each (crafted ${rolls.craftedBefore.toLocaleString()} → ${(rolls.craftedBefore + rolls.crafts).toLocaleString()}, ${levels}): ${formatOddsPercent(rolls.chance)} from crafting alone.`
       );
     } else {
       lines.push("No planned crafts.");
     }
     if (entry.drops > 0) {
-      lines.push(`From drops: ${entry.drops.toLocaleString(undefined, { maximumFractionDigits: 3 })} expected from the planned missions.`);
+      lines.push(
+        `From drops: ${entry.drops.toLocaleString(undefined, { maximumFractionDigits: 3 })} expected from the planned missions: ${formatOddsPercent(1 - Math.exp(-entry.drops))} from drops alone.`
+      );
     }
     const goalChance = goal && goal.rarity === entry.rarity ? goal.targetChance : null;
     if (goalChance != null && goal) {
@@ -573,8 +575,13 @@ function buildShinyOddsPills(odds: ShinyOdds[], goal: ShinyGoalPlan | undefined,
           : `Goal: ${Math.round(goalChance * 100)}%, more than ${MAX_SHINY_GOAL_CRAFTS.toLocaleString()} crafts can reach.`
       );
     }
-    if (entry.rarity === "rare" && rolls.crafts > 0 && entry.lastExactChance < 0.0005) {
-      lines.push("An exactly-rare craft has no chance now: epic and legendary take its share at this crafting level and craft count.");
+    if (entry.rarity !== "legendary" && rolls.crafts > 0 && entry.lastExactChance < 0.0005) {
+      const higher = entry.rarity === "rare" ? "epic or better" : "legendary";
+      lines.push(
+        `By the last planned craft, a craft can't come out exactly ${entry.rarity}: at this crafting level and craft count, ${higher} takes its whole share. Crafts count toward ${name} only by landing ${higher}${
+          entry.drops > 0 ? `; the rest of this chance comes from ${entry.rarity} drops` : ""
+        }.`
+      );
     }
     return { rarity: entry.rarity, chance: entry.chance, goalChance, title: lines.join("\n") };
   });

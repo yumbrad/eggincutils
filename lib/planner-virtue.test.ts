@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { LootJson } from "./loot-data";
 import { solveWithHighs } from "./highs";
@@ -15,6 +15,21 @@ import {
   type VirtueTankPlannerOptions,
 } from "./virtue-tank-plan";
 import { VIRTUE_SHIFT_PENALTY_SECONDS } from "./virtue-tanks";
+
+// The pruning tests use made-up target ids (1-15, 50, 99) for many distinct
+// sources of the same items. The planner keeps only one target of a family
+// no goal uses, so those ids count as related here.
+const { syntheticTargets } = vi.hoisted(() => ({
+  syntheticTargets: new Set([...Array.from({ length: 15 }, (_, index) => index + 1), 50, 99]),
+}));
+vi.mock("./item-utils", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./item-utils")>();
+  return {
+    ...actual,
+    relatedTargetAfxIds: (itemKeys: Iterable<string>) =>
+      new Set([...actual.relatedTargetAfxIds(itemKeys), ...syntheticTargets]),
+  };
+});
 
 // Path of Virtue tank mode against the real HiGHS solver. The loot tables are
 // tiny and injected, so every solve is small: one untargeted mission per ship

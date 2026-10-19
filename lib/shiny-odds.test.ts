@@ -165,6 +165,18 @@ describe("expectedShinyDrops", () => {
     });
     expect(drops.total).toBe(0);
   });
+
+  it("ignores rare and epic counts too small to trust", () => {
+    // 4 rares are noise; the 5 epics and 6 legendaries count.
+    const drops = expectedShinyDrops({
+      itemKey: "interstellar_compass_4",
+      rarity: "rare",
+      missions: [mission],
+      loot: lootWith([500, 4, 5, 6]),
+      zerogLevel: 0,
+    });
+    expect(drops.total).toBeCloseTo((11 / 1000) * 10, 6);
+  });
 });
 
 describe("shinyOddsForPlan", () => {

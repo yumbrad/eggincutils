@@ -197,6 +197,13 @@ export function getNominalMissionCapacity(ship: string, durationType: DurationTy
   return Math.floor(params.capacity + params.levelCapacityBump * Math.max(0, Math.round(level)));
 }
 
+/** Biggest capacity anyone flies this ship and duration with: its top stars and Zero-G research 10 (+50%). */
+export function getMaxBoostedMissionCapacity(ship: string, durationType: DurationType): number | null {
+  const entry = shipConfig.find((candidate) => candidate.ship === ship);
+  const top = getNominalMissionCapacity(ship, durationType, entry?.levelMissionRequirements.length || 0);
+  return top == null ? null : Math.floor(top * 1.5);
+}
+
 export function shipLevelsToLaunchCounts(shipLevels: ShipLevelInfo[]): ShipLaunchCounts {
   const launchCounts = initializeLaunchCounts();
   const byShip = new Map(shipLevels.map((entry) => [entry.ship, entry]));

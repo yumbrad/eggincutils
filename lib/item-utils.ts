@@ -96,6 +96,25 @@ export function isUntargetedTargetAfxId(afxId: number): boolean {
   return UNTARGETED_TARGET_AFX_IDS.has(afxId);
 }
 
+/**
+ * The target families (afx ids) that drop any of these items. A stone and its
+ * fragments count as one family, so either target stays related to both.
+ */
+export function relatedTargetAfxIds(itemKeys: Iterable<string>): Set<number> {
+  const afxIdByFamily = new Map(Object.values(targetFamilyMap).map((family) => [itemIdToKey(family.id), family.afxId]));
+  const related = new Set<number>();
+  for (const itemKey of itemKeys) {
+    const family = itemKey.replace(/_\d+$/, "");
+    for (const candidate of [family, `${family}_fragment`]) {
+      const afxId = afxIdByFamily.get(candidate);
+      if (afxId != null) {
+        related.add(afxId);
+      }
+    }
+  }
+  return related;
+}
+
 export function afxIdToItemKey(afxId: number): string | null {
   if (isUntargetedTargetAfxId(afxId)) {
     return null;

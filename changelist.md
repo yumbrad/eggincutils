@@ -52,6 +52,15 @@ the target it was fueled for and at the stars its ship has now.
   - Its drops count toward the plan like a ship in the air, and its launch counts toward leveling.
   - The tank card shows the ship and what it holds.
 
+- Plans no longer chase lucky loot samples.
+  - Of the targets whose family none of your goals use, only the one with the most recorded drops stays
+a candidate: targeting another family can't change your items' rates, so any edge between them is noise.
+  - A target needs 20 launches' worth of recorded drops at the ship's biggest capacity (top stars,
+Zero-G 10) before the planner can choose it, as wasmegg's optimizer asks.
+  - Shiny odds ignore rare and epic drop counts under 5 per loot bucket, as legendaries already did.
+  - Shiny odds tooltips show the chance from crafting alone and from drops alone, and say when crafts
+can no longer come out exactly rare.
+
 - Added **Include one dubcap**: optimize launches in one fresh 48-hour event with exactly double
 the drops, including shorter missions where they help your goals.
   - Shows launch and return times for all three slots, with a five-minute launch margin.

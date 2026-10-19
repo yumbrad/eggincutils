@@ -10,6 +10,7 @@ import {
   itemIdToKey,
   itemKeyToDisplayName,
   itemKeyToId,
+  relatedTargetAfxIds,
 } from "./item-utils";
 import { getRecipe, recipes } from "./recipes";
 import { resolveShinyGoalTargets, type ShinyGoalPlan, type ShinyRarity } from "./shiny-odds";
@@ -17,7 +18,7 @@ import {
   buildMissionOptions,
   computeShipLevelsFromLaunchCounts,
   DurationType,
-  getNominalMissionCapacity,
+  getMaxBoostedMissionCapacity,
   getShipOrder,
   MissionOption,
   ShipLaunchCounts,
@@ -320,7 +321,7 @@ const MAX_CRAFT_COUNT_FOR_DISCOUNT = 300;
 const MAX_CRAFT_DISCOUNT_PIECEWISE_STEPS = 10;
 const MAX_DISCOUNT_FACTOR = 0.9;
 const DISCOUNT_CURVE_EXPONENT = 0.2;
-const MIN_MISSION_TARGET_SAMPLE_LAUNCHES = 10;
+const MIN_MISSION_TARGET_SAMPLE_LAUNCHES = 20;
 const MIN_MISSION_TARGET_SAMPLE_DROPS = 500;
 const MISSION_SOLVER_UNMET_PENALTY_FACTOR = 1000;
 const SCORE_EPS = 1e-9;
@@ -1113,19 +1114,24 @@ function yieldsFromTarget(
   return yields;
 }
 
-function hasEnoughMissionTargetSample(
-  target: MissionTargetLootStore,
-  option: MissionOption,
-  lootLevel: number
-): boolean {
+/**
+ * Whether a target has enough recorded drops for the planner to choose it:
+ * 20 launches' worth at the ship's biggest capacity (top stars, Zero-G 10),
+ * as wasmegg's optimizer asks. Recorded drops include players' stars and
+ * Zero-G, so counting launches at a smaller capacity lets a handful of real
+ * launches through, and picking the best of many thin samples favors lucky
+ * ones. Missions already chosen (in flight, pre-plan sends) keep the looser
+ * mission-loot floor.
+ */
+function hasEnoughMissionTargetSample(target: MissionTargetLootStore, option: MissionOption): boolean {
   if (target.totalDrops < MIN_MISSION_TARGET_SAMPLE_DROPS) {
     return false;
   }
-  const nominalCapacity = getNominalMissionCapacity(option.ship, option.durationType, lootLevel) || option.capacity;
-  if (nominalCapacity <= 0) {
+  const maxCapacity = getMaxBoostedMissionCapacity(option.ship, option.durationType) || option.capacity;
+  if (maxCapacity <= 0) {
     return false;
   }
-  return target.totalDrops / nominalCapacity >= MIN_MISSION_TARGET_SAMPLE_LAUNCHES;
+  return target.totalDrops / maxCapacity >= MIN_MISSION_TARGET_SAMPLE_LAUNCHES;
 }
 
 function canMissionOptionUseLootTarget(option: MissionOption, targetAfxId: number): boolean {
@@ -1141,6 +1147,7 @@ async function buildMissionActionsForOptions(
   const loot = lootData || (await getDefaultLootData());
   const includeShinyRarities = normalizeShinyRaritySelection(missionDropRarities);
   const byMissionId = new Map(loot.missions.map((mission) => [mission.missionId, mission]));
+  const relatedTargets = relatedTargetAfxIds(relevantItems);
 
   const actions: MissionAction[] = [];
 
@@ -1156,11 +1163,30 @@ async function buildMissionActionsForOptions(
       continue;
     }
 
-    for (const target of levelLoot.targets) {
-      if (!canMissionOptionUseLootTarget(option, target.targetAfxId)) {
-        continue;
+    const usableTargets = levelLoot.targets.filter(
+      (target) => canMissionOptionUseLootTarget(option, target.targetAfxId) && hasEnoughMissionTargetSample(target, option)
+    );
+    // Targeting a family the goals never use only raises that family's share,
+    // so those targets drop everything else at the same true rate: any edge
+    // between them is sampling noise. Keep the best-sampled one (wasmegg's
+    // optimizer does the same), next to untargeted and the related targets.
+    let unrelatedRepresentative: MissionTargetLootStore | null = null;
+    for (const target of usableTargets) {
+      if (
+        !isUntargetedTargetAfxId(target.targetAfxId) &&
+        !relatedTargets.has(target.targetAfxId) &&
+        (!unrelatedRepresentative || target.totalDrops > unrelatedRepresentative.totalDrops)
+      ) {
+        unrelatedRepresentative = target;
       }
-      if (!hasEnoughMissionTargetSample(target, option, levelLoot.level)) {
+    }
+
+    for (const target of usableTargets) {
+      if (
+        !isUntargetedTargetAfxId(target.targetAfxId) &&
+        !relatedTargets.has(target.targetAfxId) &&
+        target !== unrelatedRepresentative
+      ) {
         continue;
       }
       const yields = yieldsFromTarget(target, relevantItems, option.capacity, includeShinyRarities);

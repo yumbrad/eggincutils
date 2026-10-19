@@ -37,10 +37,11 @@ export const MAX_SHINY_GOAL_CRAFTS = 9999;
 export const MIN_SHINY_GOAL_PERCENT = 1;
 export const MAX_SHINY_GOAL_PERCENT = 99;
 export const DEFAULT_SHINY_GOAL_PERCENT = 50;
-// Legendary drop counts below this per loot bucket are noise (often a single
-// drop in tens of thousands), so they count as none. wasmegg's artifact
-// explorer uses the same floor (MIN_LEGENDARY_OBSERVATIONS).
-const MIN_LEGENDARY_OBSERVATIONS = 5;
+// Shiny drop counts below this per loot bucket are noise (often a single drop
+// in thousands), so they count as none. wasmegg's artifact explorer uses the
+// same floor for legendaries (MIN_LEGENDARY_OBSERVATIONS); rare and epic
+// copies of one item are just as thin in most buckets.
+const MIN_SHINY_OBSERVATIONS = 5;
 const PER_CRAFT_CAP = 0.1;
 
 const RARITY_INDEX: Record<ShinyRarity, number> = { rare: 1, epic: 2, legendary: 3 };
@@ -302,7 +303,7 @@ export function expectedShinyDrops(options: {
     let shinyDrops = 0;
     for (let index = RARITY_INDEX[rarity]; index <= 3; index += 1) {
       const count = item.counts[index] || 0;
-      shinyDrops += index === 3 && count < MIN_LEGENDARY_OBSERVATIONS ? 0 : count;
+      shinyDrops += count < MIN_SHINY_OBSERVATIONS ? 0 : count;
     }
     const nominal = getNominalMissionCapacity(mission.ship, durationType, mission.level) || 0;
     const capacity = Math.floor(nominal * (1 + 0.05 * Math.max(0, options.zerogLevel)));

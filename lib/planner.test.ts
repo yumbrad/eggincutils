@@ -273,15 +273,17 @@ describe("planForTarget coverage handling", () => {
                   targetAfxId: 1,
                   items: [{ afxId: 23, afxLevel: 1, itemId: "puzzle-cube-1", counts: [499, 0, 0, 0] }],
                 },
+                // 25 launches at this 0★ capacity, but under 20 at the ship's
+                // biggest (8★, Zero-G 10: 213), which is what choosing needs.
                 {
-                  totalDrops: 600,
+                  totalDrops: 2000,
                   targetAfxId: 2,
-                  items: [{ afxId: 23, afxLevel: 1, itemId: "puzzle-cube-1", counts: [600, 0, 0, 0] }],
+                  items: [{ afxId: 23, afxLevel: 1, itemId: "puzzle-cube-1", counts: [2000, 0, 0, 0] }],
                 },
                 {
-                  totalDrops: 1000,
+                  totalDrops: 5000,
                   targetAfxId: 10000,
-                  items: [{ afxId: 23, afxLevel: 1, itemId: "puzzle-cube-1", counts: [1000, 0, 0, 0] }],
+                  items: [{ afxId: 23, afxLevel: 1, itemId: "puzzle-cube-1", counts: [5000, 0, 0, 0] }],
                 },
               ],
             },
@@ -309,6 +311,66 @@ describe("planForTarget coverage handling", () => {
     const result = await planForTarget(profile, "puzzle-cube-1", 1, 0.5);
     expect(result.missions).toHaveLength(1);
     expect(result.missions[0].targetAfxId).toBe(10000);
+  });
+
+  it("keeps one best-sampled target of the families no goal uses", async () => {
+    const drops = (targetAfxId: number, totalDrops: number, cubes: number, meteorites: number) => ({
+      totalDrops,
+      targetAfxId,
+      items: [
+        { afxId: 23, afxLevel: 1, itemId: "puzzle-cube-1", counts: [cubes, 0, 0, 0] as [number, number, number, number] },
+        { afxId: 17, afxLevel: 1, itemId: "gold-meteorite-1", counts: [meteorites, 0, 0, 0] as [number, number, number, number] },
+      ],
+    });
+    mockedLoadLootData.mockResolvedValue({
+      missions: [
+        {
+          afxShip: 10,
+          afxDurationType: 1,
+          missionId: "atreggies-standard",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                // Tachyon stone and lunar totem targets can't change these
+                // rates. The lunar totem's better ones are a luckier, smaller
+                // sample, and would beat the tachyon stone's outright.
+                drops(1, 6000, 720, 120),
+                drops(0, 4500, 900, 135),
+                // Targets of the goals' families and untargeted always stay.
+                drops(23, 5000, 1250, 25),
+                drops(17, 5000, 250, 500),
+                drops(10000, 5000, 500, 200),
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    mockedSolveWithHighs.mockResolvedValue({
+      Status: "Optimal",
+      Columns: { m_0: { Primal: 1 } },
+    });
+
+    const profile = baseProfile();
+    profile.missionOptions = [
+      {
+        ship: "ATREGGIES",
+        missionId: "atreggies-standard",
+        durationType: "LONG",
+        level: 0,
+        durationSeconds: 259_200,
+        capacity: 78,
+      },
+    ];
+
+    const result = await planForTarget(profile, "puzzle-cube-1", 1, 0.5, {
+      targets: [
+        { targetItemId: "puzzle-cube-1", quantity: 1 },
+        { targetItemId: "gold-meteorite-1", quantity: 1 },
+      ],
+    });
+    expect(result.availableCombos.map((combo) => combo.targetAfxId).sort((a, b) => a - b)).toEqual([1, 17, 23, 10000]);
   });
 
   it("filters impossible targeted rows from ships that cannot target in game", async () => {
