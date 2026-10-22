@@ -48,6 +48,7 @@ import {
 import {
   packVirtueTanks,
   scheduleVirtueLaunches,
+  virtueFuelTolerance,
   VIRTUE_REFILL_ROUTE_ORDER,
   VIRTUE_SHIFT_CAP_DETENTS,
   VIRTUE_SHIFT_PENALTY_SECONDS,
@@ -367,6 +368,12 @@ const VIRTUE_TANK_PACK_TIME_LIMIT_SECONDS = 1.5;
  * solve always gets at least this long.
  */
 const VIRTUE_TANK_PARTIAL_POLISH_MIN_SECONDS = 5;
+/**
+ * Partial tank plans compare goal completion, then progress toward the goals
+ * left short; a tiny weight keeps progress from outweighing any completed
+ * craft (a 1,000-craft goal's craft is 1e-3).
+ */
+const PROGRESS_SHORTFALL_WEIGHT = 1e-6;
 /** Re-solves with a lower loop budget when packing needs more shifts than the solve counted. */
 const VIRTUE_TANK_MAX_PACK_RETRIES = 2;
 /**
@@ -1958,6 +1965,8 @@ type UnifiedPlan = {
   objectiveValue?: number;
   /** Partial tank plans: sum of each goal's unmet fraction (copies and craft counts). */
   goalShortfallScore?: number;
+  /** Partial tank plans: the same, less the progress spare fuel makes toward them (fractional crafts). */
+  progressShortfallScore?: number;
   dubcapAllocation?: DubcapAllocation;
 };
 
@@ -2416,6 +2425,25 @@ async function solveUnifiedCraftMissionPlan(options: {
       ]
     : [];
 
+  // Partial tank plans also measure how far spare fuel gets the goals they
+  // leave short (VirtueTankSolveOptions.softDemand): progress crafts (pc_)
+  // are fractional crafts from what the plan leaves over, with their own item
+  // rows (pb_) on top of the real ones, so they never feed a real craft.
+  const progressLayer = partialTankPlan && !lpRelaxation;
+  const progressCraftVar = (model: CraftCostModel) => `pc_${model.craftVar}`;
+  const progressCraftShortfallVar = (model: CraftCostModel) => `ucp_${model.craftVar}`;
+  const progressUnmetVar = (itemIndex: number) => `up_${itemIndex}`;
+  const progressShortfallTerms = progressLayer
+    ? [
+        ...itemKeys.flatMap((key, index) => ((demandByItem.get(key) || 0) > 0
+          ? [{ coefficient: completionScale / demandByItem.get(key)!, variable: progressUnmetVar(index) }]
+          : [])),
+        ...craftModels.filter((model) => model.craftFloor > 0).map((model) => ({
+          coefficient: completionScale / model.craftFloor, variable: progressCraftShortfallVar(model),
+        })),
+      ]
+    : [];
+
   const lines: string[] = [];
   lines.push("Minimize");
   const objectiveTerms: Array<{ coefficient: number; variable: string }> = [];
@@ -2548,6 +2576,9 @@ async function solveUnifiedCraftMissionPlan(options: {
     const shortfallVar = craftShortfallVars.get(model.itemKey);
     if (shortfallVar) {
       lines.push(`  cg_${model.craftVar}: ${model.craftVar} + ${shortfallVar} >= ${formatLpNumber(model.craftFloor)}`);
+      if (progressLayer) {
+        lines.push(`  cgp_${model.craftVar}: ${model.craftVar} + ${progressCraftVar(model)} + ${progressCraftShortfallVar(model)} >= ${formatLpNumber(model.craftFloor)}`);
+      }
     }
   }
   for (let itemIndex = 0; itemIndex < itemKeys.length; itemIndex += 1) {
@@ -2589,6 +2620,24 @@ async function solveUnifiedCraftMissionPlan(options: {
 
     const rhs = demandQty - inventoryQty;
     lines.push(`  b_${itemIndex}: ${formatLinearExpression(terms)} >= ${formatLpNumber(rhs)}`);
+    if (progressLayer) {
+      const progressTerms = terms.filter((term) => term.variable !== unmetVarByItem.get(itemKey));
+      if (demandQty > 0) {
+        progressTerms.push({ coefficient: 1, variable: progressUnmetVar(itemIndex) });
+        // Progress only adds to a goal: its own copies never go to another's.
+        lines.push(`  pu_${itemIndex}: ${progressUnmetVar(itemIndex)} - ${unmetVarByItem.get(itemKey)!} <= 0`);
+      }
+      if (outputModel) {
+        progressTerms.push({ coefficient: 1, variable: progressCraftVar(outputModel) });
+      }
+      for (const craftModel of craftModels) {
+        const ingredientQty = getRecipe(craftModel.itemKey)?.ingredients[itemKey] || 0;
+        if (ingredientQty > 0) {
+          progressTerms.push({ coefficient: -ingredientQty, variable: progressCraftVar(craftModel) });
+        }
+      }
+      lines.push(`  pb_${itemIndex}: ${formatLinearExpression(progressTerms)} >= ${formatLpNumber(rhs)}`);
+    }
   }
 
   const actionIndexesByOption = new Map<string, number[]>();
@@ -3014,6 +3063,19 @@ async function solveUnifiedCraftMissionPlan(options: {
   for (const variable of consumptionVars) {
     lines.push(`  ${variable} >= 0`);
   }
+  if (progressLayer) {
+    for (const model of craftModels) {
+      lines.push(`  ${progressCraftVar(model)} >= 0`);
+      if (model.craftFloor > 0) {
+        lines.push(`  0 <= ${progressCraftShortfallVar(model)} <= ${formatLpNumber(model.craftFloor)}`);
+      }
+    }
+    itemKeys.forEach((key, index) => {
+      if ((demandByItem.get(key) || 0) > 0) {
+        lines.push(`  0 <= ${progressUnmetVar(index)} <= ${formatLpNumber(demandByItem.get(key)!)}`);
+      }
+    });
+  }
   for (const [itemKey, variable] of unmetVarByItem) {
     lines.push(partialTankPlan
       ? `  0 <= ${variable} <= ${formatLpNumber(demandByItem.get(itemKey) || 0)}`
@@ -3144,17 +3206,67 @@ async function solveUnifiedCraftMissionPlan(options: {
     polishLines[polishLines.findIndex((line) => line.startsWith("  obj:"))] = `  obj: ${formatLinearExpression(objectiveTerms)}`;
     polishLines.splice(polishLines.indexOf("Bounds"), 0,
       `  goal_completion: ${formatLinearExpression(goalShortfallTerms)} <= ${formatLpNumber(shortfallBound + 1e-4)}`);
-    const polishTimeLimit = "time_limit" in solveOptions
+    const polishTimeLimit = () => "time_limit" in solveOptions
       ? { time_limit: Math.max(VIRTUE_TANK_PARTIAL_POLISH_MIN_SECONDS, effectiveTimeLimitSeconds! - (Date.now() - solveStartedAtMs) / 1000) }
       : {};
     try {
-      const polished = await solve(polishLines.join("\n"), { ...solveOptions, mip_rel_gap: 0.01, ...polishTimeLimit });
+      const polished = await solve(polishLines.join("\n"), { ...solveOptions, mip_rel_gap: 0.01, ...polishTimeLimit() });
       if (usableIncumbent(polished)) {
         // Completion optimality still depends on the first pass finishing.
         solution = { ...polished, Status: solution.Status === "Optimal" ? polished.Status : solution.Status };
       }
     } catch {
       // Keep the achievable partial plan even if the optional time solve fails.
+    }
+    // Spare fuel: on top of that plan's launches, with the same completed
+    // goals and no more shifts, get the goals left short as far along as the
+    // fuel it leaves allows (progress crafts), then as fast as possible at
+    // that progress. Launches that only bring part of a craft's ingredients
+    // are worth making now.
+    const goalsShort = shortfallBound > 1e-6;
+    if (progressLayer && goalsShort && progressShortfallTerms.length > 0) {
+      const columnValue = (variable: string) => solution.Columns?.[variable]?.Primal || 0;
+      const shiftsTaken = shiftTerms.reduce((sum, term) => sum + term.coefficient * Math.max(0, Math.round(columnValue(term.variable))), 0);
+      const progressLines = [...polishLines];
+      progressLines[progressLines.findIndex((line) => line.startsWith("  obj:"))] = `  obj: ${formatLinearExpression(progressShortfallTerms)}`;
+      if (shiftTerms.length > 0) {
+        progressLines.splice(progressLines.indexOf("Bounds"), 0,
+          `  shift_budget: ${formatLinearExpression(shiftTerms)} <= ${formatLpNumber(shiftsTaken + 1e-6)}`);
+      }
+      // The plan's own launches stay; spare fuel only adds to them.
+      missionVars.forEach((variable, index) => {
+        const launches = Math.round(columnValue(variable));
+        if (launches > 0) {
+          progressLines.splice(progressLines.indexOf("Bounds"), 0, `  keep_${index}: ${variable} >= ${launches}`);
+        }
+      });
+      try {
+        const progressed = await solve(progressLines.join("\n"), { ...solveOptions, mip_rel_gap: 0, ...polishTimeLimit() });
+        if (usableIncumbent(progressed)) {
+          const progressBound = progressShortfallTerms.reduce(
+            (sum, term) => sum + term.coefficient * Math.max(0, progressed.Columns?.[term.variable]?.Primal || 0), 0
+          );
+          // Only worth a timing pass when spare fuel gets somewhere.
+          if (progressBound < shortfallBound - 1e-3) {
+            const fastLines = [...progressLines];
+            fastLines[fastLines.findIndex((line) => line.startsWith("  obj:"))] = `  obj: ${formatLinearExpression(objectiveTerms)}`;
+            fastLines.splice(fastLines.indexOf("Bounds"), 0,
+              `  goal_progress: ${formatLinearExpression(progressShortfallTerms)} <= ${formatLpNumber(progressBound + 1e-4)}`);
+            let fastest = progressed;
+            try {
+              const timed = await solve(fastLines.join("\n"), { ...solveOptions, mip_rel_gap: 0.01, ...polishTimeLimit() });
+              if (usableIncumbent(timed)) {
+                fastest = timed;
+              }
+            } catch {
+              // The progress solve's plan is still within the cap.
+            }
+            solution = { ...fastest, Status: solution.Status === "Optimal" ? fastest.Status : solution.Status };
+          }
+        }
+      } catch {
+        // Keep the plan without spare-fuel launches.
+      }
     }
   }
   const elapsedMs = Math.max(0, Date.now() - solveStartedAtMs);
@@ -3245,6 +3357,32 @@ async function solveUnifiedCraftMissionPlan(options: {
     const rawValue = solution.Columns?.[unmetVarByItem.get(itemKey)!]?.Primal || 0;
     remainingDemand[itemKey] = Math.max(0, rawValue);
   }
+  // How far spare fuel gets each goal left short: fractional crafts' worth.
+  const goalProgress: Array<{ itemKey: string; crafts: number }> = [];
+  if (progressLayer) {
+    const columnValue = (variable: string) => Math.max(0, solution.Columns?.[variable]?.Primal || 0);
+    itemKeys.forEach((itemKey, index) => {
+      if ((demandByItem.get(itemKey) || 0) > 0 && remainingDemand[itemKey] > 1e-6) {
+        goalProgress.push({ itemKey, crafts: Math.max(0, remainingDemand[itemKey] - columnValue(progressUnmetVar(index))) });
+      }
+    });
+    for (const model of craftModels) {
+      const owed = model.craftFloor - (crafts[model.itemKey] || 0);
+      if (model.craftFloor > 0 && owed > 0) {
+        goalProgress.push({ itemKey: model.itemKey, crafts: Math.min(owed, columnValue(progressCraftVar(model))) });
+      }
+    }
+    const progressed = goalProgress.filter((goal) => goal.crafts >= 0.01);
+    if (progressed.length > 0) {
+      notes.push(
+        `Spare fuel within the cap goes to launches toward the goals it leaves short: ${progressed
+          .map((goal) => `${itemKeyToTierLabel(goal.itemKey)} ${goal.crafts >= 0.995
+            ? `gets about ${goal.crafts.toFixed(1)} crafts' worth of ingredients`
+            : `gets about ${Math.round(goal.crafts * 100)}% of its next craft's ingredients`}`)
+          .join("; ")}.`
+      );
+    }
+  }
   if (acceptTankTimeLimit && !partialTankPlan && Object.values(remainingDemand).some((qty) => qty > 1e-6)) {
     throw new Error(`unified HiGHS solve status '${status}' before meeting every goal`);
   }
@@ -3272,6 +3410,11 @@ async function solveUnifiedCraftMissionPlan(options: {
     totalSlotSeconds,
     notes,
     ...(virtueShifts !== undefined ? { virtueShifts } : {}),
+    ...(progressLayer ? {
+      progressShortfallScore: progressShortfallTerms.reduce(
+        (sum, term) => sum + (term.coefficient / completionScale) * Math.max(0, solution.Columns?.[term.variable]?.Primal || 0), 0
+      ),
+    } : {}),
     ...(partialTankPlan ? {
       goalShortfallScore:
         itemKeys.reduce((sum, key) => sum + ((demandByItem.get(key) || 0) > 0 ? remainingDemand[key] / demandByItem.get(key)! : 0), 0) +
@@ -3846,6 +3989,8 @@ function buildVirtueTankUnits(options: {
     });
   }
   prepUnits.sort((a, b) => (a.prepOrder ?? 0) - (b.prepOrder ?? 0));
+  // First of all launches, or, as the first launch of a fresh dubcap, the
+  // first event launch (after prep).
   const fuelingUnits: VirtueTankPlanUnit[] = fuelingLaunch
     ? [{
         id: claimUniqueRowKey("fueling", usedIds),
@@ -3854,8 +3999,9 @@ function buildVirtueTankUnits(options: {
         level: fuelingLaunch.level,
         durationSeconds: fuelingLaunch.durationSeconds,
         launches: 1,
-        isPrep: true,
-        prepOrder: Math.min(-1, ...prepUnits.map((unit) => (unit.prepOrder ?? 0) - 1)),
+        ...(fuelingLaunch.dubcap && !fuelingLaunch.dubcap.live
+          ? { launchOrder: 0 }
+          : { isPrep: true, prepOrder: Math.min(-1, ...prepUnits.map((unit) => (unit.prepOrder ?? 0) - 1)) }),
         fuelPerLaunch: fuelingLaunch.fuelPerLaunch,
         preFueled: fuelingLaunch.preFueled,
         targetAfxId: fuelingLaunch.targetAfxId,
@@ -3865,9 +4011,9 @@ function buildVirtueTankUnits(options: {
 }
 
 /**
- * The prep launches (and the partly fueled ship) buildVirtueTankUnits will
- * make for these prep steps, by option, so a live event's slot starts can be
- * known before the solve. Prep phases each hold one option's launches, so
+ * The prep launches (and the partly fueled ship, unless it flies in the
+ * event) buildVirtueTankUnits will make for these prep steps, by option, so a
+ * live event's slot starts can be known before the solve. Prep phases each hold one option's launches, so
  * how the plan later splits them into units doesn't change their schedule.
  */
 function dubcapPrepUnits(prepSteps: PrepProgressionStep[], fuelingLaunch?: VirtueFuelingLaunch) {
@@ -3887,7 +4033,7 @@ function dubcapPrepUnits(prepSteps: PrepProgressionStep[], fuelingLaunch?: Virtu
         durationSeconds: requirement.option.durationSeconds,
         prepOrder: prepOrderByOption.get(optionKey) ?? 0,
       }));
-  if (fuelingLaunch) {
+  if (fuelingLaunch && !fuelingLaunch.dubcap) {
     units.unshift({
       id: "fueling",
       launches: 1,
@@ -3932,6 +4078,14 @@ function buildDubcapUnits(
       return { actionKey: id, launches, startSeconds, endSeconds: startSeconds + launches * base.durationSeconds };
     });
   }));
+  // The partly fueled ship opens its slot (the window's lane starts leave room for it).
+  const fueling = allocation.window?.fueling;
+  const fuelingUnit = fueling ? units.find((unit) => unit.preFueled !== undefined) : undefined;
+  if (fueling && fuelingUnit) {
+    lanes[fueling.lane].unshift({
+      actionKey: fuelingUnit.id, launches: 1, startSeconds: fueling.startSeconds, endSeconds: fueling.endSeconds,
+    });
+  }
   return { units: [...ordinary, ...eventUnits], allocation: { ...allocation, lanes }, eventRunIds };
 }
 
@@ -4023,7 +4177,17 @@ function finishDubcapSchedule(
       return { ...unit, id: key, launches: entry.launches };
     });
   const window = event.allocation.window ?? FRESH_DUBCAP_WINDOW;
-  const prep = scheduleDubcapPrep(entries.filter((unit) => unit.isPrep), inAirLaneFreeSeconds);
+  // Units with event launches: the mission rows' event units and the partly
+  // fueled ship when it opens the event (a prep unit in a live one, which
+  // launches before any prep).
+  const eventIds = new Set(event.allocation.lanes.flatMap((lane) => lane.map((block) => block.actionKey)));
+  const inEvent = (unit: VirtueTankPlanUnit) => eventIds.has(unit.id) || unit.launchOrder !== undefined;
+  const prepEntries = entries.filter((entry) => entry.isPrep && !eventIds.has(keyToUnit.get(entry.id)!.unit.id));
+  const fueling = window.live ? window.fueling : undefined;
+  const prepInAir = fueling
+    ? [0, 1, 2].map((lane) => (lane === fueling.lane ? fueling.endSeconds : inAirLaneFreeSeconds[lane] || 0))
+    : inAirLaneFreeSeconds;
+  const prep = scheduleDubcapPrep(prepEntries, prepInAir);
   // A live event is under way: its slots open as their ships return (the
   // solve's lane starts, from the same prep), not after all of them.
   if (window.live && prep.lanes.some((lane, index) => (lane.at(-1)?.endSeconds ?? 0) > (window.laneStartSeconds[index] || 0) + 1e-6)) {
@@ -4032,7 +4196,8 @@ function finishDubcapSchedule(
   const startSeconds = window.live ? 0 : prep.makespanSeconds;
   const eventTank = new Map<string, number>();
   for (const entry of pack?.launchOrder ?? []) {
-    if (unitById.get(entry.unitId)?.launchOrder !== undefined) {
+    const unit = unitById.get(entry.unitId);
+    if (unit && inEvent(unit)) {
       eventTank.set(entry.unitId, entry.tankIndex);
     }
   }
@@ -4045,19 +4210,23 @@ function finishDubcapSchedule(
   const lanes = event.allocation.lanes.map((lane) => lane.map((block) => {
     const unit = unitById.get(block.actionKey)!;
     return {
-      missionRowKey: unit.missionRowKey!, ship: unit.ship, durationType: unit.durationType,
+      ...(unit.missionRowKey ? { missionRowKey: unit.missionRowKey } : {}),
+      ...(unit.preFueled !== undefined ? { fueling: true } : {}),
+      ship: unit.ship, durationType: unit.durationType,
       level: unit.level, targetAfxId: unit.targetAfxId ?? 10000,
       launches: block.launches, startSeconds: block.startSeconds, endSeconds: block.endSeconds,
       ...(pack ? { tankIndex: eventTank.get(unit.id) } : {}),
     };
   }));
-  const fullLanes = full.lanes.map((lane, index) => [...prep.lanes[index], ...lane].map((block) => {
+  // A live event's partly fueled ship flies before the prep in its slot.
+  const byStart = <T extends { startSeconds: number }>(blocks: T[]) => blocks.slice().sort((a, b) => a.startSeconds - b.startSeconds);
+  const fullLanes = full.lanes.map((lane, index) => byStart([...prep.lanes[index], ...lane]).map((block) => {
     const mapped = keyToUnit.get(block.actionKey);
     const unit = mapped?.unit ?? unitById.get(block.actionKey)!;
     return {
       missionRowKey: unit.missionRowKey, ship: unit.ship, durationType: unit.durationType,
-      level: unit.level, targetAfxId: unit.targetAfxId, isPrep: Boolean(unit.isPrep),
-      dubcap: unit.launchOrder !== undefined, launches: block.launches,
+      level: unit.level, targetAfxId: unit.targetAfxId, isPrep: Boolean(unit.isPrep) && !inEvent(unit),
+      dubcap: inEvent(unit), ...(unit.preFueled !== undefined ? { fueling: true } : {}), launches: block.launches,
       startSeconds: block.startSeconds, endSeconds: block.endSeconds,
       ...(pack ? { tankIndex: mapped?.tankIndex ?? eventTank.get(unit.id) ?? 0 } : {}),
     };
@@ -4071,7 +4240,7 @@ function finishDubcapSchedule(
         launches: block.launches, startSeconds: block.startSeconds, endSeconds: block.endSeconds,
       };
     };
-    const scheduleLanes = full.lanes.map((lane, index) => [...prep.lanes[index].map(toTankBlock), ...lane.map(toTankBlock)]);
+    const scheduleLanes = full.lanes.map((lane, index) => byStart([...prep.lanes[index].map(toTankBlock), ...lane.map(toTankBlock)]));
     const chronological = scheduleLanes.flat().sort((a, b) => a.startSeconds - b.startSeconds || a.tankIndex - b.tankIndex);
     let lastFuelTank = 0;
     const counts: Record<string, number> = {};
@@ -4101,7 +4270,7 @@ function finishDubcapSchedule(
     // A live event's in-air ships are part of its timing, so its plan is timed as is.
     missionSeconds: window.live
       ? full.makespanSeconds
-      : full.makespanSeconds - startSeconds + scheduleDubcapPrep(entries.filter((unit) => unit.isPrep)).makespanSeconds,
+      : full.makespanSeconds - startSeconds + scheduleDubcapPrep(prepEntries).makespanSeconds,
     lanes: lanes.map((lane) => mergeDubcapRuns(lane, (block) => `${block.missionRowKey}|${block.tankIndex}`)),
     fullLanes: fullLanes.map((lane) => mergeDubcapRuns(lane, (block) =>
       `${block.missionRowKey ?? `${block.ship}|${block.durationType}|${block.level}`}|${block.isPrep}|${block.dubcap}|${block.tankIndex}`)),
@@ -6192,6 +6361,75 @@ async function prepareVirtueFuelingLaunch(
   };
 }
 
+/** The mission slot that frees first (in-air ships hold the others). */
+function earliestFreeLane(inAirLaneFreeSeconds: number[]): number {
+  let lane = 0;
+  for (let candidate = 1; candidate < 3; candidate += 1) {
+    if ((inAirLaneFreeSeconds[candidate] || 0) < (inAirLaneFreeSeconds[lane] || 0)) lane = candidate;
+  }
+  return lane;
+}
+
+/**
+ * Whether the partly fueled ship flies as the plan's first dubcap launch
+ * (VirtueFuelingLaunch.dubcap). A fresh event starts when the player chooses,
+ * so it always does. In a live event it launches in the first slot to free
+ * up, which must be before the cutoff, and only when the tank already holds
+ * the fuel it still lacks (otherwise it would wait on a refill).
+ */
+function fuelingDubcapEvent(
+  launch: VirtueFuelingLaunch,
+  profile: PlayerProfile,
+  tank: VirtueTankPlannerOptions,
+  inAirLaneFreeSeconds: number[]
+): { multiplier: number; live: boolean } | null {
+  const live = liveDubcapWindow(profile.liveDubcap);
+  if (!live) {
+    return { multiplier: FRESH_DUBCAP_WINDOW.multiplier, live: false };
+  }
+  const launchSeconds = inAirLaneFreeSeconds[earliestFreeLane(inAirLaneFreeSeconds)] || 0;
+  const tolerance = virtueFuelTolerance(Number(tank.capacity) || 0);
+  const fueled =
+    tank.startMode === "ideal" ||
+    VIRTUE_REFILL_ROUTE_ORDER.every(
+      (egg) => (launch.fuelPerLaunch[egg] || 0) <= Math.max(0, Number(tank.currentContents?.[egg] || 0)) + tolerance
+    );
+  return fueled && launchSeconds <= live.windowSeconds - DUBCAP_LAUNCH_MARGIN_SECONDS
+    ? { multiplier: live.multiplier, live: true }
+    : null;
+}
+
+/**
+ * The event a candidate's dubcap launches fly in: the live one, timed around
+ * its in-air ships and prep, or a fresh one. The partly fueled ship, when it
+ * flies in the event, takes the first free slot at the event's zero (fresh)
+ * or as soon as that slot frees (live); prep goes around it.
+ */
+function dubcapWindowFor(
+  liveDubcap: PlayerProfile["liveDubcap"],
+  prepSteps: PrepProgressionStep[],
+  fuelingLaunch: VirtueFuelingLaunch | undefined,
+  inAirLaneFreeSeconds: number[]
+): DubcapWindow {
+  const fuelingInEvent = fuelingLaunch?.dubcap ? fuelingLaunch : undefined;
+  if (!liveDubcapWindow(liveDubcap)) {
+    if (!fuelingInEvent) return FRESH_DUBCAP_WINDOW;
+    const endSeconds = fuelingInEvent.durationSeconds;
+    return { ...FRESH_DUBCAP_WINDOW, laneStartSeconds: [endSeconds, 0, 0], fueling: { lane: 0, startSeconds: 0, endSeconds } };
+  }
+  if (!fuelingInEvent) {
+    return liveDubcapWindow(liveDubcap, liveDubcapLaneStarts(dubcapPrepUnits(prepSteps, fuelingLaunch), inAirLaneFreeSeconds))!;
+  }
+  const lane = earliestFreeLane(inAirLaneFreeSeconds);
+  const startSeconds = Math.max(0, inAirLaneFreeSeconds[lane] || 0);
+  const endSeconds = startSeconds + fuelingInEvent.durationSeconds;
+  const held = [0, 1, 2].map((index) => (index === lane ? endSeconds : inAirLaneFreeSeconds[index] || 0));
+  return {
+    ...liveDubcapWindow(liveDubcap, liveDubcapLaneStarts(dubcapPrepUnits(prepSteps), held))!,
+    fueling: { lane, startSeconds, endSeconds },
+  };
+}
+
 /**
  * Fold the player's outstanding missions into the plan.
  *
@@ -6231,6 +6469,12 @@ export async function planForTarget(
         includeStoneFragments: missionDropRarities.fragments,
       })
     : null;
+  const inAirLanes = inAirLaneLoads(inFlight.rows);
+  const fuelingDubcap = fueling && plannerOptions.includeDubcap ? fuelingDubcapEvent(fueling.launch, profile, virtueTank!, inAirLanes) : null;
+  if (fueling && fuelingDubcap) {
+    fueling.launch = { ...fueling.launch, dubcap: fuelingDubcap };
+    fueling.yields = Object.fromEntries(Object.entries(fueling.yields).map(([key, qty]) => [key, qty * fuelingDubcap.multiplier]));
+  }
   const supplyYields = fueling ? mergeInventory(inFlight.yields, fueling.yields) : inFlight.yields;
   const planningProfile: PlayerProfile =
     Object.keys(supplyYields).length > 0 || fueling
@@ -6249,7 +6493,7 @@ export async function planForTarget(
         priorityTimeRaw,
         plannerOptions,
         virtueTank,
-        inAirLaneLoads(inFlight.rows),
+        inAirLanes,
         fueling?.launch
       )
     : await planForNewLaunches(
@@ -6259,7 +6503,7 @@ export async function planForTarget(
         priorityTimeRaw,
         plannerOptions,
         undefined,
-        inAirLaneLoads(inFlight.rows)
+        inAirLanes
       );
 
   const scheduled = withInFlightSchedule(result, inFlight);
@@ -6403,6 +6647,13 @@ type VirtueFuelingLaunch = {
   fuelPerLaunch: VirtueFuelVector;
   /** Fuel already in the ship. */
   preFueled: VirtueFuelVector;
+  /**
+   * It is the first launch of the plan's dubcap, so its drops (already in the
+   * supply) are multiplied: at the start of a fresh event, or now in a live
+   * one when a slot frees before the cutoff and the tank holds the rest of
+   * its fuel.
+   */
+  dubcap?: { multiplier: number; live: boolean };
 };
 
 /** What a tank-mode pass tells planVirtueTankLaunches besides its plan. */
@@ -7305,6 +7556,7 @@ async function planForNewLaunches(
                   tankRun.fuelingLaunch.level,
                   tankRun.fuelingLaunch.targetAfxId ?? "none",
                   ...VIRTUE_REFILL_ROUTE_ORDER.map((egg) => Math.round(tankRun.fuelingLaunch!.fuelPerLaunch[egg] || 0)),
+                  tankRun.fuelingLaunch.dubcap ? `dubcap${tankRun.fuelingLaunch.dubcap.multiplier}` : "ordinary",
                 ].join(",")
               : "nofueling",
           ].join(":")
@@ -7595,18 +7847,10 @@ async function planForNewLaunches(
         );
       }
       if (plannerOptions.includeDubcap) {
-        const window = liveDubcapWindow(
-          profile.liveDubcap,
-          profile.liveDubcap
-            ? liveDubcapLaneStarts(
-                dubcapPrepUnits(candidate.prepSteps, tankRun?.fuelingLaunch),
-                tankRun?.inAirLaneFreeSeconds ?? inAirLaneFreeSeconds
-              )
-            : undefined
+        const window = dubcapWindowFor(
+          profile.liveDubcap, candidate.prepSteps, tankRun?.fuelingLaunch, tankRun?.inAirLaneFreeSeconds ?? inAirLaneFreeSeconds
         );
-        candidateActions = addDubcapActions(
-          candidateActions, finalOptionKeys, phased.phaseChains, requiredMissionLaunches, window ?? FRESH_DUBCAP_WINDOW
-        );
+        candidateActions = addDubcapActions(candidateActions, finalOptionKeys, phased.phaseChains, requiredMissionLaunches, window);
       }
       const input: CandidateEvalInput = {
         candidate,
@@ -7943,7 +8187,10 @@ async function planForNewLaunches(
             objectiveMode === "virtueFuel" ? fuelRef : geRef,
             timeRef
           );
-      const unmetTotal = unified.goalShortfallScore ?? Object.values(unified.remainingDemand).reduce((sum, qty) => sum + Math.max(0, qty), 0);
+      // Partial plans: completed goals first, then how far spare fuel gets the rest.
+      const unmetTotal = unified.goalShortfallScore !== undefined
+        ? unified.goalShortfallScore + PROGRESS_SHORTFALL_WEIGHT * (unified.progressShortfallScore ?? 0)
+        : Object.values(unified.remainingDemand).reduce((sum, qty) => sum + Math.max(0, qty), 0);
       const totalLaunches =
         Object.values(unified.missionCounts).reduce(
           (sum, launches) => sum + Math.max(0, Math.round(launches)),
@@ -9360,8 +9607,11 @@ async function planForNewLaunches(
         }. Humility is fueled live on its farm and never counted.`
       );
       if (tankRun.fuelingLaunch) {
+        const event = tankRun.fuelingLaunch.dubcap;
         notes.push(
-          `Your partly fueled ${shipDisplayName(tankRun.fuelingLaunch.ship)} launches first, at its current ${tankRun.fuelingLaunch.level} stars and with the target it was fueled for; only the fuel it still lacks comes from the tank.`
+          `Your partly fueled ${shipDisplayName(tankRun.fuelingLaunch.ship)} launches first${
+            event ? ` in the dubcap, with ${event.multiplier}× drops` : ""
+          }, at its current ${tankRun.fuelingLaunch.level} stars and with the target it was fueled for; only the fuel it still lacks comes from the tank.`
         );
       }
     } else if (objectiveMode === "virtueFuel") {
@@ -9498,7 +9748,13 @@ async function planForNewLaunches(
       actions: outputActions, missionRows, actionKeyByRowKey, prepSteps: outputPrepSteps, fuelingLaunch: tankRun?.fuelingLaunch,
     }) : [];
     const eventUnits = plannerOptions.includeDubcap ? buildDubcapUnits(
-      baseUnits, shown.allocation ?? { lanes: [[], [], []] }, actionKeyByRowKey, Boolean(tankRun)
+      baseUnits,
+      shown.allocation ?? {
+        lanes: [[], [], []],
+        window: dubcapWindowFor(profile.liveDubcap, outputPrepSteps, tankRun?.fuelingLaunch, tankRun?.inAirLaneFreeSeconds ?? inAirLaneFreeSeconds),
+      },
+      actionKeyByRowKey,
+      Boolean(tankRun)
     ) : undefined;
     if (tankRun) {
       reportProgress({

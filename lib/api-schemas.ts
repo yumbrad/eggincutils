@@ -627,7 +627,9 @@ export const plannerResultSchema = z.object({
     makespanSeconds: nonNegativeFiniteSchema,
     missionSeconds: nonNegativeFiniteSchema,
     lanes: z.array(z.array(z.object({
-      missionRowKey: z.string().min(1),
+      // The partly fueled ship has no mission row.
+      missionRowKey: z.string().min(1).optional(),
+      fueling: z.boolean().optional(),
       ship: z.string().min(1), durationType: z.string().min(1),
       level: nonNegativeIntSchema, targetAfxId: z.number().int(),
       launches: nonNegativeIntSchema, startSeconds: nonNegativeFiniteSchema, endSeconds: nonNegativeFiniteSchema,
@@ -635,6 +637,7 @@ export const plannerResultSchema = z.object({
     }))),
     fullLanes: z.array(z.array(z.object({
       missionRowKey: z.string().min(1).optional(),
+      fueling: z.boolean().optional(),
       ship: z.string().min(1), durationType: z.string().min(1),
       level: nonNegativeIntSchema, targetAfxId: z.number().int().nullable().optional(),
       isPrep: z.boolean(), dubcap: z.boolean(),

@@ -46,6 +46,20 @@ ingredients.
 
 **Artifact Attainment / Mission Craft Planner**
 
+- A tab left open across a deploy now says a newer version is live and offers a reload, so it can't keep
+planning with the old planner.
+
+- Path of Virtue plans that can't finish every goal within the shift cap now spend the fuel left over on
+launches toward the goals left short.
+  - The plan for the goals it can finish is unchanged; the extra launches go on top, with no more shifts.
+  - They pick the targets that get the next craft furthest along, and a note says how far each goal gets
+(e.g. "about 43% of its next craft's ingredients").
+
+- With **Include one dubcap**, a partly fueled ship is now the event's first launch, with the event's drops.
+  - A fresh event: it launches at the event's start in slot 1, after any prep.
+  - A live event: it launches now (or when the first slot frees up), when the tank already holds the rest of
+its fuel; otherwise it still launches first, before the event's launches.
+
 - Path of Virtue plans now read a **partly fueled ship** from your backup and launch it first, with
 the target it was fueled for and at the stars its ship has now.
   - Only the fuel it still lacks comes from the tank, so the eggs already in it no longer take tank room.

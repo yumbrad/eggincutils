@@ -16,6 +16,7 @@ import artifactDisplay from "../../data/artifact-display.json";
 import artifactConsumption from "../../data/artifact-consumption.json";
 import artifactShortNames from "../../data/artifact-short-names.json";
 import recipes from "../../data/recipes.json";
+import { APP_BUILD } from "../../lib/app-build";
 import { MISSION_CRAFT_COPY } from "../../lib/mission-craft-copy";
 import {
   buildTargetOptions,
@@ -1284,14 +1285,14 @@ function buildDubcapTimeline(plan: PlanResponse["plan"]): MissionTimeline | null
     const phase = block.isPrep ? "prep" : "mission";
     const id = block.isPrep
       ? `event-prep:${block.ship}|${block.durationType}|${block.level}`
-      : `event-plan:${block.missionRowKey ?? colorKey}:${block.dubcap ? "dubcap" : "ordinary"}`;
+      : `event-plan:${block.fueling ? "fueling" : block.missionRowKey ?? colorKey}:${block.dubcap ? "dubcap" : "ordinary"}`;
     const totalSeconds = block.endSeconds - block.startSeconds;
     let segment = segmentsById.get(id);
     if (!segment) {
       segment = {
         id,
         label: `${titleCaseShip(block.ship)} ${durationTypeWithLevelLabel(block.durationType, block.level)}`,
-        subtitle: `${block.isPrep ? "Prep" : afxIdToTargetFamilyName(block.targetAfxId ?? 10000)}${block.dubcap ? ` · dubcap ×${event.multiplier}` : ""}`,
+        subtitle: `${block.fueling ? "Partly fueled · " : ""}${block.isPrep ? "Prep" : afxIdToTargetFamilyName(block.targetAfxId ?? 10000)}${block.dubcap ? ` · dubcap ×${event.multiplier}` : ""}`,
         phase,
         color: colors.get(colorKey) ?? prepTimelineColor(colorKey),
         launches: 0,
@@ -1387,13 +1388,16 @@ function DubcapTimeline({ event, tankLabels }: { event: DubcapPlan; tankLabels?:
                   const duration = (block.endSeconds - block.startSeconds) / block.launches;
                   const lastStart = block.endSeconds - duration;
                   return (
-                    <tr key={`${block.missionRowKey}:${blockIndex}`}>
+                    <tr key={`${block.missionRowKey ?? "fueling"}:${blockIndex}`}>
                       <td className={styles.dubcapClock}>
                         {clock(block.startSeconds)}{block.launches > 1 && <>–{clock(lastStart)}</>}
                       </td>
                       <td>
                         {block.launches > 1 && <>{block.launches}× </>}{titleCaseShip(block.ship)}<br />
-                        <span className="muted">{durationTypeWithLevelLabel(block.durationType, block.level)} · {afxIdToTargetFamilyName(block.targetAfxId)}</span>
+                        <span className="muted">
+                          {durationTypeWithLevelLabel(block.durationType, block.level)} · {afxIdToTargetFamilyName(block.targetAfxId)}
+                          {block.fueling && <> · partly fueled</>}
+                        </span>
                         {block.launches > 1 && <div className="muted">Every {formatDurationFromHours(duration / 3600)}</div>}
                         {block.tankIndex != null && (
                           <div className="muted">{tankLabels?.[block.tankIndex] ?? `Tank ${block.tankIndex + 1}`}</div>
@@ -1809,7 +1813,9 @@ function buildVirtueTankPlanView(
     const subtitle = mission
       ? `${afxIdToTargetFamilyName(mission.targetAfxId)}${mission.dubcap ? ` · dubcap ×${plan.dubcap?.multiplier ?? 2}` : ""}`
       : unit.preFueled
-        ? `Partly fueled · ${afxIdToTargetFamilyName(unit.targetAfxId ?? 10000)} · add the rest and launch`
+        ? `Partly fueled · ${afxIdToTargetFamilyName(unit.targetAfxId ?? 10000)}${
+            plan.dubcap?.lanes.some((lane) => lane.some((block) => block.fueling)) ? ` · dubcap ×${plan.dubcap.multiplier}` : ""
+          } · add the rest and launch`
       : unit.isPrep && prepReason
         ? prepReasonLabel(prepReason)
         : unit.targetAfxId != null
@@ -3880,6 +3886,41 @@ function ShipSelectorImage({ ship, imageFiles }: { ship: string; imageFiles: str
   );
 }
 
+/**
+ * Whether a newer deploy is live than the one this tab loaded, checked when
+ * the tab comes back into view (a tab left open keeps its old planner).
+ */
+function useAppUpdated(): boolean {
+  const [updated, setUpdated] = useState(false);
+  useEffect(() => {
+    if (APP_BUILD === "dev") {
+      return;
+    }
+    let cancelled = false;
+    const check = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      fetch("/api/build", { cache: "no-store" })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((payload: { build?: unknown } | null) => {
+          if (!cancelled && typeof payload?.build === "string" && payload.build !== "dev" && payload.build !== APP_BUILD) {
+            setUpdated(true);
+          }
+        })
+        .catch(() => undefined);
+    };
+    document.addEventListener("visibilitychange", check);
+    window.addEventListener("focus", check);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", check);
+      window.removeEventListener("focus", check);
+    };
+  }, []);
+  return updated;
+}
+
 export default function MissionCraftPlannerPage() {
   const [eid, setEid] = useState("");
   const [targetItemId, setTargetItemId] = useState("soul-stone-2");
@@ -3913,6 +3954,7 @@ export default function MissionCraftPlannerPage() {
   const [fastMode, setFastMode] = useState(false);
   const [includeDubcap, setIncludeDubcap] = useState(false);
   const [loading, setLoading] = useState(false);
+  const appUpdated = useAppUpdated();
   const [error, setError] = useState<string | null>(null);
   const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
   const [plannerProgress, setPlannerProgress] = useState<PlannerProgressState | null>(null);
@@ -6248,6 +6290,18 @@ export default function MissionCraftPlannerPage() {
             </div>
           </div>
         </div>
+
+        {appUpdated && (
+          <div className={styles.demoNotice} role="status">
+            <div>
+              A newer version of this planner is live. This tab is still running the one it loaded, so reload before
+              building a plan.
+            </div>
+            <button type="button" onClick={() => window.location.reload()}>
+              Reload
+            </button>
+          </div>
+        )}
 
         {showDemoNotice && (
           <div className={styles.demoNotice}>

@@ -1,6 +1,21 @@
+const { execSync } = require('child_process');
+
+// The deployed commit (lib/app-build.ts), baked into the page and the API
+// alike so an old tab can tell a newer deploy is live.
+function appBuild() {
+  try {
+    return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch {
+    return 'dev';
+  }
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  env: {
+    NEXT_PUBLIC_APP_BUILD: process.env.NEXT_PUBLIC_APP_BUILD || appBuild(),
+  },
   // hensin.space/workout is the yumworkout PWA, a separate Fly app served
   // under the /workout/ base path (https://github.com/yumbrad/yumworkout).
   async rewrites() {

@@ -34,7 +34,8 @@ function launches(result: PlannerResult, doubled: boolean): number {
 function expectValidTimeline(result: PlannerResult): void {
   const event = result.dubcap!;
   expect(event.lanes).toHaveLength(3);
-  expect(event.launches).toBe(launches(result, true));
+  // The partly fueled ship can open the event; it has no mission row.
+  expect(event.launches).toBe(launches(result, true) + event.lanes.flat().filter((block) => block.fueling).length);
   for (const lane of event.lanes) {
     let end = 0;
     lane.forEach((block, index) => {
@@ -322,6 +323,33 @@ describe("one dubcap event", () => {
   });
 });
 
+// Henerprise EPIC burns C25 K25 R20; this one already holds C25 K25.
+const fuelingTank = () => ({
+  shiftCap: 0, startMode: "current" as const, capacity: 500 * T,
+  currentContents: { curiosity: 60 * T, kindness: 60 * T, resilience: 60 * T },
+  fuelingShip: { ship: "HENERPRISE", durationType: "EPIC", targetAfxId: null, loaded: { curiosity: 25 * T, kindness: 25 * T } },
+});
+
+const cubeT2 = (quantity: number) => [{ targetItemId: "puzzle-cube-2", quantity }];
+
+describe("a partly fueled ship and a fresh dubcap", () => {
+  it("launches it first in the event, with event drops, after prep", async () => {
+    // Two T2 cubes take six T1s: its two and two event launches' four. Its
+    // drops count like an in-air ship's, toward ingredients.
+    const result = await plan([extended], 2, { objectiveMode: "virtueFuel", virtueTank: fuelingTank(), targets: cubeT2(2) });
+    const event = result.dubcap!;
+    expect(result.unmetItems).toEqual([]);
+    expect(event).toMatchObject({ live: false, startSeconds: 0, launches: 3 });
+    expect(event.lanes[0]).toEqual([expect.objectContaining({ fueling: true, startSeconds: 0, endSeconds: extended.durationSeconds })]);
+    expect(launches(result, true)).toBe(2);
+    expect(event.fullLanes.flat().find((block) => block.fueling)).toMatchObject({ isPrep: false, dubcap: true, startSeconds: 0 });
+    expect(result.expectedHours).toBeCloseTo(38.4);
+    const fueling = result.virtueTanks!.units.find((unit) => unit.preFueled)!;
+    expect(result.virtueTanks!.pack.launchOrder[0]).toMatchObject({ unitId: fueling.id, tankIndex: 0 });
+    expectValidTimeline(result);
+  }, 120_000);
+});
+
 describe("a live dubcap event", () => {
   const live = (secondsRemaining: number, multiplier = 2) => ({
     id: "event-test", message: "DOUBLE CAPACITY!", multiplier, secondsRemaining, durationSeconds: 48 * 3600, ultra: false,
@@ -413,6 +441,31 @@ describe("a live dubcap event", () => {
     const prep = { id: "prep", launches: 2, durationSeconds: 4 * H, prepOrder: 0 };
     expect(liveDubcapLaneStarts([fueling, prep], [5 * H])).toEqual([14 * H, 14 * H, 14 * H]);
   });
+
+  it("launches the partly fueled ship now in the first free slot, with event drops", async () => {
+    const profile = { ...profileFor([extended]), liveDubcap: live(30 * 3600), inFlightMissions: [inAirExtended(10 * 3600)] };
+    const result = await plan([extended], 2, { objectiveMode: "virtueFuel", virtueTank: fuelingTank(), targets: cubeT2(2) }, profile);
+    const event = result.dubcap!;
+    expect(result.unmetItems).toEqual([]);
+    expect(event.live).toBe(true);
+    // Slot 1 holds the in-air ship; the fueled ship takes slot 2 now. Its two
+    // cubes leave four for two event launches, one in slot 1 at hour 10.
+    expect(event.lanes[1][0]).toMatchObject({ fueling: true, startSeconds: 0, endSeconds: extended.durationSeconds });
+    expect(launches(result, true)).toBe(2);
+    expect(launches(result, false)).toBe(0);
+    expect(result.notes.some((note) => note.includes("launches first in the dubcap, with 2× drops"))).toBe(true);
+    expectValidTimeline(result);
+  }, 120_000);
+
+  it("launches the partly fueled ship before the event when the tank can't finish fueling it", async () => {
+    const profile = { ...profileFor([extended]), liveDubcap: live(30 * 3600) };
+    const tank = { ...fuelingTank(), shiftCap: 4, currentContents: { curiosity: 60 * T, kindness: 60 * T } };
+    const result = await plan([extended], 2, { objectiveMode: "virtueFuel", virtueTank: tank }, profile);
+    expect(result.unmetItems).toEqual([]);
+    expect(result.dubcap!.lanes.flat().some((block) => block.fueling)).toBe(false);
+    expect(result.dubcap!.fullLanes.flat().find((block) => block.fueling)).toMatchObject({ isPrep: true, dubcap: false });
+    expect(result.notes.some((note) => note.includes("launches first, at its current"))).toBe(true);
+  }, 120_000);
 
   it("gives comparisons the time left in the event", async () => {
     const [comparison] = await computeMonolithicPaths({ profile: { ...profileFor([extended]), liveDubcap: live(30 * 3600) },

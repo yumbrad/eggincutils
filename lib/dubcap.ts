@@ -15,6 +15,11 @@ export type DubcapWindow = {
   live: boolean;
   /** When each slot is free for the event, from the window's zero. */
   laneStartSeconds: number[];
+  /**
+   * The partly fueled ship as the event's first launch, from the window's
+   * zero: it holds `lane` until it returns, so that slot's start counts it.
+   */
+  fueling?: { lane: number; startSeconds: number; endSeconds: number };
 };
 
 export const FRESH_DUBCAP_WINDOW: DubcapWindow = {
@@ -64,7 +69,10 @@ export type DubcapAllocationBlock = {
 export type DubcapAllocation = { lanes: DubcapAllocationBlock[][]; window?: DubcapWindow };
 
 export type DubcapTimelineBlock = Omit<DubcapAllocationBlock, "actionKey"> & {
-  missionRowKey: string;
+  /** Absent for the partly fueled ship, which has no mission row. */
+  missionRowKey?: string;
+  /** The partly fueled ship. */
+  fueling?: boolean;
   ship: string;
   durationType: string;
   level: number;

@@ -241,6 +241,24 @@ describe("Path of Virtue tank mode", () => {
   );
 
   it(
+    "spends fuel the completed crafts leave over on launches toward the craft left short",
+    async () => {
+      // Two T2 cubes take six T1s; the tank fits four Henerprise EPICs. One
+      // craft takes three, and the fourth launch brings a third of the next.
+      const { result } = await planTank([HENERPRISE_EPIC], 2, tankOptions({
+        currentContents: { curiosity: 110 * T, kindness: 110 * T, resilience: 90 * T },
+      }), { targets: [{ targetItemId: "puzzle-cube-2", quantity: 2 }] });
+      expect(result.virtueTanks!.goalsUnmet).toBe(true);
+      expect(result.virtueTanks!.pack.totalShifts).toBe(0);
+      expect(result.crafts).toEqual([{ itemId: "puzzle-cube-2", count: 1 }]);
+      expect(plannedLaunches(result, "HENERPRISE")).toBe(4);
+      expect(result.notes.some((note) => note.startsWith("Spare fuel within the cap goes to launches toward the goals it leaves short:") &&
+        note.includes("33% of its next craft's ingredients"))).toBe(true);
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
     "finds a cap just too low by trying the next caps in turn",
     async () => {
       // Chickfiants burn only C and K, so one C+K loop (3 shifts) fuels
