@@ -67,6 +67,10 @@ how far each is from its next star. Ships the plan unlocks say so.
 
 - Planner notes are collapsed under a chevron.
 
+- Fixed **Include one dubcap** failing on big main-farm plans ("Dubcap planning failed … Time limit reached").
+  - Its solves had 30 seconds where large goal sets need a few minutes, as they do without the dubcap; they
+now get up to 10 minutes.
+
 - Fixed Path of Virtue plans within a shift cap failing ("tank planning failed") when a ship levels up
 partway through a plan with a crafted goal.
 

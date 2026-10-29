@@ -369,6 +369,12 @@ const VIRTUE_TANK_FUEL_TIEBREAK_SECONDS_PER_TRILLION = 0.1;
 const VIRTUE_TANK_ATOMIC_CUT_MAX_LAUNCHES = 20;
 /** Binding shift caps make the integer solves much harder; see the tank-mode status check. */
 const VIRTUE_TANK_SOLVE_TIME_LIMIT_SECONDS = 30;
+/**
+ * Main-farm dubcap solves: only a backstop. Their early incumbents leave goals
+ * unmet, and big plans (a year of launches) need minutes to meet them all,
+ * as they do without the event.
+ */
+const DUBCAP_SOLVE_TIME_LIMIT_SECONDS = 600;
 /** Normalized objective weight per shift in the fewest-shifts search (demand is hard there). */
 const VIRTUE_TANK_MIN_SHIFT_WEIGHT = 1000;
 const VIRTUE_TANK_PACK_TIME_LIMIT_SECONDS = 1.5;
@@ -3191,7 +3197,9 @@ async function solveUnifiedCraftMissionPlan(options: {
 
   const solveStartedAtMs = Date.now();
   const useExactMipGap = !lpRelaxation && (strictGeObjective || hasGeCostUpperBound);
-  const effectiveTimeLimitSeconds = timeLimitSeconds ?? (tankModel || dubcapModel.groups.length > 0 ? VIRTUE_TANK_SOLVE_TIME_LIMIT_SECONDS : undefined);
+  const effectiveTimeLimitSeconds =
+    timeLimitSeconds ??
+    (tankModel ? VIRTUE_TANK_SOLVE_TIME_LIMIT_SECONDS : dubcapModel.groups.length > 0 ? DUBCAP_SOLVE_TIME_LIMIT_SECONDS : undefined);
   // The fewest-shifts search only needs the shift count proven: stop once the
   // bound rules out one shift fewer, rather than closing 1% of a shift-sized
   // objective, which can take minutes. Mission time is re-optimized at N.
@@ -9999,6 +10007,13 @@ async function planForNewLaunches(
     const details = error instanceof Error ? error.message : String(error);
     // The heuristic fallback is fuel-blind: it would hand back a plan that
     // ignores the tank and the shift cap, so tank mode surfaces the failure.
+    if (!tankRun && plannerOptions.includeDubcap && details.includes("Time limit reached")) {
+      throw new Error(
+        `Dubcap planning ran out of time: no plan meeting every goal turned up within ${
+          DUBCAP_SOLVE_TIME_LIMIT_SECONDS / 60
+        } minutes. Try fewer or smaller goals, or plan without the dubcap.`
+      );
+    }
     if (tankRun || plannerOptions.includeDubcap) {
       throw new Error(`${tankRun ? "Path of Virtue tank" : "Dubcap"} planning failed (${details}).`);
     }
