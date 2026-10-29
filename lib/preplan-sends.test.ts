@@ -69,6 +69,36 @@ describe("applyPrePlanSendsToProfile", () => {
     expect(result.profile.shipLevels.find((ship) => ship.ship === "CHICKEN_ONE")?.launchesByDuration.SHORT).toBe(2);
   });
 
+  it("multiplies a dubcap send's drops but not its launches", async () => {
+    const lootData: LootJson = {
+      missions: [
+        {
+          afxShip: 0,
+          afxDurationType: 0,
+          missionId: "chicken-one-short",
+          levels: [
+            {
+              level: 0,
+              targets: [
+                {
+                  targetAfxId: 10000,
+                  totalDrops: 100_000,
+                  items: [{ afxId: 0, afxLevel: 1, itemId: "lunar-totem-1", counts: [10_000, 0, 0, 0] }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const send = { ship: "CHICKEN_ONE", durationType: "SHORT" as const, targetAfxId: 10000, launches: 2 };
+    const single = await applyPrePlanSendsToProfile(makeProfile(), [send], { lootData });
+    const doubled = await applyPrePlanSendsToProfile(makeProfile(), [{ ...send, multiplier: 2 }], { lootData });
+    expect(doubled.addedInventory.lunar_totem_1).toBeCloseTo(2 * single.addedInventory.lunar_totem_1, 9);
+    expect(doubled.appliedLaunches).toBe(2);
+    expect(doubled.rows[0]?.endLevel).toBe(single.rows[0]?.endLevel);
+  });
+
   it("skips targeted sends for untargeted-only ships", async () => {
     const result = await applyPrePlanSendsToProfile(
       makeProfile(),

@@ -1,6 +1,7 @@
 import { artifactDisplayMap, itemIdToCanonicalKey, itemKeyToDisplayName, itemKeyToIconUrl, itemKeyToId } from "./item-utils";
 import { LOCAL_PREF_KEYS, readFirstStoredString } from "./local-preferences";
 import { itemIdTakesCraftCountGoal, recipes } from "./recipes";
+import { isShipStarsItem } from "./ship-star-goals";
 import {
   DEFAULT_SHINY_GOAL_PERCENT,
   defaultShinyRarity,
@@ -133,7 +134,12 @@ export function targetRowToPlannerTarget(row: PlannerTargetRow): PlannerTargetIn
   return { ...target, ...later };
 }
 
-export function parseStoredTargetRows(raw: string | null, targetOptions: TargetOption[]): PlannerTargetRow[] | null {
+export function parseStoredTargetRows(
+  raw: string | null,
+  targetOptions: TargetOption[],
+  /** The attainment planner takes max-stars goals; the XP planner doesn't. */
+  { allowShipStars = false }: { allowShipStars?: boolean } = {}
+): PlannerTargetRow[] | null {
   if (!raw) {
     return null;
   }
@@ -162,7 +168,8 @@ export function parseStoredTargetRows(raw: string | null, targetOptions: TargetO
         : typeof record.itemId === "string"
           ? record.itemId
           : "";
-      if (!availableTargets.has(itemId)) {
+      // Max-stars goals aren't in the item options; the planner skips one whose ship is maxed.
+      if (!availableTargets.has(itemId) && !(allowShipStars && isShipStarsItem(itemId))) {
         continue;
       }
       const shinyRarity =

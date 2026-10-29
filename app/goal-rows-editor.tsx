@@ -25,6 +25,7 @@ import {
   type TargetOption,
 } from "../lib/goal-rows";
 import { itemIdToCanonicalKey } from "../lib/item-utils";
+import { isShipStarsItem } from "../lib/ship-star-goals";
 import { itemIdCanBeCrafted, itemIdTakesCraftCountGoal } from "../lib/recipes";
 import {
   craftsForShinyChance,
@@ -373,12 +374,16 @@ export default function GoalRowsEditor({
               })
             : null;
         const quantityLabel = `${option?.label || "Target"} ${mode === "shiny" ? "chance in percent" : "quantity"}`;
+        // A max-stars goal has no amount: the ship's top star level is the goal.
+        const starsGoal = isShipStarsItem(row.itemId);
         return (
           <div key={row.id} className={styles.targetRowGroup}>
           <div className={styles.targetRow} data-target-row-id={row.id}>
             <span className={styles.targetIcon} aria-hidden="true">
               {option?.iconUrl ? (
                 <img src={option.iconUrl} alt="" width={32} height={32} loading="lazy" />
+              ) : starsGoal ? (
+                <span className={styles.targetStarsIcon}>★</span>
               ) : (
                 <span className={styles.targetPickerFallbackIcon}>?</span>
               )}
@@ -391,6 +396,14 @@ export default function GoalRowsEditor({
               <span>{option?.label || row.itemId || emptyRowLabel}</span>
               <span className={styles.targetPickerChevron} aria-hidden="true" />
             </button>
+            {starsGoal ? (
+              <span
+                className={styles.targetStarsGoal}
+                title="Launch this ship enough, alongside the other goals, that it reaches its top star level by the end of the plan."
+              >
+                all stars
+              </span>
+            ) : (
             <div className={styles.targetStepper}>
               <button
                 type="button"
@@ -419,6 +432,7 @@ export default function GoalRowsEditor({
                 +
               </button>
             </div>
+            )}
             <button
               type="button"
               className={styles.targetRemove}
@@ -472,6 +486,8 @@ export default function GoalRowsEditor({
                         >
                           {optionRow.iconUrl ? (
                             <img src={optionRow.iconUrl} alt="" width={22} height={22} className={styles.targetPickerOptionIcon} loading="lazy" />
+                          ) : isShipStarsItem(optionRow.itemId) ? (
+                            <span className={styles.targetStarsIcon} data-size="sm" aria-hidden="true">★</span>
                           ) : (
                             <span className={styles.targetPickerFallbackIcon} aria-hidden="true">?</span>
                           )}

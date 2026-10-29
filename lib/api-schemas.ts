@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-import { MAX_PRE_PLAN_LAUNCHES_PER_ROW, MAX_PRE_PLAN_SEND_ROWS } from "./preplan-import";
+import { MAX_PRE_PLAN_DROP_MULTIPLIER, MAX_PRE_PLAN_LAUNCHES_PER_ROW, MAX_PRE_PLAN_SEND_ROWS } from "./preplan-import";
+import { MAX_RECENT_LAUNCHES } from "./launch-progress";
 import { SHINY_RARITIES } from "./shiny-odds";
 
 const DURATION_TYPES = ["TUTORIAL", "SHORT", "LONG", "EPIC"] as const;
@@ -102,6 +103,8 @@ export const prePlanSendSchema = z.object({
     .finite()
     .transform((value) => Math.max(0, Math.round(value)))
     .pipe(nonNegativeIntSchema.max(MAX_PRE_PLAN_LAUNCHES_PER_ROW)),
+  /** Drop multiplier for launches in a dubcap; absent means 1. */
+  multiplier: z.coerce.number().finite().min(1).max(MAX_PRE_PLAN_DROP_MULTIPLIER).optional(),
 });
 
 export const prePlanSendsSchema = z.array(prePlanSendSchema).max(MAX_PRE_PLAN_SEND_ROWS);
@@ -219,6 +222,16 @@ export const missionOptionSchema = z.object({
   capacity: nonNegativeIntSchema,
 });
 
+const launchRecordSchema = z.object({
+  id: z.string().min(1),
+  ship: z.string().min(1),
+  durationType: z.string().min(1),
+  targetAfxId: nonNegativeIntSchema.nullable(),
+  level: nonNegativeIntSchema,
+  launchedAt: nonNegativeFiniteSchema,
+  virtue: z.boolean(),
+});
+
 const inFlightMissionSchema = z.object({
   ship: z.string().min(1),
   durationType: z.string().min(1),
@@ -274,6 +287,7 @@ export const playerProfileSchema = z.object({
   shipLevels: z.array(shipLevelInfoSchema),
   missionOptions: z.array(missionOptionSchema),
   inFlightMissions: z.array(inFlightMissionSchema).optional(),
+  recentLaunches: z.array(launchRecordSchema).max(MAX_RECENT_LAUNCHES).optional(),
   shinyIngredientCount: nonNegativeIntSchema.optional(),
   virtueTank: virtueTankSnapshotSchema.optional(),
   isUltra: z.boolean().optional(),

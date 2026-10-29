@@ -1,5 +1,5 @@
 import { isUntargetedTargetAfxId } from "./item-utils";
-import { MAX_PRE_PLAN_LAUNCHES_PER_ROW } from "./preplan-import";
+import { MAX_PRE_PLAN_DROP_MULTIPLIER, MAX_PRE_PLAN_LAUNCHES_PER_ROW } from "./preplan-import";
 import { loadLootData, type LootJson, type MissionTargetLootStore } from "./loot-data";
 import {
   expectedInventoryFromTarget,
@@ -23,6 +23,8 @@ export type PrePlanSend = {
   durationType: DurationType;
   targetAfxId: number;
   launches: number;
+  /** Drop multiplier for launches in a dubcap (its stars and leveling are unchanged); absent means 1. */
+  multiplier?: number;
 };
 
 /** How one requested send row played out; stars are the ship's before and after the row. */
@@ -69,14 +71,16 @@ function canMissionOptionUseLootTarget(option: MissionOption, targetAfxId: numbe
 }
 
 /** The sends with each invalid row nulled, so results stay aligned with the request. */
-function sanitizePrePlanSends(sends: PrePlanSend[]): Array<PrePlanSend | null> {
+function sanitizePrePlanSends(sends: PrePlanSend[]): Array<Required<PrePlanSend> | null> {
   const shipOrder = new Set(getShipOrder());
   return sends.map((raw) => {
+    const multiplier = Number(raw.multiplier ?? 1);
     const send = {
       ship: String(raw.ship || ""),
       durationType: raw.durationType,
       targetAfxId: Math.round(Number(raw.targetAfxId)),
       launches: Math.max(0, Math.min(MAX_PRE_PLAN_LAUNCHES_PER_ROW, Math.round(Number(raw.launches) || 0))),
+      multiplier: Number.isFinite(multiplier) ? Math.max(1, Math.min(MAX_PRE_PLAN_DROP_MULTIPLIER, multiplier)) : 1,
     };
     return shipOrder.has(send.ship) &&
       ["SHORT", "LONG", "EPIC"].includes(send.durationType) &&
@@ -173,7 +177,7 @@ export async function applyPrePlanSendsToProfile(
           includeStoneFragments
         );
         for (const [itemKey, quantity] of Object.entries(yields)) {
-          addYield(itemKey, quantity);
+          addYield(itemKey, quantity * send.multiplier);
         }
       } else {
         row.noLootLaunches += 1;

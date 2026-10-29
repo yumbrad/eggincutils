@@ -45,7 +45,8 @@ import {
   writeStoredBoolean,
   writeStoredString,
 } from "../../lib/local-preferences";
-import { writeSavedPlannerPlanLaunches } from "../../lib/preplan-import";
+import { plannerPlanFueling, writeSavedPlannerPlanLaunches } from "../../lib/preplan-import";
+import { planLaunchProgress, type LaunchRecord, type PlanLaunchProgress } from "../../lib/launch-progress";
 import useHighsWorker from "../../lib/use-highs-worker";
 import { planForTarget, computeMonolithicPaths, type PlannerProgressEvent } from "../../lib/planner";
 import { createDemoProfile, isBlankEid } from "../../lib/demo-profile";
@@ -108,7 +109,8 @@ import {
   type ShinyOdds,
   type ShinyRarity,
 } from "../../lib/shiny-odds";
-import { shipDisplayName as titleCaseShip } from "../../lib/ship-data";
+import { durationLaunchPoints, getShipOrder, shipDisplayName as titleCaseShip, shipLevelPointThresholds } from "../../lib/ship-data";
+import { isShipStarsItem, shipFromStarsItem, shipStarsGoalLabel, shipStarsTargetOptions } from "../../lib/ship-star-goals";
 import styles from "./page.module.css";
 
 type ShipLevelInfo = {
@@ -154,6 +156,8 @@ type ProfileSnapshot = {
   liveDubcap?: LiveDubcapEvent;
   /** Client-side: when that dubcap ends, from when the page read the profile. */
   liveDubcapEndsAtMs?: number;
+  /** The newest launches from either farm; absent on profiles read before progress tracking. */
+  recentLaunches?: LaunchRecord[];
 };
 
 type PlannerSourceFilters = {
@@ -392,16 +396,116 @@ function readPersistedPlannerSession(): PersistedPlannerSession | null {
 function writePersistedPlannerSession(
   response: PlanResponse,
   profileSnapshot: ProfileSnapshot,
-  lastSolveRequest: LastSolveInputs
+  lastSolveRequest: LastSolveInputs,
+  savedAt: string = new Date().toISOString()
 ): void {
   const session: PersistedPlannerSession = {
     schemaVersion: 1,
-    savedAt: new Date().toISOString(),
+    savedAt,
     response,
     profileSnapshot,
     lastSolveRequest,
   };
   writeStoredString([LOCAL_PREF_KEYS.plannerSession], JSON.stringify(session));
+}
+
+/**
+ * Load a downloaded plan file on this device: its goals, settings and plan
+ * become the saved state the page restores on load, so a reload shows the
+ * plan as if it had been built here. The file's EID is redacted, so the plan
+ * takes this device's EID. Returns why the file can't be loaded, or null.
+ */
+function storePlanFile(raw: string, deviceEid: string): string | null {
+  let file: Partial<SolveInputSnapshotFile>;
+  try {
+    file = JSON.parse(raw) as Partial<SolveInputSnapshotFile>;
+  } catch {
+    return "That file isn't a plan file (it isn't JSON).";
+  }
+  if (
+    file?.kind !== "mission-craft-planner-solve-input" ||
+    file.schemaVersion !== 1 ||
+    !isPlainObject(file.request) ||
+    !isPlainObject(file.sourceFilters) ||
+    !isPlainObject(file.profile) ||
+    !isPlainObject(file.output) ||
+    !isPlainObject(file.output.plan) ||
+    !isPlainObject(file.output.profile)
+  ) {
+    return "That file isn't a plan file. Use one saved with Save plan file or Download solve snapshot.";
+  }
+  const demo = file.profile.eid === "DEMO";
+  if (!demo && !deviceEid) {
+    return "Enter your EID first, then load the plan file.";
+  }
+  const profileEid = demo ? "DEMO" : deviceEid;
+  const request = file.request as SolveSnapshotRequest;
+  const sourceFilters = file.sourceFilters as PlannerSourceFilters;
+  const source: InventorySource = sourceFilters.inventorySource === "virtue" ? "virtue" : "main";
+  const response = {
+    profile: { ...file.output.profile, eid: profileEid },
+    plan: file.output.plan,
+  } as PlanResponse;
+  const profileSnapshot = { ...file.profile, eid: profileEid } as ProfileSnapshot;
+  if (!isRestorableVirtueTankSession(response.plan.virtueTanks, profileSnapshot.virtueTank)) {
+    return "That plan file is from an older version of the planner and can't be loaded.";
+  }
+  const lastSolveRequest: LastSolveInputs = {
+    ...request,
+    eid: demo ? "" : deviceEid,
+    sourceFilters: { ...sourceFilters, inventorySource: source },
+    ...(file.profileOverrides ? { profileOverrides: file.profileOverrides } : {}),
+  };
+  const plannedAt = file.output.plannedAt || file.capturedAt || new Date().toISOString();
+
+  const allowed = request.allowedShipDurations;
+  const shipDurations = buildDefaultShipDurations();
+  if (allowed) {
+    for (const durations of Object.values(shipDurations)) {
+      durations.SHORT = durations.LONG = durations.EPIC = false;
+    }
+    for (const entry of allowed) {
+      if (shipDurations[entry.ship]) {
+        shipDurations[entry.ship][entry.durationType] = true;
+      }
+    }
+  }
+  writePlannerSourcePreferences(source, {
+    targetRows: request.targets?.length ? request.targets : [{ targetItemId: request.targetItemId, quantity: request.quantity }],
+    targetCraftedOnly: request.targetCraftedOnly,
+    includeSlotted: sourceFilters.includeSlotted,
+    includeInventoryRare: sourceFilters.includeInventoryRare,
+    includeInventoryEpic: sourceFilters.includeInventoryEpic,
+    includeInventoryLegendary: sourceFilters.includeInventoryLegendary,
+    includeInventoryFragments: sourceFilters.includeInventoryFragments,
+    includeDropRare: sourceFilters.includeDropRare,
+    includeDropEpic: sourceFilters.includeDropEpic,
+    includeDropLegendary: sourceFilters.includeDropLegendary,
+    includeDropFragments: sourceFilters.includeDropFragments,
+    ...(request.selectedConsumptionItemIds ? { selectedConsumptionItemIds: request.selectedConsumptionItemIds } : {}),
+    shipDurations,
+  });
+  writeStoredString([LOCAL_PREF_KEYS.plannerInventorySource], source);
+  if (source === "main") {
+    writeStoredString([LOCAL_PREF_KEYS.plannerPriorityTimePct], String(Math.round(request.priorityTime * 100)));
+  }
+  if (request.virtueShiftCap != null) {
+    writeStoredString([LOCAL_PREF_KEYS.plannerVirtueShiftCap], String(request.virtueShiftCap));
+  }
+  if (request.virtueStartTank) {
+    writeStoredString([LOCAL_PREF_KEYS.plannerVirtueStartTank], request.virtueStartTank);
+  }
+  writeStoredBoolean([LOCAL_PREF_KEYS.plannerFastMode], Boolean(request.fastMode));
+  writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDubcap], Boolean(request.includeDubcap));
+  writePersistedPlannerSession(response, profileSnapshot, lastSolveRequest, plannedAt);
+  if (!demo) {
+    writeSavedPlannerPlanLaunches(source, {
+      savedAt: plannedAt,
+      eid: deviceEid,
+      plan: { ...response.plan, fueling: plannerPlanFueling(response.plan) },
+    });
+  }
+  return null;
 }
 
 type SolveSnapshotCombo = {
@@ -427,6 +531,8 @@ type SolveInputSnapshotFile = {
     availableCombos: SolveSnapshotCombo[];
     selectedCombos: SolveSnapshotCombo[];
   };
+  /** Customized profile values the plan used, so a loaded file plans the same way. */
+  profileOverrides?: ProfileOverrides;
   output: {
     /** When the plan was solved (or restored from the saved session). */
     plannedAt: string | null;
@@ -3310,11 +3416,62 @@ function rankRelevantYields(plan: PlanResponse["plan"], inventory: Record<string
   return ranked;
 }
 
+/** "12/36", marked once every launch of the row has flown. */
+function LaunchDone({ done, launches }: { done: number; launches: number }) {
+  const complete = done >= launches;
+  return (
+    <span
+      className={styles.launchDone}
+      data-state={complete ? "complete" : done > 0 ? "partial" : "none"}
+      title={`${done.toLocaleString()} of ${launches.toLocaleString()} launched since this plan was built`}
+    >
+      {complete && <span aria-hidden="true">✓ </span>}
+      {done.toLocaleString()}/{launches.toLocaleString()}
+    </span>
+  );
+}
+
+/**
+ * Hands each table row its share of the launches flown, in table order: a
+ * mission row split across tanks fills its first tank first.
+ */
+function launchDoneAllocator(progress: PlanLaunchProgress | null, plan: PlanResponse["plan"]) {
+  if (!progress) {
+    return null;
+  }
+  const missionLeft = [...progress.missionDone];
+  const prepLeft = new Map<string, number>();
+  plan.progression.prepLaunches.forEach((prep, index) => {
+    const shape = `${prep.ship}|${prep.durationType}`;
+    prepLeft.set(shape, (prepLeft.get(shape) || 0) + (progress.prepDone[index] || 0));
+  });
+  let fuelingLeft = progress.fuelingDone ? 1 : 0;
+  const take = (available: number, launches: number) => Math.max(0, Math.min(launches, available));
+  return {
+    mission(index: number, launches: number): number {
+      const done = take(missionLeft[index] || 0, launches);
+      missionLeft[index] = (missionLeft[index] || 0) - done;
+      return done;
+    },
+    prep(ship: string, durationType: string, launches: number): number {
+      const shape = `${ship}|${durationType}`;
+      const done = take(prepLeft.get(shape) || 0, launches);
+      prepLeft.set(shape, (prepLeft.get(shape) || 0) - done);
+      return done;
+    },
+    fueling(launches: number): number {
+      const done = take(fuelingLeft, launches);
+      fuelingLeft -= done;
+      return done;
+    },
+  };
+}
+
 function renderMissionTableRow(
   mission: PlanMissionRow,
   missionIndex: number,
   targetOverride: string | null,
-  options: { key: string; launches?: number; splitAcrossTanks?: boolean; yields?: RankedYield[] }
+  options: { key: string; launches?: number; splitAcrossTanks?: boolean; yields?: RankedYield[]; done?: number }
 ) {
   const targetLabel = targetOverride || afxIdToTargetFamilyName(mission.targetAfxId);
   const targetItemKey = targetOverride ? null : afxIdToItemKey(mission.targetAfxId);
@@ -3357,7 +3514,7 @@ function renderMissionTableRow(
           </span>
         ) : (
           <>
-            {launches.toLocaleString()}
+            {options.done != null ? <LaunchDone done={options.done} launches={launches} /> : launches.toLocaleString()}
             {options.splitAcrossTanks && <span className={styles.splitNote}>split across tanks</span>}
           </>
         )}
@@ -3402,14 +3559,18 @@ function VirtueTankMissionRows({
   plan,
   targetOverrideByIndex,
   inventory,
+  progress,
 }: {
   view: VirtueTankPlanView;
   plan: PlanResponse["plan"];
   targetOverrideByIndex: Map<number, string>;
   /** The profile's inventory, for ranking yields by what missions must still bring. */
   inventory: Record<string, number> | null;
+  /** Launches flown since the plan was built, once checked. */
+  progress: PlanLaunchProgress | null;
 }) {
   const rankedYields = useMemo(() => rankRelevantYields(plan, inventory), [plan, inventory]);
+  const allocator = launchDoneAllocator(progress, plan);
   const tankRows = view.tanks.map((tankView) => groupTankLaunches(view, tankView.tank));
   const tanksByMissionIndex = new Map<number, number>();
   tankRows.forEach((rows) =>
@@ -3481,10 +3642,16 @@ function VirtueTankMissionRows({
                     launches: row.launches,
                     splitAcrossTanks: (tanksByMissionIndex.get(row.missionIndex) || 0) > 1,
                     yields: rankedYields.get(row.missionIndex),
+                    done: allocator?.mission(row.missionIndex, row.launches),
                   }
                 );
               }
               const unit = row.unitView?.unit;
+              const unitDone = !allocator || !unit
+                ? null
+                : unit.preFueled !== undefined
+                  ? allocator.fueling(row.launches)
+                  : allocator.prep(unit.ship, unit.durationType, row.launches);
               return (
                 <tr key={`${tank.index}:${row.key}`}>
                   <td>
@@ -3508,7 +3675,9 @@ function VirtueTankMissionRows({
                     <span className="muted">{unit ? durationTypeWithLevelLabel(unit.durationType, unit.level) : ""}</span>
                   </td>
                   <td>{row.unitView?.subtitle || "Ship prep"}</td>
-                  <td>{row.launches.toLocaleString()}</td>
+                  <td>
+                    {unitDone != null ? <LaunchDone done={unitDone} launches={row.launches} /> : row.launches.toLocaleString()}
+                  </td>
                   <td>{unit ? formatDurationFromHours(unit.durationSeconds / 3600) : "—"}</td>
                   <td>
                     <span className="muted">—</span>
@@ -3533,6 +3702,7 @@ function VirtueTankMissionRows({
             renderMissionTableRow(mission, missionIndex, targetOverrideByIndex.get(missionIndex) || null, {
               key: `none:${missionIndex}`,
               yields: rankedYields.get(missionIndex),
+              done: allocator?.mission(missionIndex, mission.launches),
             })
           )}
         </tbody>
@@ -3668,6 +3838,10 @@ function durationChipLabel(durationType: "SHORT" | "LONG" | "EPIC"): string {
 // artifact key ("gusset-2" is ornate_gusset_2, "vial-of-martian-dust-2" is
 // vial_martian_dust_2), and recipes, craft counts and ARTIFACT_DISPLAY all use the key.
 function itemIdToLabel(itemId: string): string {
+  const starShip = shipFromStarsItem(itemId);
+  if (starShip) {
+    return shipStarsGoalLabel(starShip);
+  }
   const itemKey = itemIdToCanonicalKey(itemId);
   const displayInfo = ARTIFACT_DISPLAY[itemKey];
   if (displayInfo && Number.isFinite(displayInfo.tierNumber)) {
@@ -3886,6 +4060,250 @@ function ShipSelectorImage({ ship, imageFiles }: { ship: string; imageFiles: str
   );
 }
 
+type ShipProgressRow = {
+  ship: string;
+  unlockedByPlan: boolean;
+  startLevel: number;
+  endLevel: number;
+  maxLevel: number;
+  startLaunches: number;
+  endLaunches: number;
+  startPoints: number;
+  endPoints: number;
+  /** Where the end level starts and the next one begins, in launch points; null once maxed. */
+  levelSpan: { from: number; to: number } | null;
+};
+
+/**
+ * The ships this plan moves: launched by it while short of max stars, or
+ * unlocked by it. Ships already maxed, or not launched, aren't news.
+ */
+function shipProgressRows(
+  start: PlanResponse["profile"]["shipLevels"],
+  end: PlanResponse["plan"]["progression"]["projectedShipLevels"]
+): ShipProgressRow[] {
+  const startByShip = new Map(start.map((ship) => [ship.ship, ship]));
+  const rows: ShipProgressRow[] = [];
+  for (const after of end) {
+    const before = startByShip.get(after.ship);
+    if (!before) {
+      continue;
+    }
+    const unlockedByPlan = !before.unlocked && after.unlocked;
+    const launched = after.launches > before.launches;
+    if (!unlockedByPlan && !(launched && before.level < before.maxLevel)) {
+      continue;
+    }
+    const thresholds = shipLevelPointThresholds(after.ship);
+    const levelSpan =
+      thresholds && after.level < after.maxLevel && after.level + 1 < thresholds.length
+        ? { from: thresholds[after.level], to: thresholds[after.level + 1] }
+        : null;
+    rows.push({
+      ship: after.ship,
+      unlockedByPlan,
+      startLevel: before.level,
+      endLevel: after.level,
+      maxLevel: after.maxLevel,
+      startLaunches: before.launches,
+      endLaunches: after.launches,
+      startPoints: before.launchPoints,
+      endPoints: after.launchPoints,
+      levelSpan,
+    });
+  }
+  return rows;
+}
+
+function formatLaunchPoints(points: number): string {
+  return Number.isInteger(points) ? points.toLocaleString() : points.toFixed(1);
+}
+
+/** "8 short, 6 standard or 5 extended launches" for the points left to the next star. */
+function launchesToPointsLabel(points: number): string {
+  const counts = (["SHORT", "LONG", "EPIC"] as const).map((durationType) =>
+    Math.ceil(points / durationLaunchPoints(durationType) - 1e-9)
+  );
+  return `${counts[0]} short, ${counts[1]} standard or ${counts[2]} extended launches`;
+}
+
+function ShipProgressPanel({
+  start,
+  end,
+}: {
+  start: PlanResponse["profile"]["shipLevels"];
+  end: PlanResponse["plan"]["progression"]["projectedShipLevels"];
+}) {
+  const rows = shipProgressRows(start, end);
+  return (
+    <div className="panel">
+      <h2 style={{ marginTop: 0 }}>Ship progress</h2>
+      {rows.length === 0 ? (
+        <p className="muted" style={{ margin: 0 }}>
+          The ships this plan launches are already at max stars.
+        </p>
+      ) : (
+        <div className="table-wrap">
+          <table className={styles.shipProgressTable}>
+            <thead>
+              <tr>
+                <th>Ship</th>
+                <th>Stars</th>
+                <th>Launches</th>
+                <th>Points</th>
+                <th>Next star</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => {
+                const maxed = row.endLevel >= row.maxLevel;
+                const span = row.levelSpan;
+                const sameLevel = row.startLevel === row.endLevel;
+                const pct = (points: number) =>
+                  span ? Math.max(0, Math.min(100, ((points - span.from) / (span.to - span.from)) * 100)) : 100;
+                const endPct = pct(row.endPoints);
+                const startPct = sameLevel ? pct(row.startPoints) : 0;
+                const pointsLeft = span ? Math.max(0, span.to - row.endPoints) : 0;
+                return (
+                  <tr key={row.ship}>
+                    <td>
+                      {titleCaseShip(row.ship)}
+                      {row.unlockedByPlan && <span className={styles.shipProgressUnlocked}> Unlocked!</span>}
+                    </td>
+                    <td className={styles.shipProgressStars}>
+                      {sameLevel ? `${row.endLevel}★` : `${row.startLevel}★ → ${row.endLevel}★`}
+                      {maxed && <span className={styles.shipProgressMax}> max</span>}
+                    </td>
+                    <td
+                      className={styles.shipProgressNumber}
+                      title={`${row.startLaunches.toLocaleString()} → ${row.endLaunches.toLocaleString()} launches in all`}
+                    >
+                      +{(row.endLaunches - row.startLaunches).toLocaleString()}
+                    </td>
+                    <td className={styles.shipProgressNumber}>
+                      {formatLaunchPoints(row.startPoints)} → {formatLaunchPoints(row.endPoints)}
+                    </td>
+                    <td>
+                      {span ? (
+                        <div
+                          className={styles.shipProgressNext}
+                          title={`${formatLaunchPoints(pointsLeft)} points: ${launchesToPointsLabel(pointsLeft)}`}
+                        >
+                          <span className={styles.shipProgressBar} aria-hidden="true">
+                            <span className={styles.shipProgressBarGain} style={{ width: `${endPct}%` }} />
+                            <span className={styles.shipProgressBarStart} style={{ width: `${startPct}%` }} />
+                          </span>
+                          <span>
+                            {formatLaunchPoints(pointsLeft)} pts to {row.endLevel + 1}★
+                          </span>
+                        </div>
+                      ) : (
+                        <span className={styles.shipProgressMax}>All stars</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type LaunchProgressState = {
+  /** The plan it was checked against; a new plan drops it. */
+  plan: PlanResponse;
+  status: "loading" | "ready" | "error";
+  result?: PlanLaunchProgress;
+  error?: string;
+  checkedAtMs?: number;
+};
+
+/** "2× Henerprise extended → gold meteorite" for each kind of off-plan launch. */
+function offPlanLaunchSummary(launches: LaunchRecord[]): string {
+  const counts = new Map<string, number>();
+  for (const launch of launches) {
+    const label = `${titleCaseShip(launch.ship)} ${durationTypeLabel(launch.durationType).toLowerCase()} → ${
+      launch.targetAfxId == null ? "untargeted" : afxIdToTargetFamilyName(launch.targetAfxId)
+    }`;
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([label, count]) => `${count}× ${label}`)
+    .join(", ");
+}
+
+/**
+ * Following the plan: which of its launches the backup shows flown since the
+ * plan was built, and any launches that aren't in it.
+ */
+function PlanProgressStrip({
+  state,
+  unavailable,
+  onCheck,
+}: {
+  state: LaunchProgressState | null;
+  /** Why progress can't be checked, or null when it can. */
+  unavailable: string | null;
+  onCheck: () => void;
+}) {
+  const result = state?.status === "ready" ? state.result : undefined;
+  const pct = result && result.planned > 0 ? Math.min(100, (result.done / result.planned) * 100) : 0;
+  return (
+    <div className={styles.planProgress} aria-live="polite">
+      <button
+        type="button"
+        className={styles.planProgressButton}
+        onClick={onCheck}
+        disabled={unavailable != null || state?.status === "loading"}
+        title={unavailable ?? "Read your backup and mark the launches you've flown since this plan was built"}
+      >
+        {state?.status === "loading" ? "Checking…" : result ? "Check again" : "Check progress"}
+      </button>
+      {result ? (
+        <div className={styles.planProgressBody}>
+          <div className={styles.planProgressHeadline}>
+            <span className={styles.planProgressBar} aria-hidden="true">
+              <span style={{ width: `${pct}%` }} />
+            </span>
+            <span>
+              <strong>
+                {result.done.toLocaleString()} of {result.planned.toLocaleString()}
+              </strong>{" "}
+              planned launches flown
+              {state?.checkedAtMs != null && (
+                <span className="muted">
+                  {" "}
+                  · checked {new Date(state.checkedAtMs).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
+                </span>
+              )}
+            </span>
+          </div>
+          {result.offPlan.length > 0 ? (
+            <div className={styles.planProgressWarn}>
+              {result.offPlan.length === 1 ? "1 launch isn't" : `${result.offPlan.length.toLocaleString()} launches aren't`} in this
+              plan ({offPlanLaunchSummary(result.offPlan)}). Their drops and stars change the best route, so update the plan.
+            </div>
+          ) : result.planned > 0 && result.done >= result.planned ? (
+            <div className={styles.planProgressDone}>Every planned launch has flown.</div>
+          ) : null}
+          {result.incomplete && (
+            <div className="muted">
+              Only your newest launches are kept, and this plan started before them; earlier launches may be missing.
+            </div>
+          )}
+        </div>
+      ) : state?.status === "error" ? (
+        <div className="error">{state.error}</div>
+      ) : (
+        <span className="muted">{unavailable ?? "Mark the launches you've flown since this plan was built."}</span>
+      )}
+    </div>
+  );
+}
+
 /**
  * Whether a newer deploy is live than the one this tab loaded, checked when
  * the tab comes back into view (a tab left open keeps its old planner).
@@ -3973,6 +4391,7 @@ export default function MissionCraftPlannerPage() {
   const [compareError, setCompareError] = useState<string | null>(null);
   const [compareExpandedRow, setCompareExpandedRow] = useState<number | null>(null);
   const [lastSolveRequest, setLastSolveRequest] = useState<LastSolveInputs | null>(null);
+  const [launchProgress, setLaunchProgress] = useState<LaunchProgressState | null>(null);
   const [shipDurations, setShipDurations] = useState<ShipDurationSelection>(buildDefaultShipDurations);
   const [shipSelectorOpen, setShipSelectorOpen] = useState(false);
   const [consumptionDrawerOpen, setConsumptionDrawerOpen] = useState(false);
@@ -3995,6 +4414,7 @@ export default function MissionCraftPlannerPage() {
   const responseRef = useRef<PlanResponse | null>(null);
   responseRef.current = response;
   const shiftCapSliderRef = useRef<HTMLInputElement | null>(null);
+  const planFileInputRef = useRef<HTMLInputElement | null>(null);
   const trimmedEid = eid.trim();
   const [profileOverrides, setProfileOverrides] = useProfileOverrides(eid);
   // The backup's own values (before any customizing), for the customize dialog.
@@ -4069,7 +4489,7 @@ export default function MissionCraftPlannerPage() {
 
   const applySourcePreferences = (preferences: PlannerSourcePreferences | null | undefined) => {
     const rows = preferences?.targetRows
-      ? parseStoredTargetRows(JSON.stringify(preferences.targetRows), targetOptions)
+      ? parseStoredTargetRows(JSON.stringify(preferences.targetRows), targetOptions, { allowShipStars: true })
       : null;
     const nextRows = rows || [{ id: "target-1", itemId: "soul-stone-2", quantityInput: "1", craftGoal: false }];
     const primaryTarget = nextRows[0];
@@ -4159,6 +4579,28 @@ export default function MissionCraftPlannerPage() {
   }, []);
 
   const targetOptions = useMemo(() => buildTargetOptions(), []);
+  // Max-stars goals for the ships short of their top stars, from the newest
+  // profile the page has; before any profile, every ship (the planner notes
+  // and skips a goal its ship already meets). Rows already on a stars goal
+  // keep their option so their label shows.
+  const knownShips =
+    demoProfileSummary?.ships ??
+    (profileSnapshot?.eid === trimmedEid && profileSnapshot.shipLevels.length > 0
+      ? profileSnapshot.shipLevels
+      : fetchedProfileSummary?.eid === trimmedEid
+        ? fetchedProfileSummary.summary.ships
+        : null);
+  const goalOptions = useMemo(() => {
+    const ships = knownShips ?? getShipOrder().map((ship) => ({ ship, unlocked: true, level: 0, maxLevel: 1 }));
+    const starOptions = shipStarsTargetOptions(ships);
+    for (const row of targetRows) {
+      const ship = shipFromStarsItem(row.itemId);
+      if (ship && !starOptions.some((option) => option.itemId === row.itemId)) {
+        starOptions.push(...shipStarsTargetOptions([{ ship, unlocked: true, level: 0, maxLevel: 1 }]));
+      }
+    }
+    return [...targetOptions, ...starOptions];
+  }, [knownShips, targetOptions, targetRows]);
   const consumptionFamilies = useMemo(
     () =>
       ARTIFACT_SHORT_NAMES.map((entry) => {
@@ -4665,7 +5107,8 @@ export default function MissionCraftPlannerPage() {
       if (!loadedScopedSourcePreferences) {
         const savedTargetRows = parseStoredTargetRows(
           readFirstStoredString([LOCAL_PREF_KEYS.plannerTargets]),
-          targetOptions
+          targetOptions,
+          { allowShipStars: true }
         );
         if (savedTargetRows) {
           const primaryTarget = savedTargetRows[0];
@@ -5300,7 +5743,7 @@ export default function MissionCraftPlannerPage() {
           writeSavedPlannerPlanLaunches(snapshotRequest.sourceFilters.inventorySource, {
             savedAt: new Date().toISOString(),
             eid: snapshotRequest.eid,
-            plan: result,
+            plan: { ...result, fueling: plannerPlanFueling(result) },
           });
         }
         if (baselineProfile && baselineProfile.eid === profile.eid) {
@@ -5404,6 +5847,57 @@ export default function MissionCraftPlannerPage() {
   const comboKey = (c: { ship: string; durationType: string; targetAfxId: number }) =>
     `${c.ship}|${c.durationType}|${c.targetAfxId}`;
 
+  const planProgress = launchProgress && launchProgress.plan === response ? launchProgress : null;
+  const planProgressResult = planProgress?.status === "ready" ? planProgress.result ?? null : null;
+  const planProgressUnavailable = !response || !profileSnapshot || !lastSolveRequest
+    ? "Build a plan first."
+    : isDemoMode || profileSnapshot.eid === "DEMO"
+      ? "Enter your EID to follow a plan."
+      : profileSnapshot.eid !== trimmedEid
+        ? "This plan is for a different EID."
+        : !profileSnapshot.recentLaunches
+          ? "This plan was built before progress tracking. Update the plan once to start following it."
+          : null;
+
+  const checkLaunchProgress = async (): Promise<void> => {
+    if (planProgressUnavailable || !response || !profileSnapshot?.recentLaunches || !lastSolveRequest) {
+      return;
+    }
+    const plan = response;
+    const baseline = profileSnapshot.recentLaunches;
+    setLaunchProgress({ plan, status: "loading" });
+    try {
+      const current = await fetchProfileSnapshot(trimmedEid, lastSolveRequest.sourceFilters);
+      const result = planLaunchProgress({
+        missions: plan.plan.missions,
+        prepLaunches: plan.plan.progression.prepLaunches,
+        fueling: plannerPlanFueling(plan.plan),
+        virtue: lastSolveRequest.sourceFilters.inventorySource === "virtue",
+        baseline,
+        current: current.recentLaunches ?? [],
+      });
+      setLaunchProgress({ plan, status: "ready", result, checkedAtMs: Date.now() });
+    } catch (progressError) {
+      setLaunchProgress({
+        plan,
+        status: "error",
+        error: `Couldn't check progress: ${progressError instanceof Error ? progressError.message : String(progressError)}`,
+      });
+    }
+  };
+
+  const loadPlanFile = async (file: File | undefined): Promise<void> => {
+    if (!file) {
+      return;
+    }
+    const problem = storePlanFile(await file.text(), trimmedEid);
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    window.location.reload();
+  };
+
   const downloadSolveSnapshot = (): void => {
     if (!response || !profileSnapshot || !lastSolveRequest) {
       setError("Build a plan first, then download the solve snapshot.");
@@ -5440,6 +5934,7 @@ export default function MissionCraftPlannerPage() {
         virtueStartTank: lastSolveRequest.virtueStartTank,
       },
       sourceFilters: lastSolveRequest.sourceFilters,
+      ...(lastSolveRequest.profileOverrides ? { profileOverrides: lastSolveRequest.profileOverrides } : {}),
       profile: sanitizedProfile,
       advancedCompare: {
         availableCombos,
@@ -5659,6 +6154,12 @@ export default function MissionCraftPlannerPage() {
       planNeededShifts == null &&
       planFasterOption &&
       planFasterOption.shifts > planVirtueTanks.shiftCap
+  );
+  // Notes the banners already say are left out while they show.
+  const plannerNotes = (response?.plan.notes ?? []).filter(
+    (note) =>
+      !(virtueBannerShown || virtueSlowPlanBannerShown) ||
+      !VIRTUE_BANNER_NOTE_PATTERNS.some((pattern) => pattern.test(note))
   );
   const planFasterOptionCap =
     planFasterOption != null && shiftCapDetentFor(planFasterOption.shifts) === planFasterOption.shifts
@@ -6024,7 +6525,7 @@ export default function MissionCraftPlannerPage() {
               <GoalRowsEditor
                 rows={targetRows}
                 onRowsChange={handleTargetRowsChange}
-                options={targetOptions}
+                options={goalOptions}
                 craftCounts={profileSnapshot ? profileSnapshot.craftCounts : null}
                 craftingXp={profileSnapshot ? profileSnapshot.craftingXp : null}
                 allowShinyGoals
@@ -6287,6 +6788,35 @@ export default function MissionCraftPlannerPage() {
                       ? "Build plan"
                       : "Update plan"}
               </button>
+              <div className={styles.planFileActions}>
+                <button
+                  type="button"
+                  onClick={downloadSolveSnapshot}
+                  disabled={!response || !profileSnapshot || !lastSolveRequest}
+                  title="Save this plan, its goals and settings to a file, to open on another device or keep as a backup"
+                >
+                  Save plan file
+                </button>
+                <span aria-hidden="true">·</span>
+                <button
+                  type="button"
+                  onClick={() => planFileInputRef.current?.click()}
+                  title="Open a saved plan file: its goals, settings and plan replace the ones here"
+                >
+                  Load plan file
+                </button>
+                <input
+                  ref={planFileInputRef}
+                  type="file"
+                  accept="application/json,.json"
+                  hidden
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = "";
+                    void loadPlanFile(file);
+                  }}
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -6372,7 +6902,7 @@ export default function MissionCraftPlannerPage() {
                         {itemIdToLabel(goal.itemId)}: expected{" "}
                         {formatGoalAmount(goal.requested - goal.shortfall, goal.craftGoal)} of{" "}
                         {formatGoalAmount(goal.requested, goal.craftGoal)}
-                        {goal.craftGoal ? " additional crafts" : ""} · short by{" "}
+                        {isShipStarsItem(goal.itemId) ? " launch points" : goal.craftGoal ? " additional crafts" : ""} · short by{" "}
                         {formatGoalAmount(goal.shortfall, goal.craftGoal)}
                       </li>
                     ))}
@@ -6722,6 +7252,13 @@ export default function MissionCraftPlannerPage() {
 
           <div className="panel">
             <h2 style={{ marginTop: 0 }}>Mission plan</h2>
+            {!isDemoMode && profileSnapshot?.eid !== "DEMO" && (
+              <PlanProgressStrip
+                state={planProgress}
+                unavailable={planProgressUnavailable}
+                onCheck={() => void checkLaunchProgress()}
+              />
+            )}
             {virtueTankView && (
               <VirtueTankTimeline view={virtueTankView} plan={response.plan} />
             )}
@@ -6843,6 +7380,7 @@ export default function MissionCraftPlannerPage() {
                     plan={response.plan}
                     targetOverrideByIndex={missionPrepTargetOverrideByIndex}
                     inventory={profileSnapshot?.inventory ?? null}
+                    progress={planProgressResult}
                   />
                 </table>
               </div>
@@ -6874,6 +7412,7 @@ export default function MissionCraftPlannerPage() {
                           {
                             key: `${missionIndex}:${mission.ship}:${mission.durationType}:${mission.missionId}:${mission.targetAfxId}`,
                             yields: relevantYieldsByMission.get(missionIndex),
+                            done: mission.inAir ? undefined : planProgressResult?.missionDone[missionIndex],
                           }
                         )
                       )}
@@ -6905,7 +7444,14 @@ export default function MissionCraftPlannerPage() {
                         <td>{prep.reason}</td>
                         <td>{titleCaseShip(prep.ship)}</td>
                         <td>{prep.durationType}</td>
-                        <td>{prep.launches.toLocaleString()}</td>
+                        <td>
+                          {prep.launches.toLocaleString()}
+                          {(planProgressResult?.prepDone[index] ?? 0) > 0 && (
+                            <span className={styles.splitNote}>
+                              {planProgressResult!.prepDone[index].toLocaleString()} flown
+                            </span>
+                          )}
+                        </td>
                         <td>{formatDurationFromHours((prep.durationSeconds * prep.launches) / 3600)}</td>
                       </tr>
                     ))}
@@ -6915,43 +7461,22 @@ export default function MissionCraftPlannerPage() {
             )}
           </div>
 
-          <div className="panel">
-            <h2 style={{ marginTop: 0 }}>Ship progression snapshot (after planned launches)</h2>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Ship</th>
-                    <th>Unlocked</th>
-                    <th>Level</th>
-                    <th>Launches</th>
-                    <th>Launch points</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {response.plan.progression.projectedShipLevels.map((ship) => (
-                    <tr key={ship.ship}>
-                      <td>{titleCaseShip(ship.ship)}</td>
-                      <td>{ship.unlocked ? <span className="good">yes</span> : "no"}</td>
-                      <td>
-                        {ship.level}/{ship.maxLevel}
-                      </td>
-                      <td>{ship.launches.toLocaleString()}</td>
-                      <td>{ship.launchPoints.toFixed(1)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <ShipProgressPanel
+            start={response.profile.shipLevels}
+            end={response.plan.progression.projectedShipLevels}
+          />
 
-          <div className="panel">
-            <h2 style={{ marginTop: 0 }}>Planner notes</h2>
+          <details className={`panel ${styles.plannerNotes}`}>
+            <summary>
+              <h2>Planner notes</h2>
+              <span className={styles.plannerNotesCount}>
+                {plannerNotes.length.toLocaleString()} {plannerNotes.length === 1 ? "note" : "notes"}
+                {response.plan.unmetItems.length > 0 &&
+                  ` · ${response.plan.unmetItems.length.toLocaleString()} unmet ${response.plan.unmetItems.length === 1 ? "item" : "items"}`}
+              </span>
+            </summary>
             <ul style={{ margin: 0 }}>
-              {(virtueBannerShown || virtueSlowPlanBannerShown
-                ? response.plan.notes.filter((note) => !VIRTUE_BANNER_NOTE_PATTERNS.some((pattern) => pattern.test(note)))
-                : response.plan.notes
-              ).map((note, index) => (
+              {plannerNotes.map((note, index) => (
                 <li key={`${index}:${note}`}>{note}</li>
               ))}
             </ul>
@@ -6967,7 +7492,7 @@ export default function MissionCraftPlannerPage() {
                 </ul>
               </>
             )}
-          </div>
+          </details>
 
           {response.plan.availableCombos.length > 0 && (
             <div className="panel">

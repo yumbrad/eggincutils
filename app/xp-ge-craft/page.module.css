@@ -181,6 +181,11 @@
   font-variant-numeric: tabular-nums;
 }
 
+.prePlanDubcapToggle {
+  min-height: 34px;
+  white-space: nowrap;
+}
+
 .prePlanAddButton {
   min-height: 36px;
   padding: 0 13px;

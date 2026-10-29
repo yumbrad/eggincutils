@@ -4,6 +4,10 @@
 
 **Craft XP / XP-GE Planner**
 
+- Pre-plan ship sends can fly in a dubcap: tick **Dubcap ×2** when adding a send for double drops.
+  - Importing an AAP plan keeps its dubcap launches' multiplier (they used to come in at single drops) and
+now includes the partly fueled virtue ship.
+
 - Added **Include as ingredients** controls with separate toggles for **Slotted stones** and **Stone
 fragments**.
   - Stone fragments can now be excluded from XP craft planning.
@@ -45,6 +49,26 @@ ingredients.
   - The post-plan XP box reflects the **Max GE Efficiency Plan** for the standalone table.
 
 **Artifact Attainment / Mission Craft Planner**
+
+- Added **Max stars** goals: pick "Max stars · <ship>" in the goals list (only ships short of their top
+stars are offered) and the plan launches that ship enough to max it, alongside your other goals.
+  - Under a shift cap it counts like any goal: the plan gets as close as the cap allows and says how many
+launch points are left.
+
+- **Check progress** atop Mission plan reads your backup and marks the launches you've flown since the
+plan was built (e.g. 12/36 on each row), matched by ship, length and target.
+  - Launches that aren't in the plan are listed, with a nudge to update the plan.
+
+- **Save plan file / Load plan file** under the Build button: take a plan with its goals and settings to
+another device, or keep it as a backup. Download solve snapshot files load too.
+
+- Ship progression now shows only the ships the plan moves: stars before → after, launches, points, and
+how far each is from its next star. Ships the plan unlocks say so.
+
+- Planner notes are collapsed under a chevron.
+
+- Fixed Path of Virtue plans within a shift cap failing ("tank planning failed") when a ship levels up
+partway through a plan with a crafted goal.
 
 - A tab left open across a deploy now says a newer version is live and offers a reload, so it can't keep
 planning with the old planner.

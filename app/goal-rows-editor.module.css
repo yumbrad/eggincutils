@@ -523,3 +523,36 @@
   background: color-mix(in oklab, var(--accent), transparent 85%);
   color: var(--ink);
 }
+
+/* Max-stars goals: a star for the icon, and a fixed "all stars" in place of the stepper. */
+.targetStarsIcon {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--navy), transparent 82%);
+  color: var(--navy);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.targetStarsIcon[data-size="sm"] {
+  width: 22px;
+  height: 22px;
+  font-size: 13px;
+}
+
+.targetStarsGoal {
+  display: flex;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed color-mix(in oklab, var(--navy), transparent 45%);
+  border-radius: 8px;
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}

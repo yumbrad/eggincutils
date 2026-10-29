@@ -34,7 +34,12 @@ export type PrePlanSendSpec = {
   durationType: PrePlanSendDuration;
   targetAfxId: number;
   launches: number;
+  /** Drop multiplier for launches flown in a dubcap; absent means 1. */
+  multiplier?: number;
 };
+
+/** Highest drop multiplier a send row accepts (events so far run 2× or 3×). */
+export const MAX_PRE_PLAN_DROP_MULTIPLIER = 5;
 
 type PlannerPlanMission = {
   ship: string;
@@ -43,6 +48,8 @@ type PlannerPlanMission = {
   targetAfxId: number;
   launches: number;
   inAir?: boolean;
+  /** Flown in the plan's dubcap. */
+  dubcap?: boolean;
 };
 
 type PlannerPlanPrepLaunch = {
@@ -54,7 +61,46 @@ type PlannerPlanPrepLaunch = {
 export type PlannerPlanLaunches = {
   missions: PlannerPlanMission[];
   progression: { prepLaunches: PlannerPlanPrepLaunch[] };
+  /** The plan's dubcap, whose rows fly with this drop multiplier. */
+  dubcap?: { multiplier: number } | null;
+  /** Path of Virtue: the partly fueled ship the plan launches first; it isn't a mission row. */
+  fueling?: PlannerPlanFueling | null;
 };
+
+export type PlannerPlanFueling = {
+  ship: string;
+  durationType: string;
+  targetAfxId: number | null;
+  /** Flies as the first launch of the plan's dubcap. */
+  dubcap: boolean;
+  /** Launches after prep, as a fresh dubcap's first launch; otherwise first of all. */
+  afterPrep: boolean;
+};
+
+/** The plan output shapes the partly fueled ship is read from. */
+type PlannerPlanFuelingSource = {
+  virtueTanks?: {
+    units?: Array<{ ship?: unknown; durationType?: unknown; targetAfxId?: unknown; preFueled?: unknown }>;
+  } | null;
+  dubcap?: { live?: unknown; lanes?: Array<Array<{ fueling?: unknown }>> } | null;
+};
+
+/** The partly fueled ship in a plan's tank units, or null when it has none. */
+export function plannerPlanFueling(plan: PlannerPlanFuelingSource | null | undefined): PlannerPlanFueling | null {
+  const unit = plan?.virtueTanks?.units?.find((candidate) => candidate?.preFueled !== undefined);
+  if (!unit || typeof unit.ship !== "string" || typeof unit.durationType !== "string") {
+    return null;
+  }
+  const dubcap = Boolean(plan?.dubcap?.lanes?.some((lane) => Array.isArray(lane) && lane.some((block) => block?.fueling)));
+  const targetAfxId = Number(unit.targetAfxId);
+  return {
+    ship: unit.ship,
+    durationType: unit.durationType,
+    targetAfxId: unit.targetAfxId != null && Number.isFinite(targetAfxId) ? targetAfxId : null,
+    dubcap,
+    afterPrep: dubcap && !plan?.dubcap?.live,
+  };
+}
 
 export type PlannerPlanSends = {
   sends: PrePlanSendSpec[];
@@ -73,6 +119,12 @@ function shipRank(ship: string): number {
   return index < 0 ? SHIP_PROGRESSION_ORDER.length : index;
 }
 
+/** A dubcap's drop multiplier, clamped to what a send row accepts; 2 when unknown. */
+function dubcapMultiplier(value: unknown): number {
+  const multiplier = Number(value);
+  return Number.isFinite(multiplier) && multiplier > 1 ? Math.min(MAX_PRE_PLAN_DROP_MULTIPLIER, multiplier) : 2;
+}
+
 function wholeLaunches(value: unknown): number {
   const launches = Math.round(Number(value));
   return Number.isFinite(launches) ? Math.max(0, launches) : 0;
@@ -86,10 +138,12 @@ function wholeLaunches(value: unknown): number {
  *   cover (the planner counts prep inside those rows) come first, as
  *   untargeted sends, lowest ship first so unlock chains run in order.
  * - Mission rows follow from the lowest planned star level up, so a ship's
- *   low-star rows run before the rows that need its later stars.
+ *   low-star rows run before the rows that need its later stars. Rows flown
+ *   in the plan's dubcap carry its drop multiplier.
  *
- * In-air rows are left out: they're launched already, so the profile's stars
- * count them and replaying them would count them twice.
+ * The partly fueled ship goes first, or just after prep when it opens a fresh
+ * dubcap. In-air rows are left out: they're launched already, so the
+ * profile's stars count them and replaying them would count them twice.
  */
 export function plannerPlanToPrePlanSends(plan: PlannerPlanLaunches): PlannerPlanSends {
   const missions = plan.missions.filter(
@@ -138,17 +192,37 @@ export function plannerPlanToPrePlanSends(plan: PlannerPlanLaunches): PlannerPla
         ? PRE_PLAN_UNTARGETED_TARGET_AFX_ID
         : Math.round(Number(mission.targetAfxId)),
       launches: wholeLaunches(mission.launches),
+      ...(mission.dubcap ? { multiplier: dubcapMultiplier(plan.dubcap?.multiplier) } : {}),
     }));
+
+  const fueling = plan.fueling;
+  const fuelingSends: PrePlanSendSpec[] =
+    fueling && isSendDuration(fueling.durationType)
+      ? [{
+          ship: fueling.ship,
+          durationType: fueling.durationType,
+          targetAfxId:
+            fueling.targetAfxId == null || UNTARGETED_ONLY_SHIPS.has(fueling.ship)
+              ? PRE_PLAN_UNTARGETED_TARGET_AFX_ID
+              : Math.round(fueling.targetAfxId),
+          launches: 1,
+          ...(fueling.dubcap ? { multiplier: dubcapMultiplier(plan.dubcap?.multiplier) } : {}),
+        }]
+      : [];
+  const ordered = fueling?.afterPrep
+    ? [...prepSends, ...fuelingSends, ...missionSends]
+    : [...fuelingSends, ...prepSends, ...missionSends];
 
   // Merge neighbours that differ only by planned level, then split rows past the per-row cap.
   const merged: PrePlanSendSpec[] = [];
-  for (const send of [...prepSends, ...missionSends]) {
+  for (const send of ordered) {
     const last = merged[merged.length - 1];
     if (
       last &&
       last.ship === send.ship &&
       last.durationType === send.durationType &&
-      last.targetAfxId === send.targetAfxId
+      last.targetAfxId === send.targetAfxId &&
+      (last.multiplier ?? 1) === (send.multiplier ?? 1)
     ) {
       last.launches += send.launches;
     } else {
@@ -185,6 +259,8 @@ type StoredPlannerPlanLaunches = {
   eid: string;
   missions: PlannerPlanMission[];
   prepLaunches: PlannerPlanPrepLaunch[];
+  dubcapMultiplier?: number;
+  fueling?: PlannerPlanFueling;
 };
 
 const PLAN_LAUNCHES_KEYS: Record<PlannerInventorySource, string> = {
@@ -211,12 +287,15 @@ export function writeSavedPlannerPlanLaunches(
       targetAfxId: mission.targetAfxId,
       launches: mission.launches,
       ...(mission.inAir ? { inAir: true } : {}),
+      ...(mission.dubcap ? { dubcap: true } : {}),
     })),
     prepLaunches: saved.plan.progression.prepLaunches.map((prep) => ({
       ship: prep.ship,
       durationType: prep.durationType,
       launches: prep.launches,
     })),
+    ...(saved.plan.dubcap ? { dubcapMultiplier: saved.plan.dubcap.multiplier } : {}),
+    ...(saved.plan.fueling ? { fueling: saved.plan.fueling } : {}),
   };
   writeStoredString([PLAN_LAUNCHES_KEYS[source]], JSON.stringify(stored));
 }
@@ -238,7 +317,24 @@ function isLaunchRow(row: unknown): boolean {
   );
 }
 
-function savedPlannerPlan(savedAt: unknown, eid: unknown, missions: unknown, prepLaunches: unknown): SavedPlannerPlan | null {
+function isFuelingRecord(value: unknown): value is PlannerPlanFueling {
+  const record = value as Partial<PlannerPlanFueling> | null;
+  return (
+    isLaunchRow(value) &&
+    (record?.targetAfxId === null || typeof record?.targetAfxId === "number") &&
+    typeof record?.dubcap === "boolean" &&
+    typeof record?.afterPrep === "boolean"
+  );
+}
+
+function savedPlannerPlan(
+  savedAt: unknown,
+  eid: unknown,
+  missions: unknown,
+  prepLaunches: unknown,
+  dubcapMultiplierRaw: unknown,
+  fuelingRaw: unknown
+): SavedPlannerPlan | null {
   if (!Array.isArray(missions)) {
     return null;
   }
@@ -247,6 +343,8 @@ function savedPlannerPlan(savedAt: unknown, eid: unknown, missions: unknown, pre
     progression: {
       prepLaunches: (Array.isArray(prepLaunches) ? prepLaunches.filter(isLaunchRow) : []) as PlannerPlanPrepLaunch[],
     },
+    dubcap: dubcapMultiplierRaw != null ? { multiplier: dubcapMultiplier(dubcapMultiplierRaw) } : null,
+    fueling: isFuelingRecord(fuelingRaw) ? fuelingRaw : null,
   });
   return {
     ...converted,
@@ -261,7 +359,14 @@ export function savedPlannerPlanFromStorage(raw: string | null): SavedPlannerPla
   }
   try {
     const stored = JSON.parse(raw) as Partial<Record<keyof StoredPlannerPlanLaunches, unknown>>;
-    return savedPlannerPlan(stored.savedAt, stored.eid, stored.missions, stored.prepLaunches);
+    return savedPlannerPlan(
+      stored.savedAt,
+      stored.eid,
+      stored.missions,
+      stored.prepLaunches,
+      stored.dubcapMultiplier,
+      stored.fueling
+    );
   } catch {
     return null;
   }
@@ -279,14 +384,27 @@ export function savedPlannerPlanFromSession(raw: string | null, source: PlannerI
   try {
     const session = JSON.parse(raw) as {
       savedAt?: unknown;
-      response?: { plan?: { missions?: unknown; progression?: { prepLaunches?: unknown } } };
+      response?: {
+        plan?: PlannerPlanFuelingSource & {
+          missions?: unknown;
+          progression?: { prepLaunches?: unknown };
+          dubcap?: { multiplier?: unknown } | null;
+        };
+      };
       lastSolveRequest?: { eid?: unknown; sourceFilters?: { inventorySource?: unknown } };
     };
     if ((session.lastSolveRequest?.sourceFilters?.inventorySource ?? "main") !== source) {
       return null;
     }
     const plan = session.response?.plan;
-    return savedPlannerPlan(session.savedAt, session.lastSolveRequest?.eid, plan?.missions, plan?.progression?.prepLaunches);
+    return savedPlannerPlan(
+      session.savedAt,
+      session.lastSolveRequest?.eid,
+      plan?.missions,
+      plan?.progression?.prepLaunches,
+      plan?.dubcap?.multiplier,
+      plannerPlanFueling(plan)
+    );
   } catch {
     return null;
   }

@@ -15,6 +15,15 @@ import {
 import { getRecipe, recipes } from "./recipes";
 import { resolveShinyGoalTargets, type ShinyGoalPlan, type ShinyRarity } from "./shiny-odds";
 import {
+  isShipStarsItem,
+  shipFromStarsItem,
+  shipStarsGoalLabel,
+  shipStarsItemKey,
+  STAR_POINT_UNITS,
+  starPointUnits,
+  starPointUnitsToMax,
+} from "./ship-star-goals";
+import {
   buildMissionOptions,
   computeShipLevelsFromLaunchCounts,
   DurationType,
@@ -24,6 +33,7 @@ import {
   ShipLaunchCounts,
   ShipLevelInfo,
   shipDisplayName,
+  shipLevelPointThresholds,
   shipLevelsToLaunchCounts,
 } from "./ship-data";
 import {
@@ -1200,6 +1210,11 @@ async function buildMissionActionsForOptions(
         continue;
       }
       const yields = yieldsFromTarget(target, relevantItems, option.capacity, includeShinyRarities);
+      // A stars goal: every launch of its ship counts toward it, whatever the target.
+      const starsKey = shipStarsItemKey(option.ship);
+      if (relevantItems.has(starsKey)) {
+        yields[starsKey] = starPointUnits(option.durationType);
+      }
       if (Object.keys(yields).length === 0) {
         continue;
       }
@@ -1488,6 +1503,10 @@ function missionYieldIndexEnabled(disabledByOption?: boolean, injectedLootData?:
  * the name already says.
  */
 function itemKeyToTierLabel(itemKey: string): string {
+  const starShip = shipFromStarsItem(itemKey);
+  if (starShip) {
+    return shipStarsGoalLabel(starShip);
+  }
   const entry = artifactDisplayMap[itemKey];
   return entry && Number.isFinite(entry.tierNumber) ? `${entry.name} (T${entry.tierNumber})` : itemKeyToDisplayName(itemKey);
 }
@@ -2428,7 +2447,7 @@ async function solveUnifiedCraftMissionPlan(options: {
   // Partial tank plans also measure how far spare fuel gets the goals they
   // leave short (VirtueTankSolveOptions.softDemand): progress crafts (pc_)
   // are fractional crafts from what the plan leaves over, with their own item
-  // rows (pb_) on top of the real ones, so they never feed a real craft.
+  // rows (pp_) on top of the real ones, so they never feed a real craft.
   const progressLayer = partialTankPlan && !lpRelaxation;
   const progressCraftVar = (model: CraftCostModel) => `pc_${model.craftVar}`;
   const progressCraftShortfallVar = (model: CraftCostModel) => `ucp_${model.craftVar}`;
@@ -2636,7 +2655,7 @@ async function solveUnifiedCraftMissionPlan(options: {
           progressTerms.push({ coefficient: -ingredientQty, variable: progressCraftVar(craftModel) });
         }
       }
-      lines.push(`  pb_${itemIndex}: ${formatLinearExpression(progressTerms)} >= ${formatLpNumber(rhs)}`);
+      lines.push(`  pp_${itemIndex}: ${formatLinearExpression(progressTerms)} >= ${formatLpNumber(rhs)}`);
     }
   }
 
@@ -3376,7 +3395,9 @@ async function solveUnifiedCraftMissionPlan(options: {
     if (progressed.length > 0) {
       notes.push(
         `Spare fuel within the cap goes to launches toward the goals it leaves short: ${progressed
-          .map((goal) => `${itemKeyToTierLabel(goal.itemKey)} ${goal.crafts >= 0.995
+          .map((goal) => isShipStarsItem(goal.itemKey)
+            ? `${itemKeyToTierLabel(goal.itemKey)} gets ${(goal.crafts / STAR_POINT_UNITS).toFixed(1)} more launch points`
+            : `${itemKeyToTierLabel(goal.itemKey)} ${goal.crafts >= 0.995
             ? `gets about ${goal.crafts.toFixed(1)} crafts' worth of ingredients`
             : `gets about ${Math.round(goal.crafts * 100)}% of its next craft's ingredients`}`)
           .join("; ")}.`
@@ -3809,7 +3830,10 @@ function addDubcapActions(
       ...action, key: `${action.key}|dubcap|${optionKey}`, optionKey, dubcap: true, dubcapOf: action.key, dubcapWindow: window,
       // The XP phase credits the launch once. Its drops still use only the
       // known stars at event start, even when that launch helps level up.
-      yields: Object.fromEntries(Object.entries(action.yields).map(([key, amount]) => [key, amount * window.multiplier])),
+      // A stars goal's points aren't drops: the event doesn't multiply them.
+      yields: Object.fromEntries(
+        Object.entries(action.yields).map(([key, amount]) => [key, isShipStarsItem(key) ? amount : amount * window.multiplier])
+      ),
     }));
   });
   return [...actions, ...eventActions];
@@ -3867,6 +3891,7 @@ function buildMissionRows(
         return null;
       }
       const expectedYields = Object.entries(action.yields)
+        .filter(([itemKey]) => !isShipStarsItem(itemKey))
         .map(([itemKey, perMission]) => ({ itemId: itemKeyToId(itemKey), quantity: perMission * launches }))
         .filter((entry) => entry.quantity > 0)
         .sort((a, b) => b.quantity - a.quantity);
@@ -5228,7 +5253,27 @@ function projectShipLevelsAfterPlannedLaunches(options: {
     incrementLaunchCounts(launchCounts, shape.ship, shape.durationType, postPrepLaunches);
   }
 
-  return computeShipLevelsFromLaunchCounts(launchCounts);
+  // Launch counts alone can't unlock a ship whose predecessors have no
+  // launches (the demo profile), and stars can be customized; a ship the
+  // profile has unlocked stays unlocked, at no fewer stars than it has.
+  const baseByShip = new Map(baseShipLevels.map((entry) => [entry.ship, entry]));
+  return computeShipLevelsFromLaunchCounts(launchCounts).map((entry) => {
+    const base = baseByShip.get(entry.ship);
+    if (!base?.unlocked) {
+      return entry;
+    }
+    const thresholds = shipLevelPointThresholds(entry.ship) || [];
+    let pointsLevel = 0;
+    while (pointsLevel + 1 < thresholds.length && entry.launchPoints >= thresholds[pointsLevel + 1]) {
+      pointsLevel += 1;
+    }
+    return {
+      ...entry,
+      unlocked: true,
+      level: Math.min(entry.maxLevel || base.maxLevel, Math.max(entry.level, pointsLevel, base.level)),
+      maxLevel: entry.maxLevel || base.maxLevel,
+    };
+  });
 }
 
 /**
@@ -5988,7 +6033,8 @@ function normalizePlannerTargets(
   targetItemId: string,
   quantity: number,
   targets?: PlannerTarget[],
-  craftCounts: Record<string, number> = {}
+  craftCounts: Record<string, number> = {},
+  shipLevels: ShipLevelInfo[] = []
 ): {
   primaryTargetKey: string;
   primaryQuantity: number;
@@ -5997,12 +6043,29 @@ function normalizePlannerTargets(
   targetDemandByItem: Map<string, number>;
   craftFloorByItem: Map<string, number>;
   craftGoalTotals: Map<string, number>;
+  /** Max-stars goals by ship: the launch point units each still needs (ship-star-goals). */
+  starGoals: Map<string, number>;
+  /** Ships whose stars goal is already met. */
+  starGoalsMet: string[];
   targetCraftedOnlyKeys: Set<string>;
 } {
   const rawTargets = targets && targets.length > 0 ? targets : [{ targetItemId, quantity }];
   const targetDemandByItem = new Map<string, number>();
   const craftGoalTotals = new Map<string, number>();
+  const starGoals = new Map<string, number>();
+  const starGoalsMet: string[] = [];
   for (const target of rawTargets) {
+    const starShip = shipFromStarsItem(target.targetItemId);
+    if (starShip) {
+      const info = shipLevels.find((entry) => entry.ship === starShip);
+      const units = info?.unlocked ? starPointUnitsToMax(starShip, info.launchPoints) : 0;
+      if (units > 0) {
+        starGoals.set(starShip, units);
+      } else if (info?.unlocked && !starGoalsMet.includes(starShip)) {
+        starGoalsMet.push(starShip);
+      }
+      continue;
+    }
     const itemKey = itemIdToCanonicalKey(target.targetItemId);
     const safeQuantity = Math.max(1, Math.round(target.quantity));
     if (target.craftGoal && getRecipe(itemKey)) {
@@ -6018,6 +6081,10 @@ function normalizePlannerTargets(
     if (stillOwed > 0) {
       craftFloorByItem.set(itemKey, stillOwed);
     }
+  }
+  // Stars goals go last, so an artifact goal stays the primary one when there is one.
+  for (const [ship, units] of starGoals) {
+    targetDemandByItem.set(shipStarsItemKey(ship), units);
   }
   const demandTargets = Array.from(targetDemandByItem.entries()).map(([itemKey, qty]) => ({
     targetItemId: itemKeyToId(itemKey),
@@ -6046,7 +6113,13 @@ function normalizePlannerTargets(
     targetDemandByItem,
     craftFloorByItem,
     craftGoalTotals,
-    targetCraftedOnlyKeys: new Set(demandTargets.map((target) => itemIdToCanonicalKey(target.targetItemId)).filter(isCraftedOnlyEligibleGoalKey)),
+    starGoals,
+    starGoalsMet,
+    targetCraftedOnlyKeys: new Set(
+      demandTargets
+        .map((target) => itemIdToCanonicalKey(target.targetItemId))
+        .filter((key) => !isShipStarsItem(key) && isCraftedOnlyEligibleGoalKey(key))
+    ),
   };
 }
 
@@ -6247,7 +6320,7 @@ async function planForTargetHeuristic(
   }
   notes.push(missionDropRarityNote(missionDropRarities));
   notes.push(
-    "Ship progression snapshot reflects projected levels after applying all launches in this plan (prep + farming), and is not persisted."
+    "Ship progress shows projected stars after every launch in this plan (prep + farming)."
   );
 
   return {
@@ -7284,9 +7357,17 @@ async function planForNewLaunches(
   tankRun?: VirtueTankRun,
   inAirLaneFreeSeconds: number[] = []
 ): Promise<PlannedLaunches> {
-  const normalizedTargets = normalizePlannerTargets(targetItemId, quantity, plannerOptions.targets, profile.craftCounts);
+  const normalizedTargets = normalizePlannerTargets(
+    targetItemId,
+    quantity,
+    plannerOptions.targets,
+    profile.craftCounts,
+    profile.shipLevels
+  );
   const craftFloorByItem = normalizedTargets.craftFloorByItem;
   const hasCraftGoals = normalizedTargets.craftGoalTotals.size > 0;
+  // Goals that don't scale with a solved block: craft-count floors and stars.
+  const hasUnscaledGoals = hasCraftGoals || normalizedTargets.starGoals.size > 0;
   const targetKey = normalizedTargets.primaryTargetKey;
   // Tank mode swaps the fuel/time slider for the shift cap: mission time is the
   // whole objective, and fuel only counts through the shifts it forces.
@@ -7312,7 +7393,7 @@ async function planForNewLaunches(
     !tankRun &&
     !plannerOptions.includeDubcap &&
     !multiTarget &&
-    !hasCraftGoals &&
+    !hasUnscaledGoals &&
     normalizedTargets.demandTargets.length === 1 &&
     !plannerOptions.disableFastQuantityAcceleration &&
     quantityInt >= FAST_QUANTITY_ACCELERATION_MIN_QUANTITY;
@@ -7321,7 +7402,7 @@ async function planForNewLaunches(
     !tankRun &&
     !plannerOptions.includeDubcap &&
     multiTarget &&
-    !hasCraftGoals &&
+    !hasUnscaledGoals &&
     !plannerOptions.disableFastQuantityAcceleration &&
     multiTargetScaleFactor > 1;
   const fastQuantityAcceleration = singleTargetFastQuantityAcceleration || multiTargetFastQuantityAcceleration;
@@ -8574,7 +8655,7 @@ async function planForNewLaunches(
       }
       // The block screen solves a scaled-down slice with no closure inventory;
       // neither a second demand row nor a craft-count floor scales with it.
-      if (multiTarget || hasCraftGoals || normalizedTargets.demandTargets.length !== 1) {
+      if (multiTarget || hasUnscaledGoals || normalizedTargets.demandTargets.length !== 1) {
         return;
       }
       const blockQuantity = chooseFastQuantityAccelerationBlock(quantityInt);
@@ -9504,6 +9585,7 @@ async function planForNewLaunches(
     const missionRows = buildMissionRows(outputActions, shown.missionCounts, actionKeyByRowKey);
     const craftRows = buildCraftRows(outputUnified.crafts);
     const consumptionRows = buildConsumptionRows(outputUnified.consumptions, consumptionOptions);
+    // Stars goals report launch points, not the solve's point units.
     const targetBreakdowns = buildTargetBreakdowns({
       targetDemandByItem: normalizedTargets.targetDemandByItem,
       crafts: outputUnified.crafts,
@@ -9513,7 +9595,18 @@ async function planForNewLaunches(
       targetCraftedOnlyKeys: targetCraftedOnly ? normalizedTargets.targetCraftedOnlyKeys : new Set<string>(),
       craftGoalTotals: normalizedTargets.craftGoalTotals,
       craftCounts: profile.craftCounts,
-    });
+    }).map((row) =>
+      isShipStarsItem(row.itemId)
+        ? {
+            ...row,
+            requested: row.requested / STAR_POINT_UNITS,
+            fromInventory: 0,
+            fromCraft: 0,
+            fromMissionsExpected: row.fromMissionsExpected / STAR_POINT_UNITS,
+            shortfall: row.shortfall / STAR_POINT_UNITS,
+          }
+        : row
+    );
     // The single-goal breakdown is the primary row of the same table; building
     // it separately would describe a craft-count goal as demand for copies.
     const primaryBreakdownRow = targetBreakdowns.find((row) => itemIdToCanonicalKey(row.itemId) === targetKey);
@@ -9550,7 +9643,10 @@ async function planForNewLaunches(
       : outputUnified.remainingDemand;
     const unmetItems = Object.entries(unmetByItem)
       .filter(([, qty]) => qty > 1e-6)
-      .map(([itemKey, qty]) => ({ itemId: itemKeyToId(itemKey), quantity: qty }))
+      .map(([itemKey, qty]) => ({
+        itemId: itemKeyToId(itemKey),
+        quantity: tankRun?.softDemand || !isShipStarsItem(itemKey) ? qty : qty / STAR_POINT_UNITS,
+      }))
       .sort((a, b) => b.quantity - a.quantity);
 
     const uncoveredItemKeys = Object.entries(outputUnified.remainingDemand)
@@ -9730,7 +9826,7 @@ async function planForNewLaunches(
     );
     notes.push(missionDropRarityNote(missionDropRarities));
     notes.push(
-      "Ship progression snapshot reflects projected levels after applying all launches in this plan (prep + farming), and is not persisted."
+      "Ship progress shows projected stars after every launch in this plan (prep + farming)."
     );
 
     const projectedShipLevels = projectShipLevelsAfterPlannedLaunches({
@@ -9739,6 +9835,21 @@ async function planForNewLaunches(
       actions: outputActions,
       missionCounts: outputUnified.missionCounts,
     });
+    for (const ship of normalizedTargets.starGoalsMet) {
+      notes.push(`${shipStarsGoalLabel(ship)}: ${shipDisplayName(ship)} already has max stars, so the plan adds nothing for it.`);
+    }
+    for (const ship of normalizedTargets.starGoals.keys()) {
+      const after = projectedShipLevels.find((entry) => entry.ship === ship);
+      if (!after) {
+        continue;
+      }
+      const left = starPointUnitsToMax(ship, after.launchPoints) / STAR_POINT_UNITS;
+      notes.push(
+        left <= 0
+          ? `${shipStarsGoalLabel(ship)}: the plan's launches take ${shipDisplayName(ship)} to ${after.maxLevel}★.`
+          : `${shipStarsGoalLabel(ship)}: the plan takes ${shipDisplayName(ship)} to ${after.level}★, ${left.toFixed(1)} launch points short of ${after.maxLevel}★.`
+      );
+    }
 
     // Tank mode: packing is the source of truth for the tanks, the shifts and
     // the schedule (it seeds the slots with the in-air ships).
@@ -10013,7 +10124,7 @@ export async function computeMonolithicPaths(options: {
   } = options;
   const { targets } = resolveShinyGoalTargets(options.targets || [], profile);
   const quantity = options.targets?.[0]?.shinyRarity && targets[0] ? targets[0].quantity : options.quantity;
-  const normalizedTargets = normalizePlannerTargets(targetItemId, quantity, targets, profile.craftCounts);
+  const normalizedTargets = normalizePlannerTargets(targetItemId, quantity, targets, profile.craftCounts, profile.shipLevels);
   const targetKey = normalizedTargets.primaryTargetKey;
   const quantityInt = normalizedTargets.primaryQuantity;
   const craftFloorByItem = normalizedTargets.craftFloorByItem;

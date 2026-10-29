@@ -3347,3 +3347,220 @@
   color: var(--muted);
   font-weight: 500;
 }
+
+/* Planner notes: collapsed by default, a chevron like the tank charts'. */
+.plannerNotes > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.plannerNotes > summary::-webkit-details-marker {
+  display: none;
+}
+
+.plannerNotes > summary::before {
+  content: "";
+  align-self: center;
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 7px solid var(--muted);
+  transition: transform 120ms ease;
+}
+
+.plannerNotes[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.plannerNotes > summary h2 {
+  margin: 0;
+}
+
+.plannerNotes[open] > summary {
+  margin-bottom: 10px;
+}
+
+.plannerNotes > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.plannerNotesCount {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Ship progress: only ships the plan moves. */
+.shipProgressTable td {
+  vertical-align: middle;
+}
+
+.shipProgressUnlocked {
+  color: var(--navy);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.shipProgressStars {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.shipProgressMax {
+  color: var(--ok);
+  font-weight: 700;
+}
+
+.shipProgressNumber {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.shipProgressNext {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 170px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.shipProgressBar {
+  position: relative;
+  flex: 0 0 72px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--stroke);
+}
+
+.shipProgressBarGain,
+.shipProgressBarStart {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+}
+
+.shipProgressBarGain {
+  background: var(--accent);
+}
+
+/* The part the ship had before the plan, under the plan's gain. */
+.shipProgressBarStart {
+  background: color-mix(in oklab, var(--accent), var(--muted) 65%);
+}
+
+/* Following a plan: the progress strip atop Mission plan and done/planned counts on rows. */
+.planProgress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--stroke);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.planProgressButton {
+  min-height: 32px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.planProgressBody {
+  display: grid;
+  flex: 1 1 260px;
+  gap: 4px;
+  min-width: 0;
+}
+
+.planProgressHeadline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.planProgressBar {
+  position: relative;
+  flex: 0 0 120px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--stroke);
+}
+
+.planProgressBar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--ok);
+}
+
+.planProgressWarn {
+  color: var(--warn-ink);
+}
+
+.planProgressDone {
+  color: var(--ok);
+  font-weight: 700;
+}
+
+.launchDone {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.launchDone[data-state="partial"] {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.launchDone[data-state="complete"] {
+  color: var(--ok);
+  font-weight: 700;
+}
+
+/* Save / Load plan file: quiet links under the Build button. */
+.planFileActions {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.planFileActions button {
+  min-height: 0;
+  padding: 2px 4px;
+  border: 0;
+  background: none !important;
+  box-shadow: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--muted), transparent 55%);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.planFileActions button:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.planFileActions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

@@ -44,6 +44,7 @@ import {
   writeStoredString,
 } from "../../lib/local-preferences";
 import {
+  MAX_PRE_PLAN_DROP_MULTIPLIER,
   MAX_PRE_PLAN_LAUNCHES_PER_ROW,
   MAX_PRE_PLAN_SEND_ROWS,
   PRE_PLAN_UNTARGETED_TARGET_AFX_ID,
@@ -91,6 +92,8 @@ type PrePlanSendRow = {
   durationType: PrePlanDurationType;
   targetAfxId: number;
   launches: number;
+  /** Drop multiplier for sends flown in a dubcap; absent means 1. */
+  multiplier?: number;
 };
 type PrePlanSendRowResult = {
   startLevel: number;
@@ -257,6 +260,8 @@ const PRE_PLAN_SHIPS = [
   "CHICKEN_NINE",
   "CHICKEN_ONE",
 ];
+/** A hand-added dubcap send's drop multiplier; imported plan rows keep their event's own. */
+const DUBCAP_SEND_MULTIPLIER = 2;
 const PRE_PLAN_DURATIONS: Array<{ value: PrePlanDurationType; label: string }> = [
   { value: "SHORT", label: "Short" },
   { value: "LONG", label: "Standard" },
@@ -548,6 +553,7 @@ async function getOptimalCrafts(
       durationType: send.durationType,
       targetAfxId: send.targetAfxId,
       launches: send.launches,
+      ...(sendMultiplier(send) > 1 ? { multiplier: sendMultiplier(send) } : {}),
     })),
   };
   const response = await fetch("/api/inventory", {
@@ -589,8 +595,15 @@ function durationTypeLabel(durationType: PrePlanDurationType): string {
   return PRE_PLAN_DURATIONS.find((entry) => entry.value === durationType)?.label || durationType;
 }
 
+/** A send's drop multiplier: above 1 only for dubcap sends. */
+function sendMultiplier(send: Pick<PrePlanSendRow, "multiplier">): number {
+  const multiplier = Number(send.multiplier ?? 1);
+  return Number.isFinite(multiplier) ? Math.max(1, Math.min(MAX_PRE_PLAN_DROP_MULTIPLIER, multiplier)) : 1;
+}
+
 function prePlanSendLabel(send: PrePlanSendRow): string {
-  return `${send.launches.toLocaleString()}x ${titleCaseShip(send.ship)} ${durationTypeLabel(send.durationType)} / ${afxIdToTargetFamilyName(send.targetAfxId)}`;
+  const multiplier = sendMultiplier(send);
+  return `${send.launches.toLocaleString()}x ${titleCaseShip(send.ship)} ${durationTypeLabel(send.durationType)} / ${afxIdToTargetFamilyName(send.targetAfxId)}${multiplier > 1 ? ` · dubcap ×${multiplier}` : ""}`;
 }
 
 /** Where a send row leaves its ship, and the launches that didn't play out as asked. */
@@ -618,7 +631,8 @@ function sameSend(left: Omit<PrePlanSendRow, "id">, right: Omit<PrePlanSendRow, 
     left.ship === right.ship &&
     left.durationType === right.durationType &&
     left.targetAfxId === right.targetAfxId &&
-    left.launches === right.launches
+    left.launches === right.launches &&
+    sendMultiplier(left) === sendMultiplier(right)
   );
 }
 
@@ -642,6 +656,7 @@ function prePlanSendsSignature(sends: PrePlanSendRow[]): string {
       durationType: send.durationType,
       targetAfxId: send.targetAfxId,
       launches: send.launches,
+      multiplier: sendMultiplier(send),
     }))
   );
 }
@@ -704,6 +719,7 @@ function parseStoredPrePlanSends(raw: string | null): PrePlanSendRow[] {
           durationType,
           targetAfxId,
           launches,
+          ...(sendMultiplier(record) > 1 ? { multiplier: sendMultiplier(record) } : {}),
         };
       })
       .filter((row): row is PrePlanSendRow => row !== null)
@@ -1638,6 +1654,7 @@ export default function XpGeCraftPage(): JSX.Element {
   const [draftPrePlanDuration, setDraftPrePlanDuration] = useState<PrePlanDurationType>("EPIC");
   const [draftPrePlanTargetAfxId, setDraftPrePlanTargetAfxId] = useState<number>(PRE_PLAN_UNTARGETED_TARGET_AFX_ID);
   const [draftPrePlanLaunches, setDraftPrePlanLaunches] = useState<string>("1");
+  const [draftPrePlanDubcap, setDraftPrePlanDubcap] = useState<boolean>(false);
   const [prePlanOpen, setPrePlanOpen] = useState<boolean>(false);
   const [lastPrePlanResult, setLastPrePlanResult] = useState<InventoryResponse["prePlanSends"] | null>(null);
   const [lastSolvedPrePlanSignature, setLastSolvedPrePlanSignature] = useState<string | null>(null);
@@ -2149,6 +2166,7 @@ export default function XpGeCraftPage(): JSX.Element {
         durationType: draftPrePlanDuration,
         targetAfxId,
         launches,
+        ...(draftPrePlanDubcap ? { multiplier: DUBCAP_SEND_MULTIPLIER } : {}),
       },
     ].slice(0, MAX_PRE_PLAN_SEND_ROWS));
     setDraftPrePlanLaunches("1");
@@ -2702,6 +2720,17 @@ export default function XpGeCraftPage(): JSX.Element {
                     }
                   />
                 </div>
+                <label
+                  className={`${styles.inputCheckbox} ${styles.prePlanDubcapToggle}`}
+                  title="These sends fly in a dubcap: double drops, with the stars and leveling of ordinary sends."
+                >
+                  <input
+                    type="checkbox"
+                    checked={draftPrePlanDubcap}
+                    onChange={(event) => setDraftPrePlanDubcap(event.target.checked)}
+                  />
+                  Dubcap ×{DUBCAP_SEND_MULTIPLIER}
+                </label>
                 <button
                   type="button"
                   className={styles.prePlanAddButton}

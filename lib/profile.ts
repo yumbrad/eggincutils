@@ -4,6 +4,7 @@ import path from "path";
 import zlib from "zlib";
 
 import type { LiveDubcapEvent } from "./dubcap-events";
+import { MAX_RECENT_LAUNCHES, type LaunchRecord } from "./launch-progress";
 import { buildMissionOptions, computeShipLevels, MissionRecord, ShipLevelInfo } from "./ship-data";
 import {
   parseVirtueTankFuels,
@@ -45,6 +46,8 @@ export type PlayerProfile = {
   isUltra?: boolean;
   /** The dubcap running when the profile was read, if any (withLiveDubcap). */
   liveDubcap?: LiveDubcapEvent;
+  /** The newest launches from either farm, oldest first, for following a plan's progress. */
+  recentLaunches?: LaunchRecord[];
 };
 
 /**
@@ -98,7 +101,7 @@ type BackupMissionInfo = {
  * rather than collapsing to the enum's zero value (which would read as a
  * Lunar Totem target on every untargeted mission).
  */
-type SparseMissionInfo = BackupMissionInfo & {
+export type SparseMissionInfo = BackupMissionInfo & {
   level?: number;
   capacity?: number;
   secondsRemaining?: number;
@@ -108,6 +111,7 @@ type SparseMissionInfo = BackupMissionInfo & {
   targetArtifact?: string;
   /** Absent means STANDARD — the proto's zero value. */
   type?: string;
+  identifier?: string;
 };
 
 type GetPlayerProfileOptions = {
@@ -302,6 +306,10 @@ export async function getPlayerProfile(
 
       const shipLevels = computeShipLevels(missions);
       const missionOptions = buildMissionOptions(shipLevels, epicResearchFTLLevel, epicResearchZerogLevel);
+      const recentLaunches = parseRecentLaunches(
+        [...sparseMissionInfos(decodedResponse, root, "missionArchive"), ...sparseMissionInfos(decodedResponse, root)],
+        root.lookupEnum("ei.ArtifactSpec.Name").values
+      );
       const inFlightMissions = parseInFlightMissions(
         sparseMissionInfos(decodedResponse, root),
         root.lookupEnum("ei.ArtifactSpec.Name").values,
@@ -319,6 +327,7 @@ export async function getPlayerProfile(
         shipLevels,
         missionOptions,
         inFlightMissions,
+        recentLaunches,
         shinyIngredientCount,
         isUltra: data.backup?.subInfo?.status === "ACTIVE",
         virtueTank: parseVirtueTank(
@@ -737,19 +746,57 @@ export function parseInFlightMissions(
   return missions;
 }
 
-function sparseMissionInfos(decodedResponse: protobuf.Message, root: protobuf.Root): SparseMissionInfo[] {
+function sparseMissionInfos(
+  decodedResponse: protobuf.Message,
+  root: protobuf.Root,
+  list: "missionInfos" | "missionArchive" = "missionInfos"
+): SparseMissionInfo[] {
   const missionInfoType = root.lookupType("ei.MissionInfo");
   const raw = (
     decodedResponse as unknown as {
-      backup?: { artifactsDb?: { missionInfos?: protobuf.Message[] } };
+      backup?: { artifactsDb?: Record<"missionInfos" | "missionArchive", protobuf.Message[] | undefined> };
     }
-  ).backup?.artifactsDb?.missionInfos;
+  ).backup?.artifactsDb?.[list];
   if (!Array.isArray(raw)) {
     return [];
   }
   return raw.map(
     (mission) => missionInfoType.toObject(mission, { enums: String, defaults: false }) as SparseMissionInfo
   );
+}
+
+const LAUNCHED_STATUSES = new Set(["EXPLORING", "RETURNED", "ANALYZING", "COMPLETE", "ARCHIVED"]);
+
+/**
+ * The newest MAX_RECENT_LAUNCHES launches from both farms, oldest first.
+ * Missions without an identifier or launch time can't be followed and are
+ * left out.
+ */
+export function parseRecentLaunches(
+  items: SparseMissionInfo[],
+  artifactAfxIdByName: Record<string, number>
+): LaunchRecord[] {
+  const launches: LaunchRecord[] = [];
+  for (const item of items) {
+    if (!item.ship || !item.durationType || !item.status || !LAUNCHED_STATUSES.has(item.status)) {
+      continue;
+    }
+    if (!item.identifier || !item.startTimeDerived) {
+      continue;
+    }
+    const targetAfxIdRaw = item.targetArtifact != null ? artifactAfxIdByName[item.targetArtifact] : undefined;
+    launches.push({
+      id: item.identifier,
+      ship: item.ship,
+      durationType: item.durationType,
+      targetAfxId: typeof targetAfxIdRaw === "number" ? targetAfxIdRaw : null,
+      level: Math.max(0, Math.round(item.level || 0)),
+      launchedAt: Math.round(item.startTimeDerived),
+      virtue: item.type === "VIRTUE",
+    });
+  }
+  launches.sort((a, b) => a.launchedAt - b.launchedAt);
+  return launches.slice(-MAX_RECENT_LAUNCHES);
 }
 
 function sparseVirtueFuelingMission(decodedResponse: protobuf.Message, root: protobuf.Root): SparseFuelingMission | null {

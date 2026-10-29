@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_PRE_PLAN_SEND_ROWS,
   PRE_PLAN_UNTARGETED_TARGET_AFX_ID,
+  plannerPlanFueling,
   plannerPlanToPrePlanSends,
   savedPlannerPlanFromSession,
   savedPlannerPlanFromStorage,
@@ -57,6 +58,60 @@ describe("plannerPlanToPrePlanSends", () => {
       progression: { prepLaunches: [] },
     });
     expect(sends.map((send) => send.launches)).toEqual([10_000, 2_000]);
+  });
+
+  it("gives the plan's dubcap rows its drop multiplier and keeps them apart from ordinary ones", () => {
+    const { sends } = plannerPlanToPrePlanSends({
+      missions: [
+        mission("HENERPRISE", "EPIC", 6, 3, 2),
+        { ...mission("HENERPRISE", "EPIC", 6, 3, 3), dubcap: true },
+      ],
+      progression: { prepLaunches: [] },
+      dubcap: { multiplier: 3 },
+    });
+    expect(sends).toEqual([
+      { ship: "HENERPRISE", durationType: "EPIC", targetAfxId: 3, launches: 2 },
+      { ship: "HENERPRISE", durationType: "EPIC", targetAfxId: 3, launches: 3, multiplier: 3 },
+    ]);
+  });
+
+  it("sends the partly fueled ship first, or after prep when it opens a fresh dubcap", () => {
+    const base = {
+      missions: [mission("HENERPRISE", "EPIC", 6, 3, 2)],
+      progression: { prepLaunches: [{ ship: "VOYEGGER", durationType: "SHORT", launches: 4 }] },
+    };
+    const fueling = { ship: "HENERPRISE", durationType: "EPIC", targetAfxId: null, dubcap: false, afterPrep: false };
+    expect(plannerPlanToPrePlanSends({ ...base, fueling }).sends[0]).toEqual({
+      ship: "HENERPRISE",
+      durationType: "EPIC",
+      targetAfxId: PRE_PLAN_UNTARGETED_TARGET_AFX_ID,
+      launches: 1,
+    });
+    const inEvent = plannerPlanToPrePlanSends({
+      ...base,
+      dubcap: { multiplier: 2 },
+      fueling: { ...fueling, targetAfxId: 7, dubcap: true, afterPrep: true },
+    }).sends;
+    expect(inEvent.map((send) => [send.ship, send.launches, send.multiplier ?? 1])).toEqual([
+      ["VOYEGGER", 4, 1],
+      ["HENERPRISE", 1, 2],
+      ["HENERPRISE", 2, 1],
+    ]);
+  });
+
+  it("reads the partly fueled ship from a plan's tank units and dubcap lanes", () => {
+    const units = [{ ship: "HENERPRISE", durationType: "EPIC", targetAfxId: 7, preFueled: false }];
+    expect(plannerPlanFueling({ virtueTanks: { units } })).toEqual({
+      ship: "HENERPRISE",
+      durationType: "EPIC",
+      targetAfxId: 7,
+      dubcap: false,
+      afterPrep: false,
+    });
+    expect(
+      plannerPlanFueling({ virtueTanks: { units }, dubcap: { live: false, lanes: [[{ fueling: true }], [], []] } })
+    ).toMatchObject({ dubcap: true, afterPrep: true });
+    expect(plannerPlanFueling({ virtueTanks: { units: [{ ship: "HENERPRISE", durationType: "EPIC" }] } })).toBeNull();
   });
 
   it("caps the rows and counts what it leaves out", () => {

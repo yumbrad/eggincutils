@@ -94,6 +94,17 @@ function cumulativeThresholds(levelMissionRequirements: number[]): number[] {
   return result;
 }
 
+/** Launch points each of a ship's star levels starts at, from 0★ up to max; null for an unknown ship. */
+export function shipLevelPointThresholds(ship: string): number[] | null {
+  const entry = shipConfig.find((candidate) => candidate.ship === ship);
+  return entry ? cumulativeThresholds(entry.levelMissionRequirements) : null;
+}
+
+/** Launch points one launch of each duration adds toward a ship's stars. */
+export function durationLaunchPoints(durationType: DurationType): number {
+  return DURATION_LAUNCH_POINTS[durationType];
+}
+
 function getLevelFromLaunchPoints(launchPoints: number, levelMissionRequirements: number[]): number {
   const thresholds = cumulativeThresholds(levelMissionRequirements);
   let level = 0;
