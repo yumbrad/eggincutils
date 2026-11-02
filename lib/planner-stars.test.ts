@@ -149,6 +149,24 @@ describe("max-stars goals", () => {
     expect(launchesOf(result, "CHICKFIANT")).toBe(0);
     expect(result.notes.some((note) => note.includes("already has max stars"))).toBe(true);
   });
+
+  it(
+    "flies a stars goal's ship even when Ships leaves it out",
+    async () => {
+      const result = await planForTarget(PROFILE, "puzzle-cube-1", 2, 1, {
+        targets,
+        lootData: LOOT,
+        solverFn: solveWithHighs,
+        allowedShipDurations: [{ ship: "HENERPRISE", durationType: "EPIC" }],
+      });
+      expect(launchesOf(result, "CHICKFIANT")).toBe(3);
+      expect(result.unmetItems).toEqual([]);
+      expect(result.notes).toContain(
+        "Max stars · Defihent: Defihent isn't in your Ships selection, so the plan flies it for this goal."
+      );
+    },
+    SOLVER_TIMEOUT_MS
+  );
 });
 
 describe("shift-capped plans where a ship levels up mid-plan", () => {
@@ -175,6 +193,32 @@ describe("shift-capped plans where a ship levels up mid-plan", () => {
       });
       expect(launchesOf(result, "CHICKFIANT")).toBe(20);
       expect(result.targetBreakdowns[0].shortfall).toBeGreaterThan(0);
+      expect(result.virtueTanks?.pack.totalShifts).toBe(0);
+    },
+    SOLVER_TIMEOUT_MS
+  );
+});
+
+describe("an edited tank holding more than its capacity", () => {
+  it(
+    "plans the whole first tank without a shift",
+    async () => {
+      // 18T in a 10T tank: three Chickfiant extendeds (3T + 3T each) need all of it.
+      const result = await planForTarget(PROFILE, shipStarsItemId("CHICKFIANT"), 1, 1, {
+        targets: [{ targetItemId: shipStarsItemId("CHICKFIANT"), quantity: 1 }],
+        lootData: LOOT,
+        solverFn: solveWithHighs,
+        objectiveMode: "virtueFuel",
+        virtueTank: {
+          shiftCap: 0,
+          startMode: "current",
+          capacity: 10 * T,
+          currentContents: { curiosity: 9 * T, kindness: 9 * T },
+          currentHumility: 0,
+        },
+      });
+      expect(launchesOf(result, "CHICKFIANT")).toBe(3);
+      expect(result.unmetItems).toEqual([]);
       expect(result.virtueTanks?.pack.totalShifts).toBe(0);
     },
     SOLVER_TIMEOUT_MS

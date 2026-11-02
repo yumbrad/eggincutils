@@ -28,6 +28,7 @@ import {
   computeShipLevelsFromLaunchCounts,
   DurationType,
   getMaxBoostedMissionCapacity,
+  getNominalMissionCapacity,
   getShipOrder,
   MissionOption,
   ShipLaunchCounts,
@@ -36,6 +37,19 @@ import {
   shipLevelPointThresholds,
   shipLevelsToLaunchCounts,
 } from "./ship-data";
+import {
+  assignLockedLaunches,
+  describeLockedLaunch,
+  groupLockedLaunches,
+  lockedShipLengthLabel,
+  sanitizeLockedLaunches,
+  lockedGroupMatches,
+  lockedLaunchGroupsKey,
+  lockedTargetMatches,
+  type LockedLaunch,
+  type LockedLaunchGroup,
+} from "./locked-launches";
+import { hasEnoughMissionTargetSample as hasEnoughChosenMissionSample } from "./mission-loot";
 import {
   projectInFlightMissions,
   type InFlightMissionRow,
@@ -142,6 +156,8 @@ type PlanMissionRow = {
   rowKey?: string;
   /** Launch during the single modeled double-capacity event. */
   dubcap?: boolean;
+  /** How many of the row's launches are locked launches (lib/locked-launches). */
+  lockedLaunches?: number;
 };
 
 type PlanCraftRow = {
@@ -287,6 +303,14 @@ export type PlannerOptions = {
   targetCraftedOnly?: boolean;
   missionDropRarities?: Partial<ShinyRaritySelection>;
   allowedShipDurations?: Array<{ ship: string; durationType: string }>;
+  /** Launches the plan must make (see lib/locked-launches). */
+  lockedLaunches?: LockedLaunch[];
+  /**
+   * Set by planForTarget: ships and lengths Ships left out that only locked
+   * launches added, as "SHIP|DURATION". The plan flies no more of them than
+   * the locks ask for.
+   */
+  lockOnlyShipDurations?: string[];
   selectedConsumptionItemIds?: string[];
   maxSolveMs?: number;
   disableMissionYieldIndex?: boolean;
@@ -318,6 +342,14 @@ export type PlannerBenchmarkSample = {
   geCost: number;
   path: "primary" | "fallback";
 };
+
+/** Locked launches the plan can't make; the message is for the player. */
+export class LockedLaunchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LockedLaunchError";
+  }
+}
 
 export class MissionCoverageError extends Error {
   readonly itemIds: string[];
@@ -1242,6 +1274,79 @@ async function buildMissionActionsForOptions(
   return actions;
 }
 
+/**
+ * Actions locked launches need that the candidate's actions leave out: a
+ * named target the action builder skipped (a thin sample, a family no goal
+ * uses, no drop the goals need), and an untargeted one for each option of a
+ * locked ship and length with no action at all, so the lock always has
+ * leveling phases to fly in. A named target needs only the looser sample
+ * floor chosen missions get (mission-loot's); short of it, its launches
+ * fly with no drops.
+ */
+function lockedLaunchActions(options: {
+  missionOptions: MissionOption[];
+  groups: LockedLaunchGroup[];
+  existing: MissionAction[];
+  relevantItems: Set<string>;
+  lootData: LootJson;
+  missionDropRarities: ShinyRaritySelection;
+}): MissionAction[] {
+  const { missionOptions, groups, existing, relevantItems, lootData, missionDropRarities } = options;
+  if (groups.length === 0) {
+    return [];
+  }
+  const includeShinyRarities = normalizeShinyRaritySelection(missionDropRarities);
+  const byMissionId = new Map(lootData.missions.map((mission) => [mission.missionId, mission]));
+  const existingKeys = new Set(existing.map((action) => action.key));
+  const optionsWithActions = new Set(existing.map((action) => action.optionKey));
+  const added: MissionAction[] = [];
+  for (const option of missionOptions) {
+    const shapeGroups = groups.filter((group) => group.ship === option.ship && group.durationType === option.durationType);
+    if (shapeGroups.length === 0) {
+      continue;
+    }
+    const optionKey = missionOptionKey(option);
+    const targets = new Set<number>(
+      shapeGroups.flatMap((group) => group.targets.map((target) => target.targetAfxId))
+    );
+    if (!optionsWithActions.has(optionKey)) {
+      targets.add(10000);
+    }
+    const levelLoot = pickLevel(byMissionId.get(option.missionId)?.levels || [], option.level);
+    for (const targetAfxId of targets) {
+      const key = `${optionKey}|${targetAfxId}`;
+      if (existingKeys.has(key) || !canMissionOptionUseLootTarget(option, targetAfxId)) {
+        continue;
+      }
+      const target = levelLoot?.targets.find((entry) => lockedTargetMatches(targetAfxId, entry.targetAfxId));
+      const nominalCapacity =
+        getNominalMissionCapacity(option.ship, option.durationType, levelLoot?.level ?? 0) || option.capacity;
+      const yields =
+        target && hasEnoughChosenMissionSample(target, nominalCapacity)
+          ? yieldsFromTarget(target, relevantItems, option.capacity, includeShinyRarities)
+          : {};
+      const starsKey = shipStarsItemKey(option.ship);
+      if (relevantItems.has(starsKey)) {
+        yields[starsKey] = starPointUnits(option.durationType);
+      }
+      existingKeys.add(key);
+      added.push({
+        key,
+        optionKey,
+        missionId: option.missionId,
+        ship: option.ship,
+        durationType: option.durationType,
+        level: option.level,
+        lootLevel: levelLoot?.level ?? 0,
+        durationSeconds: option.durationSeconds,
+        targetAfxId,
+        yields,
+      });
+    }
+  }
+  return added;
+}
+
 async function buildMissionActions(
   profile: PlayerProfile,
   relevantItems: Set<string>,
@@ -1273,7 +1378,7 @@ async function buildMissionActions(
  */
 function pruneDominatedActions(
   actions: MissionAction[],
-  options: { constrainedOptionKeys: Set<string>; compareFuel: boolean; tankRounds: boolean }
+  options: { constrainedOptionKeys: Set<string>; compareFuel: boolean; tankRounds: boolean; keep?: (action: MissionAction) => boolean }
 ): MissionAction[] {
   const itemIndex = new Map<string, number>();
   for (const action of actions) {
@@ -1338,9 +1443,12 @@ function pruneDominatedActions(
     return a.items.every((index) => b.amounts[index] >= a.amounts[index]);
   };
   // Beating is transitive, so every action dropped here loses to one kept.
+  // Locked launches' ships and lengths keep every action (`keep`): a lock
+  // makes the plan fly them, whatever beats them.
   return entries
     .filter(
       (a) =>
+        options.keep?.(a.action) ||
         !entries.some(
           (b) => b !== a && beats(b, a) && (!beats(a, b) || b.action.key < a.action.key)
         )
@@ -1759,6 +1867,13 @@ type MissionAllocation = {
 type RequiredMissionLaunchConstraint = {
   launches: number;
   exact: boolean;
+};
+
+type LockedLaunchSolveOptions = {
+  groups: LockedLaunchGroup[];
+  /** The ordinary locks fly first: before a fresh dubcap, so its model counts them as prep. */
+  first: boolean;
+  onlyShipDurations: string[];
 };
 
 function formatLpNumber(value: number): string {
@@ -2357,6 +2472,8 @@ async function solveUnifiedCraftMissionPlan(options: {
   timeRef: number;
   requiredMissionLaunches?: Record<string, RequiredMissionLaunchConstraint>;
   maxMissionLaunchesByOption?: Record<string, number>;
+  /** Locked launches, and whether the ordinary ones fly first (before a fresh dubcap, like prep). */
+  lockedLaunches?: LockedLaunchSolveOptions;
   optionLaunchPrecedenceChains?: string[][];
   phasedChainConstraints?: PhasedChainConstraint[];
   geCostUpperBound?: number;
@@ -2387,6 +2504,7 @@ async function solveUnifiedCraftMissionPlan(options: {
     timeRef,
     requiredMissionLaunches = {},
     maxMissionLaunchesByOption = {},
+    lockedLaunches,
     optionLaunchPrecedenceChains = [],
     phasedChainConstraints = [],
     geCostUpperBound,
@@ -2421,6 +2539,16 @@ async function solveUnifiedCraftMissionPlan(options: {
       if (action && launches > 0) {
         prep.launches += launches;
         prep.seconds += launches * action.durationSeconds;
+      }
+    }
+    // Ordinary locked launches fly before a fresh event, as prep does.
+    if (lockedLaunches?.first) {
+      for (const group of lockedLaunches.groups) {
+        const action = group.dubcap ? undefined : actions.find((entry) => lockedGroupMatches(group, entry));
+        if (action) {
+          prep.launches += group.launches;
+          prep.seconds += group.launches * action.durationSeconds;
+        }
       }
     }
     return prep;
@@ -2702,6 +2830,40 @@ async function solveUnifiedCraftMissionPlan(options: {
     lines.push(`  mx_${optionMaxConstraintIndex}: ${lhs} <= ${formatLpNumber(launchCap)}`);
     optionMaxConstraintIndex += 1;
   }
+
+  // Locked launches: enough of each locked ship and length, and at each named
+  // target (LockedLaunchGroup); a ship and length only the locks added flies
+  // no more than they ask for.
+  let lockedConstraintCount = 0;
+  const lockedGroups = lockedLaunches?.groups ?? [];
+  lockedGroups.forEach((group, groupIndex) => {
+    const indexes = actions.flatMap((action, index) => (lockedGroupMatches(group, action) ? [index] : []));
+    if (indexes.length === 0) {
+      throw new Error(`locked ${group.ship} ${group.durationType} launches have no compatible missions`);
+    }
+    lines.push(`  lk_${groupIndex}: ${indexes.map((index) => missionVars[index]).join(" + ")} >= ${formatLpNumber(group.launches)}`);
+    lockedConstraintCount += 1;
+    group.targets.forEach((target, targetIndex) => {
+      const targeted = indexes.filter((index) => lockedTargetMatches(target.targetAfxId, actions[index].targetAfxId));
+      if (targeted.length === 0) {
+        throw new Error(`locked ${group.ship} ${group.durationType} launches have no mission at target ${target.targetAfxId}`);
+      }
+      lines.push(
+        `  lkt_${groupIndex}_${targetIndex}: ${targeted.map((index) => missionVars[index]).join(" + ")} >= ${formatLpNumber(target.launches)}`
+      );
+      lockedConstraintCount += 1;
+    });
+  });
+  (lockedLaunches?.onlyShipDurations ?? []).forEach((shape, shapeIndex) => {
+    const indexes = actions.flatMap((action, index) => (`${action.ship}|${action.durationType}` === shape ? [index] : []));
+    const cap = lockedGroups
+      .filter((group) => `${group.ship}|${group.durationType}` === shape)
+      .reduce((sum, group) => sum + group.launches, 0);
+    if (indexes.length > 0) {
+      lines.push(`  lkx_${shapeIndex}: ${indexes.map((index) => missionVars[index]).join(" + ")} <= ${formatLpNumber(cap)}`);
+      lockedConstraintCount += 1;
+    }
+  });
 
   let precedenceConstraintIndex = 0;
   for (const chain of optionLaunchPrecedenceChains) {
@@ -3193,7 +3355,7 @@ async function solveUnifiedCraftMissionPlan(options: {
     craftLinkConstraintCount +
     geConstraintCount +
     slotSecondsConstraintCount +
-    tankConstraintCount + dubcapModel.constraints.length;
+    tankConstraintCount + dubcapModel.constraints.length + lockedConstraintCount;
 
   const solveStartedAtMs = Date.now();
   const useExactMipGap = !lpRelaxation && (strictGeObjective || hasGeCostUpperBound);
@@ -3889,7 +4051,8 @@ function foldDubcapCopies(
 function buildMissionRows(
   actions: MissionAction[],
   missionCounts: Record<string, number>,
-  actionKeyByRowKey?: Map<string, string>
+  actionKeyByRowKey?: Map<string, string>,
+  lockedGroups: LockedLaunchGroup[] = []
 ): PlanMissionRow[] {
   const actionByKey = new Map(actions.map((action) => [action.key, action]));
   const rows = Object.entries(missionCounts)
@@ -3938,12 +4101,19 @@ function buildMissionRows(
       return b.launches - a.launches;
     });
   const usedRowKeys = new Set<string>();
-  return rows.map(({ row, actionKey }) => {
+  const locked = assignLockedLaunches(rows.map(({ row }) => row), lockedGroups);
+  return rows.map(({ row, actionKey }, index) => {
     row.rowKey = claimUniqueRowKey(missionRowKeyBase(row), usedRowKeys);
+    if (locked[index] > 0) {
+      row.lockedLaunches = locked[index];
+    }
     actionKeyByRowKey?.set(row.rowKey, actionKey);
     return row;
   });
 }
+
+/** Locked launches' prep phase: after the partly fueled ship, before the prep steps (0, 1, ...). */
+const LOCKED_LAUNCH_PREP_ORDER = -0.5;
 
 /**
  * The plan's launches as tank-packing units: one per mission row, with the
@@ -3957,8 +4127,10 @@ function buildVirtueTankUnits(options: {
   actionKeyByRowKey: Map<string, string>;
   prepSteps: PrepProgressionStep[];
   fuelingLaunch?: VirtueFuelingLaunch;
+  /** Rows' ordinary locked launches fly first (a prep phase ahead of the prep steps). */
+  lockedLaunchesFirst?: boolean;
 }): VirtueTankPlanUnit[] {
-  const { actions, missionRows, actionKeyByRowKey, prepSteps, fuelingLaunch } = options;
+  const { actions, missionRows, actionKeyByRowKey, prepSteps, fuelingLaunch, lockedLaunchesFirst = false } = options;
   const actionByKey = new Map(actions.map((action) => [action.key, action]));
   const actionOptionKeys = new Set(actions.map((action) => action.optionKey));
   const prepOrderByOption = new Map<string, number>();
@@ -3988,7 +4160,21 @@ function buildVirtueTankUnits(options: {
       targetAfxId: row.targetAfxId,
     };
     const optionKey = actionByKey.get(actionKeyByRowKey.get(row.rowKey) || "")?.optionKey;
-    const prepLaunches = optionKey && !row.dubcap ? Math.min(row.launches, prepLaunchesLeft.get(optionKey) || 0) : 0;
+    // Locked launches go first, then the prep steps' (they're of the same
+    // ship, so their leveling counts either way).
+    const lockedLaunches = lockedLaunchesFirst && !row.dubcap ? Math.min(row.launches, row.lockedLaunches || 0) : 0;
+    if (lockedLaunches > 0) {
+      prepUnits.push({
+        ...unitBase,
+        id: `${row.rowKey}|locked`,
+        launches: lockedLaunches,
+        isPrep: true,
+        locked: true,
+        prepOrder: LOCKED_LAUNCH_PREP_ORDER,
+      });
+    }
+    const prepLaunches =
+      optionKey && !row.dubcap ? Math.min(row.launches - lockedLaunches, prepLaunchesLeft.get(optionKey) || 0) : 0;
     if (optionKey && prepLaunches > 0) {
       prepLaunchesLeft.set(optionKey, (prepLaunchesLeft.get(optionKey) || 0) - prepLaunches);
       prepUnits.push({
@@ -3999,8 +4185,8 @@ function buildVirtueTankUnits(options: {
         prepOrder: prepOrderByOption.get(optionKey) ?? 0,
       });
     }
-    if (row.launches > prepLaunches) {
-      missionUnits.push({ ...unitBase, id: row.rowKey, launches: row.launches - prepLaunches });
+    if (row.launches > lockedLaunches + prepLaunches) {
+      missionUnits.push({ ...unitBase, id: row.rowKey, launches: row.launches - lockedLaunches - prepLaunches });
     }
   }
 
@@ -4258,8 +4444,9 @@ function finishDubcapSchedule(
     const unit = mapped?.unit ?? unitById.get(block.actionKey)!;
     return {
       missionRowKey: unit.missionRowKey, ship: unit.ship, durationType: unit.durationType,
-      level: unit.level, targetAfxId: unit.targetAfxId, isPrep: Boolean(unit.isPrep) && !inEvent(unit),
-      dubcap: inEvent(unit), ...(unit.preFueled !== undefined ? { fueling: true } : {}), launches: block.launches,
+      level: unit.level, targetAfxId: unit.targetAfxId, isPrep: Boolean(unit.isPrep) && !unit.locked && !inEvent(unit),
+      dubcap: inEvent(unit), ...(unit.preFueled !== undefined ? { fueling: true } : {}), ...(unit.locked ? { locked: true } : {}),
+      launches: block.launches,
       startSeconds: block.startSeconds, endSeconds: block.endSeconds,
       ...(pack ? { tankIndex: mapped?.tankIndex ?? eventTank.get(unit.id) ?? 0 } : {}),
     };
@@ -4306,7 +4493,7 @@ function finishDubcapSchedule(
       : full.makespanSeconds - startSeconds + scheduleDubcapPrep(prepEntries).makespanSeconds,
     lanes: lanes.map((lane) => mergeDubcapRuns(lane, (block) => `${block.missionRowKey}|${block.tankIndex}`)),
     fullLanes: fullLanes.map((lane) => mergeDubcapRuns(lane, (block) =>
-      `${block.missionRowKey ?? `${block.ship}|${block.durationType}|${block.level}`}|${block.isPrep}|${block.dubcap}|${block.tankIndex}`)),
+      `${block.missionRowKey ?? `${block.ship}|${block.durationType}|${block.level}`}|${block.isPrep}|${block.dubcap}|${Boolean(block.locked)}|${block.tankIndex}`)),
   };
 }
 
@@ -6529,8 +6716,11 @@ export async function planForTarget(
 ): Promise<PlannerResult> {
   // Shiny goals reach the solver as the craft-count goals that give their chance.
   const shiny = resolveShinyGoalTargets(rawPlannerOptions.targets || [], profile);
-  const plannerOptions: PlannerOptions =
-    shiny.shinyGoals.length > 0 ? { ...rawPlannerOptions, targets: shiny.targets } : rawPlannerOptions;
+  const starShips = withStarGoalShips(
+    shiny.shinyGoals.length > 0 ? { ...rawPlannerOptions, targets: shiny.targets } : rawPlannerOptions,
+    targetItemId
+  );
+  const plannerOptions = withLockedLaunchShips(starShips.plannerOptions, profile);
   if (shiny.shinyGoals.length > 0 && shiny.targets[0]) {
     targetItemId = shiny.targets[0].targetItemId;
     quantity = shiny.targets[0].quantity;
@@ -6588,7 +6778,87 @@ export async function planForTarget(
       );
 
   const scheduled = withInFlightSchedule(result, inFlight);
+  if (starShips.notes.length > 0) {
+    scheduled.notes = [...starShips.notes, ...scheduled.notes];
+  }
   return shiny.shinyGoals.length > 0 ? { ...scheduled, shinyGoals: shiny.shinyGoals } : scheduled;
+}
+
+/**
+ * Locked launches name their ships and lengths, so those join Ships when it
+ * leaves them out, flying only what the locks ask (lockOnlyShipDurations). A
+ * locked ship the save hasn't unlocked can't fly at all.
+ */
+function withLockedLaunchShips(plannerOptions: PlannerOptions, profile: PlayerProfile): PlannerOptions {
+  const locks = sanitizeLockedLaunches(plannerOptions.lockedLaunches);
+  if (locks.length === 0) {
+    return plannerOptions.lockedLaunches ? { ...plannerOptions, lockedLaunches: undefined } : plannerOptions;
+  }
+  for (const lock of locks) {
+    const level = profile.shipLevels.find((entry) => entry.ship === lock.ship);
+    if (level && !level.unlocked) {
+      throw new LockedLaunchError(`Locked launches: ${shipDisplayName(lock.ship)} isn't unlocked on this save yet.`);
+    }
+  }
+  const allowed = plannerOptions.allowedShipDurations;
+  if (!allowed || allowed.length === 0) {
+    return { ...plannerOptions, lockedLaunches: locks };
+  }
+  const allowedShapes = new Set(allowed.map((entry) => `${entry.ship}|${entry.durationType}`));
+  const lockOnly = Array.from(new Set(locks.map((lock) => `${lock.ship}|${lock.durationType}`))).filter(
+    (shape) => !allowedShapes.has(shape)
+  );
+  return {
+    ...plannerOptions,
+    lockedLaunches: locks,
+    allowedShipDurations: [
+      ...allowed,
+      ...lockOnly.map((shape) => {
+        const [ship, durationType] = shape.split("|");
+        return { ship, durationType };
+      }),
+    ],
+    lockOnlyShipDurations: lockOnly,
+  };
+}
+
+/**
+ * A Max stars goal asks for its ship by name, so when Ships leaves out every
+ * length of that ship, the ship's lengths join the allowed list (and a note
+ * says so). A ship with any length ticked keeps the selection as it is.
+ */
+function withStarGoalShips(
+  plannerOptions: PlannerOptions,
+  targetItemId: string
+): { plannerOptions: PlannerOptions; notes: string[] } {
+  const allowed = plannerOptions.allowedShipDurations;
+  if (!allowed || allowed.length === 0) {
+    return { plannerOptions, notes: [] };
+  }
+  const allowedShips = new Set(allowed.map((entry) => entry.ship));
+  const missing = Array.from(
+    new Set(
+      (plannerOptions.targets?.length ? plannerOptions.targets : [{ targetItemId }])
+        .map((target) => shipFromStarsItem(target.targetItemId))
+        .filter((ship): ship is string => ship !== null && !allowedShips.has(ship))
+    )
+  );
+  if (missing.length === 0) {
+    return { plannerOptions, notes: [] };
+  }
+  return {
+    plannerOptions: {
+      ...plannerOptions,
+      allowedShipDurations: [
+        ...allowed,
+        ...missing.flatMap((ship) => (["SHORT", "LONG", "EPIC"] as const).map((durationType) => ({ ship, durationType }))),
+      ],
+    },
+    notes: missing.map(
+      (ship) =>
+        `${shipStarsGoalLabel(ship)}: ${shipDisplayName(ship)} isn't in your Ships selection, so the plan flies it for this goal.`
+    ),
+  };
 }
 
 /**
@@ -6828,8 +7098,8 @@ async function planVirtueTankLaunches(
       }
       return { plan, report };
     } catch (error) {
-      // Nothing drops some goal: no shift count changes that.
-      if (error instanceof MissionCoverageError) {
+      // Nothing drops some goal, or the locks can't fly: no shift count changes that.
+      if (error instanceof MissionCoverageError || error instanceof LockedLaunchError) {
         throw error;
       }
       return { plan: null, report, error };
@@ -7374,8 +7644,46 @@ async function planForNewLaunches(
   );
   const craftFloorByItem = normalizedTargets.craftFloorByItem;
   const hasCraftGoals = normalizedTargets.craftGoalTotals.size > 0;
-  // Goals that don't scale with a solved block: craft-count floors and stars.
-  const hasUnscaledGoals = hasCraftGoals || normalizedTargets.starGoals.size > 0;
+  const lockedGroups = groupLockedLaunches(plannerOptions.lockedLaunches || [], Boolean(plannerOptions.includeDubcap));
+  const hasLocks = lockedGroups.length > 0;
+  // Ordinary locks fly first, except while a dubcap is already running:
+  // every launch in it is doubled, so they wait until it's over.
+  const lockedLaunchesFirst = !(plannerOptions.includeDubcap && liveDubcapWindow(profile.liveDubcap));
+  const lockedSolve: LockedLaunchSolveOptions | undefined = hasLocks
+    ? { groups: lockedGroups, first: lockedLaunchesFirst, onlyShipDurations: plannerOptions.lockOnlyShipDurations ?? [] }
+    : undefined;
+  const isLockedShape = (action: MissionAction) =>
+    lockedGroups.some((group) => group.ship === action.ship && group.durationType === action.durationType);
+  // Dubcap locks have to fit the event: each slot fits as many launches as
+  // finish before its cutoff, plus one leaving before it (buildDubcapModel).
+  // Prep only shortens a running event's slots, so this holds for any plan.
+  if (plannerOptions.includeDubcap) {
+    const window = dubcapWindowFor(profile.liveDubcap, [], tankRun?.fuelingLaunch, tankRun?.inAirLaneFreeSeconds ?? inAirLaneFreeSeconds);
+    for (const group of lockedGroups.filter((entry) => entry.dubcap)) {
+      const seconds = profile.missionOptions.find(
+        (option) => option.ship === group.ship && option.durationType === group.durationType
+      )?.durationSeconds;
+      if (!seconds) {
+        continue;
+      }
+      const room = [0, 1, 2].reduce((sum, lane) => {
+        const cutoff = dubcapLaneCutoffSeconds(window, lane);
+        return sum + (cutoff >= 0 ? Math.floor(cutoff / seconds) + 1 : 0);
+      }, 0);
+      if (group.launches > room) {
+        const label = lockedShipLengthLabel(group.ship, group.durationType);
+        throw new LockedLaunchError(
+          `Locked launches: ${
+            window.live
+              ? `the running dubcap, which ends in ${formatDubcapHours(window.windowSeconds)}, has room for`
+              : `a ${Math.round(window.windowSeconds / 3600)}-hour dubcap has room for`
+          } ${room.toLocaleString()} ${label} launch${room === 1 ? "" : "es"}; ${group.launches.toLocaleString()} ${group.launches === 1 ? "is" : "are"} locked in it.`
+        );
+      }
+    }
+  }
+  // What doesn't scale with a solved block: craft-count floors, stars and locked launches.
+  const hasUnscaledGoals = hasCraftGoals || normalizedTargets.starGoals.size > 0 || hasLocks;
   const targetKey = normalizedTargets.primaryTargetKey;
   // Tank mode swaps the fuel/time slider for the shift cap: mission time is the
   // whole objective, and fuel only counts through the shifts it forces.
@@ -7492,6 +7800,7 @@ async function planForNewLaunches(
     ENABLE_NORMAL_FAST_INCUMBENT_COMPARISON &&
     !plannerOptions.disableNormalFastIncumbent &&
     !plannerOptions.includeDubcap &&
+    !hasLocks &&
     quantityInt >= FAST_QUANTITY_ACCELERATION_MIN_QUANTITY
   ) {
     reportProgress({
@@ -7592,7 +7901,7 @@ async function planForNewLaunches(
   // for fuel as well as time instead (pruneVirtueTankActions), the same on
   // every path.
   const missionActionFilter =
-    !tankRun && !plannerOptions.includeDubcap && missionYieldIndexEnabled(plannerOptions.disableMissionYieldIndex, injectedLootData)
+    !tankRun && !plannerOptions.includeDubcap && !hasLocks && missionYieldIndexEnabled(plannerOptions.disableMissionYieldIndex, injectedLootData)
     ? buildMissionActionFilterFromYieldIndex({
         relevantItems: closure,
         missionDropRarities,
@@ -7629,6 +7938,7 @@ async function planForNewLaunches(
     `fast:${fastMode ? 1 : 0}`,
     `dubcap:${plannerOptions.includeDubcap ? (profile.liveDubcap ? `live:${Math.round(profile.liveDubcap.secondsRemaining)}:${profile.liveDubcap.multiplier}` : 1) : 0}`,
     `filter:${missionActionFilter?.key || "none"}`,
+    `locks:${hasLocks ? `${lockedLaunchGroupsKey(lockedGroups)}:${lockedLaunchesFirst ? 1 : 0}:${lockedSolve!.onlyShipDurations.join(",")}` : "none"}`,
     `tank:${
       tankRun
         ? [
@@ -7893,13 +8203,35 @@ async function planForNewLaunches(
         indexFilteredActionCount += candidateEntry.indexFilteredCount;
         indexCoverageRepairActionCount += candidateEntry.coverageRepairCount;
         allActions = candidateEntry.actions;
+        if (hasLocks) {
+          const lockedExtra = lockedLaunchActions({
+            missionOptions: combinedOptions,
+            groups: lockedGroups,
+            existing: allActions,
+            relevantItems: closure,
+            lootData,
+            missionDropRarities,
+          });
+          if (lockedExtra.length > 0) {
+            allActions = [...allActions, ...lockedExtra];
+          }
+        }
         actionCache.set(optionsKey, allActions);
       }
       // Leveling and prep launches also fill their options' rows, so those
       // actions only lose to their own option's (pruneDominatedActions). An
       // option keeps at least one action that way, so which prep launches
       // have drops (worked out below) is the same as over every action.
-      const constrainedOptionKeys = new Set([...phasedOptionKeys, ...prepRequirements.keys()]);
+      // A ship and length only locks added flies no more than they ask, so its
+      // launches can't stand in for another option's either.
+      const lockOnlyShapes = new Set(lockedSolve?.onlyShipDurations ?? []);
+      const constrainedOptionKeys = new Set([
+        ...phasedOptionKeys,
+        ...prepRequirements.keys(),
+        ...allActions
+          .filter((action) => lockOnlyShapes.has(`${action.ship}|${action.durationType}`))
+          .map((action) => action.optionKey),
+      ]);
       const candidateKey = `${optionsKey}::${Array.from(constrainedOptionKeys).sort().join(",")}`;
       let candidateActions = dominanceActionCache.get(candidateKey);
       if (!candidateActions) {
@@ -7907,6 +8239,7 @@ async function planForNewLaunches(
           constrainedOptionKeys,
           compareFuel: objectiveMode === "virtueFuel",
           tankRounds: Boolean(tankRun),
+          ...(hasLocks ? { keep: isLockedShape } : {}),
         });
         dominatedActionCounts.before += allActions.length;
         dominatedActionCounts.after += candidateActions.length;
@@ -7960,7 +8293,10 @@ async function planForNewLaunches(
       if (!pruned) {
         pruned = pruneVirtueTankActions(candidateActions, {
           topPerItem: VIRTUE_TANK_ACTION_TOP_PER_ITEM,
-          keepOptionKeys: new Set(prepRequirements.keys()),
+          keepOptionKeys: new Set([
+            ...prepRequirements.keys(),
+            ...candidateActions.filter(isLockedShape).map((action) => action.optionKey),
+          ]),
           phaseChains: phased.phaseChains,
         });
         virtueTankActionCounts.before += candidateActions.length;
@@ -8053,9 +8389,10 @@ async function planForNewLaunches(
     const dubcapMakespanSeconds = (input: CandidateEvalInput, unified: UnifiedPlan): number | undefined => {
       if (!unified.dubcapAllocation) return undefined;
       const keys = new Map<string, string>();
-      const rows = buildMissionRows(input.candidateActions, unified.missionCounts, keys);
+      const rows = buildMissionRows(input.candidateActions, unified.missionCounts, keys, lockedGroups);
       const units = buildVirtueTankUnits({
         actions: input.candidateActions, missionRows: rows, actionKeyByRowKey: keys, prepSteps: input.candidate.prepSteps, fuelingLaunch,
+        lockedLaunchesFirst,
       });
       return finishDubcapSchedule(
         buildDubcapUnits(units, unified.dubcapAllocation, keys, false),
@@ -8129,6 +8466,7 @@ async function planForNewLaunches(
         timeRef,
         requiredMissionLaunches: input.requiredMissionLaunches,
         maxMissionLaunchesByOption: input.maxMissionLaunchesByOption,
+        lockedLaunches: lockedSolve,
         phasedChainConstraints: input.phasedChainConstraints,
         lpRelaxation,
         timeLimitSeconds,
@@ -8246,6 +8584,7 @@ async function planForNewLaunches(
             timeRef,
             requiredMissionLaunches: input.requiredMissionLaunches,
             maxMissionLaunchesByOption: input.maxMissionLaunchesByOption,
+            lockedLaunches: lockedSolve,
             phasedChainConstraints: input.phasedChainConstraints,
             geCostUpperBound: baselineUnified.geCost,
             lpRelaxation: false,
@@ -9077,7 +9416,7 @@ async function planForNewLaunches(
       }
       // A rounded relaxed plan knows nothing about whole tanks and loops, so
       // tank mode never falls back to one.
-      if (!best && !tankRun && !plannerOptions.includeDubcap) {
+      if (!best && !tankRun && !plannerOptions.includeDubcap && !hasLocks) {
         const bestLp = lpScreened[0];
         if (bestLp) {
           best = {
@@ -9278,6 +9617,7 @@ async function planForNewLaunches(
               timeRef,
               requiredMissionLaunches: polishInput.requiredMissionLaunches,
               maxMissionLaunchesByOption: polishInput.maxMissionLaunchesByOption,
+              lockedLaunches: lockedSolve,
               phasedChainConstraints: polishInput.phasedChainConstraints,
               strictGeObjective: true,
               totalSlotSecondsUpperBound: missionSlotSecondsBudget,
@@ -9487,7 +9827,7 @@ async function planForNewLaunches(
     const comparisonAvailableActions = outputActions;
     // Tank mode skips the monolithic incumbents: they solve without the tank
     // rows, and in benchmarks never beat a tank-mode plan.
-    if (outputUnmetTotal <= 1e-6 && !tankRun && !plannerOptions.includeDubcap) {
+    if (outputUnmetTotal <= 1e-6 && !tankRun && !plannerOptions.includeDubcap && !hasLocks) {
       const monolithicCombos = chosenCombosForPlan(outputActions, outputUnified.missionCounts);
       if (monolithicCombos.length > 0) {
         const fullQuantityCraftSkeleton = getCraftSkeletonCached({
@@ -9590,7 +9930,7 @@ async function planForNewLaunches(
 
     const actionKeyByRowKey = new Map<string, string>();
     const shown = foldDubcapCopies(outputActions, outputUnified.missionCounts, outputUnified.dubcapAllocation);
-    const missionRows = buildMissionRows(outputActions, shown.missionCounts, actionKeyByRowKey);
+    const missionRows = buildMissionRows(outputActions, shown.missionCounts, actionKeyByRowKey, lockedGroups);
     const craftRows = buildCraftRows(outputUnified.crafts);
     const consumptionRows = buildConsumptionRows(outputUnified.consumptions, consumptionOptions);
     // Stars goals report launch points, not the solve's point units.
@@ -9843,6 +10183,34 @@ async function planForNewLaunches(
       actions: outputActions,
       missionCounts: outputUnified.missionCounts,
     });
+    if (hasLocks) {
+      const locks = sanitizeLockedLaunches(plannerOptions.lockedLaunches);
+      const inEvent = (lock: LockedLaunch) => Boolean(lock.dubcap) && Boolean(plannerOptions.includeDubcap);
+      const ordinary = locks.filter((lock) => !inEvent(lock));
+      const event = locks.filter(inEvent);
+      if (ordinary.length > 0) {
+        const timing = !lockedLaunchesFirst
+          ? " fly after the running dubcap"
+          : plannerOptions.includeDubcap
+            ? " fly first, before the dubcap"
+            : tankRun
+              ? " fly first"
+              : "";
+        notes.push(`Locked launches${timing}: ${ordinary.map(describeLockedLaunch).join("; ")}.`);
+      }
+      if (event.length > 0) {
+        notes.push(`Locked in the dubcap: ${event.map(describeLockedLaunch).join("; ")}.`);
+      }
+      if (!plannerOptions.includeDubcap && locks.some((lock) => lock.dubcap)) {
+        notes.push("This plan has no dubcap, so the launches locked in one fly as ordinary launches.");
+      }
+      for (const shape of lockedSolve!.onlyShipDurations) {
+        const [ship, durationType] = shape.split("|");
+        notes.push(
+          `${lockedShipLengthLabel(ship, durationType)} isn't in your Ships selection, so the plan flies only its locked launches.`
+        );
+      }
+    }
     for (const ship of normalizedTargets.starGoalsMet) {
       notes.push(`${shipStarsGoalLabel(ship)}: ${shipDisplayName(ship)} already has max stars, so the plan adds nothing for it.`);
     }
@@ -9865,6 +10233,7 @@ async function planForNewLaunches(
     let dubcap: DubcapPlan | undefined;
     const baseUnits = tankRun || plannerOptions.includeDubcap ? buildVirtueTankUnits({
       actions: outputActions, missionRows, actionKeyByRowKey, prepSteps: outputPrepSteps, fuelingLaunch: tankRun?.fuelingLaunch,
+      lockedLaunchesFirst,
     }) : [];
     const eventUnits = plannerOptions.includeDubcap ? buildDubcapUnits(
       baseUnits,
@@ -9988,7 +10357,9 @@ async function planForNewLaunches(
       targetBreakdown,
       targetBreakdowns,
       progression: {
-        prepHours: dubcap ? scheduleDubcapPrep(baseUnits.filter((unit) => unit.isPrep && !unit.preFueled)).makespanSeconds / 3600 : prepHours,
+        prepHours: dubcap
+          ? scheduleDubcapPrep(baseUnits.filter((unit) => unit.isPrep && !unit.preFueled && !unit.locked)).makespanSeconds / 3600
+          : prepHours,
         prepLaunches: compactedPrepLaunches,
         projectedShipLevels: progressionShipRows(projectedShipLevels),
       },
@@ -10001,10 +10372,14 @@ async function planForNewLaunches(
     reportBenchmark(finalResult, "primary");
     return finalResult;
   } catch (error) {
-    if (error instanceof MissionCoverageError) {
+    if (error instanceof MissionCoverageError || error instanceof LockedLaunchError) {
       throw error;
     }
     const details = error instanceof Error ? error.message : String(error);
+    // The heuristic fallback knows nothing of locked launches.
+    if (hasLocks && !tankRun && !plannerOptions.includeDubcap) {
+      throw new Error(`Planning with locked launches failed (${details}).`);
+    }
     // The heuristic fallback is fuel-blind: it would hand back a plan that
     // ignores the tank and the shift cap, so tank mode surfaces the failure.
     if (!tankRun && plannerOptions.includeDubcap && details.includes("Time limit reached")) {

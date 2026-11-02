@@ -76,6 +76,7 @@ export async function POST(request: Request): Promise<Response> {
         targets: parsedPayload.data.targets,
         allowedShipDurations: parsedPayload.data.allowedShipDurations,
         selectedConsumptionItemIds: parsedPayload.data.selectedConsumptionItemIds,
+        lockedLaunches: parsedPayload.data.lockedLaunches,
       }
     );
 

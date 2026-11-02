@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { MAX_PRE_PLAN_DROP_MULTIPLIER, MAX_PRE_PLAN_LAUNCHES_PER_ROW, MAX_PRE_PLAN_SEND_ROWS } from "./preplan-import";
 import { MAX_RECENT_LAUNCHES } from "./launch-progress";
+import { MAX_LOCKED_LAUNCH_ROWS, MAX_LOCKED_LAUNCHES_PER_ROW } from "./locked-launches";
 import { SHINY_RARITIES } from "./shiny-odds";
 
 const DURATION_TYPES = ["TUTORIAL", "SHORT", "LONG", "EPIC"] as const;
@@ -133,6 +134,15 @@ const shinyGoalPlanSchema = z.object({
   reached: z.boolean(),
 });
 
+/** A locked launch (lib/locked-launches); targetAfxId null is any target. */
+export const lockedLaunchSchema = z.object({
+  ship: z.string().min(1),
+  durationType: z.enum(["SHORT", "LONG", "EPIC"]),
+  targetAfxId: z.number().int().nonnegative().nullable(),
+  launches: z.number().int().min(1).max(MAX_LOCKED_LAUNCHES_PER_ROW),
+  dubcap: z.boolean().optional(),
+});
+
 export const planRequestSchema = z
   .object({
     eid: z.string().trim().default(""),
@@ -166,6 +176,7 @@ export const planRequestSchema = z
       .array(z.object({ ship: z.string().min(1), durationType: z.enum(["SHORT", "LONG", "EPIC"]) }))
       .optional(),
     selectedConsumptionItemIds: z.array(z.string().trim().min(1)).max(84).optional(),
+    lockedLaunches: z.array(lockedLaunchSchema).max(MAX_LOCKED_LAUNCH_ROWS).optional(),
     virtueShiftCap: virtueShiftCapSchema,
     virtueStartTank: virtueStartTankSchema,
   })
@@ -190,6 +201,7 @@ export const planRequestSchema = z
     includeDubcap: parseDisabledByDefault(value.includeDubcap),
     allowedShipDurations: value.allowedShipDurations,
     selectedConsumptionItemIds: value.selectedConsumptionItemIds ?? [],
+    lockedLaunches: value.lockedLaunches,
     virtueShiftCap: value.virtueShiftCap,
     virtueStartTank: value.virtueStartTank,
   }));
@@ -399,6 +411,7 @@ const planMissionRowSchema = z.object({
   launchSecondsRemaining: z.array(nonNegativeIntSchema).optional(),
   rowKey: z.string().min(1).optional(),
   dubcap: z.boolean().optional(),
+  lockedLaunches: nonNegativeIntSchema.optional(),
 });
 
 const planUnmetItemSchema = z.object({
@@ -537,6 +550,7 @@ const virtueTankPlanUnitSchema = z.object({
   launches: nonNegativeIntSchema,
   isPrep: z.boolean().optional(),
   prepOrder: z.number().finite().optional(),
+  locked: z.boolean().optional(),
   launchOrder: nonNegativeFiniteSchema.optional(),
   fuelPerLaunch: virtueFuelVectorSchema.optional(),
   preFueled: virtueFuelVectorSchema.optional(),
@@ -654,7 +668,7 @@ export const plannerResultSchema = z.object({
       fueling: z.boolean().optional(),
       ship: z.string().min(1), durationType: z.string().min(1),
       level: nonNegativeIntSchema, targetAfxId: z.number().int().nullable().optional(),
-      isPrep: z.boolean(), dubcap: z.boolean(),
+      isPrep: z.boolean(), dubcap: z.boolean(), locked: z.boolean().optional(),
       launches: nonNegativeIntSchema, startSeconds: nonNegativeFiniteSchema, endSeconds: nonNegativeFiniteSchema,
       tankIndex: nonNegativeIntSchema.optional(),
     }))),

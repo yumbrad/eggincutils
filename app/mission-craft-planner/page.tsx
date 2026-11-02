@@ -111,6 +111,19 @@ import {
 } from "../../lib/shiny-odds";
 import { durationLaunchPoints, getShipOrder, shipDisplayName as titleCaseShip, shipLevelPointThresholds } from "../../lib/ship-data";
 import { isShipStarsItem, shipFromStarsItem, shipStarsGoalLabel, shipStarsTargetOptions } from "../../lib/ship-star-goals";
+import {
+  MAX_LOCKED_LAUNCH_ROWS,
+  MAX_LOCKED_LAUNCHES_PER_ROW,
+  sanitizeLockedLaunches,
+  type LockedLaunch,
+} from "../../lib/locked-launches";
+import {
+  SEND_DURATIONS,
+  SEND_SHIPS,
+  SEND_TARGET_OPTIONS,
+  SEND_UNTARGETED_ONLY_SHIPS,
+  type SendDurationType,
+} from "../../lib/ship-sends";
 import styles from "./page.module.css";
 
 type ShipLevelInfo = {
@@ -216,6 +229,8 @@ type PlanResponse = {
       /** Stable row id that virtue tank units point back at. */
       rowKey?: string;
       dubcap?: boolean;
+      /** How many of the row's launches are locked launches. */
+      lockedLaunches?: number;
     }>;
     unmetItems: Array<{ itemId: string; quantity: number }>;
     targetBreakdown: {
@@ -297,6 +312,8 @@ type SolveSnapshotRequest = {
   includeDubcap?: boolean;
   allowedShipDurations?: Array<{ ship: string; durationType: "SHORT" | "LONG" | "EPIC" }>;
   selectedConsumptionItemIds?: string[];
+  /** Left out when there are none. */
+  lockedLaunches?: LockedLaunch[];
   /** Path of Virtue only: the shift-cap slider and the Initial Tank toggle. */
   virtueShiftCap?: number;
   virtueStartTank?: VirtueTankStartMode;
@@ -484,6 +501,7 @@ function storePlanFile(raw: string, deviceEid: string): string | null {
     includeDropFragments: sourceFilters.includeDropFragments,
     ...(request.selectedConsumptionItemIds ? { selectedConsumptionItemIds: request.selectedConsumptionItemIds } : {}),
     shipDurations,
+    lockedLaunches: sanitizeLockedLaunches(request.lockedLaunches),
   });
   writeStoredString([LOCAL_PREF_KEYS.plannerInventorySource], source);
   if (source === "main") {
@@ -778,6 +796,7 @@ type PlannerSourcePreferences = {
   includeDropFragments?: boolean;
   selectedConsumptionItemIds?: string[];
   shipDurations?: ShipDurationSelection;
+  lockedLaunches?: LockedLaunch[];
 };
 
 type PlannerSourcePreferenceStore = Partial<Record<InventorySource, PlannerSourcePreferences>>;
@@ -1391,14 +1410,14 @@ function buildDubcapTimeline(plan: PlanResponse["plan"]): MissionTimeline | null
     const phase = block.isPrep ? "prep" : "mission";
     const id = block.isPrep
       ? `event-prep:${block.ship}|${block.durationType}|${block.level}`
-      : `event-plan:${block.fueling ? "fueling" : block.missionRowKey ?? colorKey}:${block.dubcap ? "dubcap" : "ordinary"}`;
+      : `event-plan:${block.fueling ? "fueling" : block.missionRowKey ?? colorKey}:${block.dubcap ? "dubcap" : block.locked ? "locked" : "ordinary"}`;
     const totalSeconds = block.endSeconds - block.startSeconds;
     let segment = segmentsById.get(id);
     if (!segment) {
       segment = {
         id,
         label: `${titleCaseShip(block.ship)} ${durationTypeWithLevelLabel(block.durationType, block.level)}`,
-        subtitle: `${block.fueling ? "Partly fueled · " : ""}${block.isPrep ? "Prep" : afxIdToTargetFamilyName(block.targetAfxId ?? 10000)}${block.dubcap ? ` · dubcap ×${event.multiplier}` : ""}`,
+        subtitle: `${block.fueling ? "Partly fueled · " : ""}${block.locked ? "Locked · " : ""}${block.isPrep ? "Prep" : afxIdToTargetFamilyName(block.targetAfxId ?? 10000)}${block.dubcap ? ` · dubcap ×${event.multiplier}` : ""}`,
         phase,
         color: colors.get(colorKey) ?? prepTimelineColor(colorKey),
         launches: 0,
@@ -1479,7 +1498,11 @@ function DubcapTimeline({ event, tankLabels }: { event: DubcapPlan; tankLabels?:
           {pluralize(event.launches, "launch", "launches")} with {drops} drops. Times are from the event&apos;s start; last
           launch by {eventClock(event.windowSeconds - event.launchMarginSeconds)}.
           {event.startSeconds > 0 && (
-            <> Prep and current missions take {formatDurationFromHours(event.startSeconds / 3600)} first.</>
+            <>
+              {" "}
+              {event.fullLanes.some((lane) => lane.some((block) => block.locked)) ? "Locked launches, prep" : "Prep"} and
+              current missions take {formatDurationFromHours(event.startSeconds / 3600)} first.
+            </>
           )}
         </p>
       )}
@@ -1860,6 +1883,8 @@ type VirtueTankLaunchGroup = {
   missionIndex: number | null;
   unitView: VirtueTankUnitView | null;
   launches: number;
+  /** Of `launches`, the row's locked ones (its locked unit's). */
+  lockedLaunches: number;
 };
 
 /**
@@ -1872,14 +1897,17 @@ function groupTankLaunches(view: VirtueTankPlanView, tank: VirtueTank): VirtueTa
     const unitView = view.units.get(entry.unitId) || null;
     const missionIndex = unitView?.missionIndex ?? null;
     const existing = missionIndex != null ? groups.find((group) => group.missionIndex === missionIndex) : null;
+    const lockedLaunches = unitView?.unit.locked ? entry.launches : 0;
     if (existing) {
       existing.launches += entry.launches;
+      existing.lockedLaunches += lockedLaunches;
     } else {
       groups.push({
         key: missionIndex != null ? `row:${missionIndex}` : `unit:${entry.unitId}`,
         missionIndex,
         unitView,
         launches: entry.launches,
+        lockedLaunches,
       });
     }
   }
@@ -1917,7 +1945,9 @@ function buildVirtueTankPlanView(
     const mission = missionIndex != null ? plan.missions[missionIndex] : null;
     const prepReason = prepReasonByShape.get(`${unit.ship}|${unit.durationType}`);
     const subtitle = mission
-      ? `${afxIdToTargetFamilyName(mission.targetAfxId)}${mission.dubcap ? ` · dubcap ×${plan.dubcap?.multiplier ?? 2}` : ""}`
+      ? `${unit.locked ? "Locked · " : ""}${afxIdToTargetFamilyName(mission.targetAfxId)}${
+          mission.dubcap ? ` · dubcap ×${plan.dubcap?.multiplier ?? 2}` : ""
+        }`
       : unit.preFueled
         ? `Partly fueled · ${afxIdToTargetFamilyName(unit.targetAfxId ?? 10000)}${
             plan.dubcap?.lanes.some((lane) => lane.some((block) => block.fueling)) ? ` · dubcap ×${plan.dubcap.multiplier}` : ""
@@ -2238,13 +2268,16 @@ function virtueTankEditText(amount: number, capacity: number): string {
 }
 
 /**
- * A hand-entered amount on the tank's 1% grid (the game's limit and drain sliders: 5T steps on the
- * 500T tank), held to the room the other eggs leave. That room can be off the grid when they are.
+ * Edits may fill the tank past its capacity: the first tank then plans as fuel the player will have
+ * before their first refuel (a second trip, say). Each egg stops at this many tanks, against typos.
  */
-function snapVirtueTankEdit(amount: number, capacity: number, room: number): number {
+const VIRTUE_TANK_EDIT_MAX_TANKS = 10;
+
+/** A hand-entered amount on the tank's 1% grid (the game's limit and drain sliders: 5T steps on the 500T tank). */
+function snapVirtueTankEdit(amount: number, capacity: number): number {
   const step = capacity / 100;
   const snapped = step > 0 ? Math.round(Math.max(0, amount) / step) * step : 0;
-  return Math.max(0, Math.min(snapped, room));
+  return Math.max(0, Math.min(snapped, capacity * VIRTUE_TANK_EDIT_MAX_TANKS));
 }
 
 /**
@@ -2268,15 +2301,14 @@ function VirtueTankReadout({
   const capacity = tank.capacity;
   const unit = virtueTankEditUnit(capacity);
   const physical = VIRTUE_TANK_READOUT_ORDER.reduce((sum, egg) => sum + Math.max(0, tank.fuels[egg] || 0), 0);
+  // An overfull (edited) tank draws to its total, with a mark where the tank's capacity ends.
+  const overfull = physical - capacity > virtueFuelTolerance(capacity);
+  const barScale = overfull ? physical : capacity;
   const isEdited = (egg: VirtueTankEggKey) => Math.abs((tank.fuels[egg] || 0) - (backup.fuels[egg] || 0)) > VIRTUE_FUEL_NOISE;
   const edited = VIRTUE_TANK_READOUT_ORDER.some(isEdited);
 
   const setAmount = (egg: VirtueTankEggKey, amount: number) => {
-    const others = VIRTUE_TANK_READOUT_ORDER.reduce(
-      (sum, other) => (other === egg ? sum : sum + Math.max(0, tank.fuels[other] || 0)),
-      0
-    );
-    onEdit?.(egg, snapVirtueTankEdit(amount, capacity, capacity - others));
+    onEdit?.(egg, snapVirtueTankEdit(amount, capacity));
   };
   const dropDraft = (egg: VirtueTankEggKey) =>
     setDrafts((current) => {
@@ -2340,7 +2372,7 @@ function VirtueTankReadout({
             </button>
           )}
         </span>
-        <span className={styles.tankReadoutTotal}>
+        <span className={styles.tankReadoutTotal} data-over={overfull ? "1" : "0"}>
           {formatTankFuel(physical)} <span>of {formatTankFuel(capacity)}</span>
         </span>
       </div>
@@ -2354,10 +2386,17 @@ function VirtueTankReadout({
             key={egg}
             className={styles.tankReadoutSeg}
             data-egg={egg}
-            style={virtueEggStyle(egg, { width: `${virtueTankPct(tank.fuels[egg], capacity)}%` })}
+            style={virtueEggStyle(egg, { width: `${virtueTankPct(tank.fuels[egg], barScale)}%` })}
             title={`${VIRTUE_EGG_DISPLAY[egg].label} ${formatTankFuel(tank.fuels[egg])}`}
           />
         ))}
+        {overfull && (
+          <span
+            className={styles.tankReadoutCapacityMark}
+            style={{ left: `${(capacity / barScale) * 100}%` }}
+            title={`The tank holds ${formatTankFuel(capacity)}`}
+          />
+        )}
       </div>
       <ul className={styles.tankEggList}>
         {VIRTUE_TANK_READOUT_ORDER.map((egg) => {
@@ -3471,12 +3510,21 @@ function renderMissionTableRow(
   mission: PlanMissionRow,
   missionIndex: number,
   targetOverride: string | null,
-  options: { key: string; launches?: number; splitAcrossTanks?: boolean; yields?: RankedYield[]; done?: number }
+  options: {
+    key: string;
+    launches?: number;
+    splitAcrossTanks?: boolean;
+    yields?: RankedYield[];
+    done?: number;
+    /** Of `launches`, the locked ones; the mission row's own count when absent. */
+    lockedLaunches?: number;
+  }
 ) {
   const targetLabel = targetOverride || afxIdToTargetFamilyName(mission.targetAfxId);
   const targetItemKey = targetOverride ? null : afxIdToItemKey(mission.targetAfxId);
   const targetIconUrl = targetItemKey ? itemKeyToIconUrl(targetItemKey) : null;
   const launches = options.launches ?? mission.launches;
+  const lockedCount = mission.inAir ? 0 : Math.min(launches, options.lockedLaunches ?? mission.lockedLaunches ?? 0);
   // A row split across tanks shows its share of the row's expected yields.
   const yieldScale = mission.launches > 0 && options.launches != null ? options.launches / mission.launches : 1;
   return (
@@ -3488,6 +3536,16 @@ function renderMissionTableRow(
           </span>
         )}
         {mission.dubcap && <span className={styles.dubcapBadge}>dubcap</span>}
+        {lockedCount > 0 && (
+          <span
+            className={styles.lockedBadge}
+            title={`${pluralize(lockedCount, "locked launch", "locked launches")}${
+              mission.dubcap ? ", in the dubcap" : ""
+            }: the plan makes ${lockedCount === 1 ? "it" : "them"} whatever else it does`}
+          >
+            🔒{lockedCount < launches ? ` ${lockedCount.toLocaleString()}` : ""}
+          </span>
+        )}
         {titleCaseShip(mission.ship)}<br />
         <span className="muted">{durationTypeWithLevelLabel(mission.durationType, mission.level)}</span>
       </td>
@@ -3643,6 +3701,7 @@ function VirtueTankMissionRows({
                     splitAcrossTanks: (tanksByMissionIndex.get(row.missionIndex) || 0) > 1,
                     yields: rankedYields.get(row.missionIndex),
                     done: allocator?.mission(row.missionIndex, row.launches),
+                    lockedLaunches: row.lockedLaunches,
                   }
                 );
               }
@@ -4013,6 +4072,264 @@ function buildDemoProfileSnapshot(response: PlanResponse): ProfileSnapshot {
   };
 }
 
+/** A Locked launches row as edited: its count stays text while it's typed. */
+type LockedLaunchRow = {
+  id: string;
+  ship: string;
+  durationType: SendDurationType;
+  /** null: any target, the planner's pick. */
+  targetAfxId: number | null;
+  launchesInput: string;
+  dubcap: boolean;
+};
+
+let lockedLaunchRowSeq = 0;
+
+function lockedLaunchesToRows(locks: LockedLaunch[]): LockedLaunchRow[] {
+  return locks.map((lock) => {
+    lockedLaunchRowSeq += 1;
+    return {
+      id: `locked-${lockedLaunchRowSeq}`,
+      ship: lock.ship,
+      durationType: lock.durationType,
+      targetAfxId: lock.targetAfxId,
+      launchesInput: String(lock.launches),
+      dubcap: Boolean(lock.dubcap),
+    };
+  });
+}
+
+function lockedLaunchRowsToLocks(rows: LockedLaunchRow[]): LockedLaunch[] {
+  return sanitizeLockedLaunches(
+    rows.map((row) => ({
+      ship: row.ship,
+      durationType: row.durationType,
+      targetAfxId: row.targetAfxId,
+      launches: Number(row.launchesInput) || 1,
+      dubcap: row.dubcap,
+    }))
+  );
+}
+
+const ANY_TARGET_VALUE = "any";
+
+/**
+ * Advanced options' Locked launches: sends the plan has to make, at least
+ * this many each (lib/locked-launches), as a list of rows like the goals'.
+ * Ticking Dubcap on a row turns on Include one dubcap; with it off, ticked
+ * rows plan as ordinary launches and keep their tick for when it's back on.
+ */
+function LockedLaunchesEditor({
+  rows,
+  onRowsChange,
+  shipLevels,
+  includeDubcap,
+  onIncludeDubcap,
+  open,
+  onOpenChange,
+}: {
+  rows: LockedLaunchRow[];
+  onRowsChange: (rows: LockedLaunchRow[]) => void;
+  shipLevels: ShipLevelInfo[] | null;
+  includeDubcap: boolean;
+  onIncludeDubcap: () => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const ships = SEND_SHIPS.filter((ship) => {
+    const level = shipLevels?.find((entry) => entry.ship === ship);
+    return !shipLevels || shipLevels.length === 0 || Boolean(level?.unlocked);
+  });
+  const total = lockedLaunchRowsToLocks(rows).reduce((sum, lock) => sum + lock.launches, 0);
+  const update = (id: string, change: Partial<LockedLaunchRow>) =>
+    onRowsChange(rows.map((row) => (row.id === id ? { ...row, ...change } : row)));
+  const addRow = () => {
+    const [created] = lockedLaunchesToRows([
+      { ship: ships[0] ?? "HENERPRISE", durationType: "EPIC", targetAfxId: null, launches: 1 },
+    ]);
+    onRowsChange([...rows, created]);
+    onOpenChange(true);
+  };
+  const targetLabel = (row: LockedLaunchRow) =>
+    row.targetAfxId === null ? "any" : SEND_TARGET_OPTIONS.find((option) => option.afxId === row.targetAfxId)?.label ?? "?";
+
+  return (
+    <div className={styles.shipSelectorWrap}>
+      <div className={styles.selectorHeader}>
+        <button
+          type="button"
+          className={styles.shipSelectorToggle}
+          onClick={() => onOpenChange(!open)}
+          aria-expanded={open}
+        >
+          <span className={styles.shipSelectorToggleLeft}>
+            <span className={styles.shipSelectorChevron} data-open={open ? "1" : "0"} />
+            <span>Locked launches</span>
+          </span>
+        </button>
+        <span className={styles.selectorMeta}>
+          <span className={styles.shipSelectorCount}>
+            {total > 0 ? (
+              <>
+                {total.toLocaleString()} <em>locked</em>
+              </>
+            ) : (
+              <em>none</em>
+            )}
+          </span>
+        </span>
+      </div>
+
+      {!open && rows.length > 0 && (
+        <div className={styles.shipChips} aria-label="Locked launches">
+          {rows.map((row) => (
+            <span key={row.id} className={styles.shipChip}>
+              🔒 {Number(row.launchesInput) || 1}× {compactShipName(row.ship)}
+              <span className={styles.shipChipDurations}>
+                <span className={styles[`shipChip${row.durationType}`]}>{durationChipLabel(row.durationType)}</span>
+              </span>
+              <span className={styles.lockedChipTarget}>
+                {targetLabel(row)}
+                {row.dubcap && includeDubcap ? " · dubcap" : ""}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {open && (
+        <div className={styles.lockedPanel}>
+          <p className={styles.consumptionHelpText}>
+            Launches the plan has to make, at least this many, whatever else it picks. They fly first, once your ships in
+            the air return; ticked ones fly in the dubcap.
+          </p>
+          {rows.length > 0 && (
+            <ul className={styles.lockedList}>
+              {rows.map((row) => {
+                const untargetedOnly = SEND_UNTARGETED_ONLY_SHIPS.has(row.ship);
+                const dubcapOff = row.dubcap && !includeDubcap;
+                return (
+                  <li key={row.id} className={styles.lockedRow}>
+                    <span className={styles.lockedCount}>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        aria-label="Launches"
+                        value={row.launchesInput}
+                        onChange={(event) => update(row.id, { launchesInput: event.target.value.replace(/[^\d]/g, "") })}
+                        onBlur={() =>
+                          update(row.id, {
+                            launchesInput: String(
+                              Math.max(1, Math.min(MAX_LOCKED_LAUNCHES_PER_ROW, Math.round(Number(row.launchesInput) || 1)))
+                            ),
+                          })
+                        }
+                      />
+                      <span aria-hidden="true">×</span>
+                    </span>
+                    <select
+                      className={styles.lockedShip}
+                      aria-label="Ship"
+                      value={row.ship}
+                      onChange={(event) => {
+                        const ship = event.target.value;
+                        update(row.id, {
+                          ship,
+                          ...(SEND_UNTARGETED_ONLY_SHIPS.has(ship) ? { targetAfxId: null } : {}),
+                        });
+                      }}
+                    >
+                      {(ships.includes(row.ship) ? ships : [row.ship, ...ships]).map((ship) => (
+                        <option key={ship} value={ship}>
+                          {compactShipName(ship)}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className={styles.lockedLength}
+                      aria-label="Length"
+                      value={row.durationType}
+                      onChange={(event) => update(row.id, { durationType: event.target.value as SendDurationType })}
+                    >
+                      {SEND_DURATIONS.map((duration) => (
+                        <option key={duration.value} value={duration.value}>
+                          {duration.label}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className={styles.lockedTarget}
+                      aria-label="Target"
+                      value={untargetedOnly || row.targetAfxId === null ? ANY_TARGET_VALUE : String(row.targetAfxId)}
+                      disabled={untargetedOnly}
+                      title={untargetedOnly ? "This ship only flies untargeted." : undefined}
+                      onChange={(event) =>
+                        update(row.id, {
+                          targetAfxId: event.target.value === ANY_TARGET_VALUE ? null : Number(event.target.value),
+                        })
+                      }
+                    >
+                      <option value={ANY_TARGET_VALUE}>{untargetedOnly ? "Untargeted" : "Any target"}</option>
+                      {!untargetedOnly &&
+                        SEND_TARGET_OPTIONS.map((option) => (
+                          <option key={option.afxId} value={option.afxId}>
+                            {option.label}
+                          </option>
+                        ))}
+                    </select>
+                    <label
+                      className={styles.lockedDubcap}
+                      data-off={dubcapOff ? "1" : "0"}
+                      title={
+                        dubcapOff
+                          ? "Include one dubcap is off, so this flies as an ordinary launch. Tick to turn the dubcap back on."
+                          : includeDubcap
+                            ? "Fly these in the plan's dubcap"
+                            : "Fly these in a dubcap: turns on Include one dubcap"
+                      }
+                    >
+                      <input
+                        type="checkbox"
+                        checked={row.dubcap && includeDubcap}
+                        onChange={(event) => {
+                          if (!includeDubcap) {
+                            update(row.id, { dubcap: true });
+                            onIncludeDubcap();
+                          } else {
+                            update(row.id, { dubcap: event.target.checked });
+                          }
+                        }}
+                      />
+                      Dubcap
+                    </label>
+                    <button
+                      type="button"
+                      className={styles.lockedRemove}
+                      aria-label="Remove this locked launch"
+                      onClick={() => onRowsChange(rows.filter((entry) => entry.id !== row.id))}
+                    >
+                      ×
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <button
+            type="button"
+            className={styles.lockedAdd}
+            onClick={addRow}
+            disabled={rows.length >= MAX_LOCKED_LAUNCH_ROWS}
+            title={rows.length >= MAX_LOCKED_LAUNCH_ROWS ? `${MAX_LOCKED_LAUNCH_ROWS} rows max` : undefined}
+          >
+            + Lock a launch
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ShipSelectorImage({ ship, imageFiles }: { ship: string; imageFiles: string[] }) {
   const [candidateIndex, setCandidateIndex] = useState(0);
   const [fallback, setFallback] = useState(false);
@@ -4371,6 +4688,8 @@ export default function MissionCraftPlannerPage() {
   const [includeDropFragments, setIncludeDropFragments] = useState(true);
   const [fastMode, setFastMode] = useState(false);
   const [includeDubcap, setIncludeDubcap] = useState(false);
+  const [lockedLaunchRows, setLockedLaunchRows] = useState<LockedLaunchRow[]>([]);
+  const [lockedLaunchesOpen, setLockedLaunchesOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const appUpdated = useAppUpdated();
   const [error, setError] = useState<string | null>(null);
@@ -4485,6 +4804,7 @@ export default function MissionCraftPlannerPage() {
     includeDropFragments,
     selectedConsumptionItemIds,
     shipDurations,
+    lockedLaunches: lockedLaunchRowsToLocks(lockedLaunchRows),
   });
 
   const applySourcePreferences = (preferences: PlannerSourcePreferences | null | undefined) => {
@@ -4514,6 +4834,7 @@ export default function MissionCraftPlannerPage() {
         : DEFAULT_CONSUMPTION_ITEM_IDS
     );
     setShipDurations(normalizeShipDurations(preferences?.shipDurations) || buildDefaultShipDurations());
+    setLockedLaunchRows(lockedLaunchesToRows(sanitizeLockedLaunches(preferences?.lockedLaunches)));
   };
 
   const handleInventorySourceChange = (nextSource: InventorySource) => {
@@ -5547,6 +5868,7 @@ export default function MissionCraftPlannerPage() {
     includeDropFragments,
     selectedConsumptionItemIds,
     shipDurations,
+    lockedLaunchRows,
     inventorySource,
     prefsLoaded,
   ]);
@@ -5556,6 +5878,7 @@ export default function MissionCraftPlannerPage() {
   const currentAllowedShipDurations = shipSelectorSummary.allSelected
     ? undefined
     : shipSelectorSummary.allowed.map((entry) => ({ ...entry }));
+  const currentLockedLaunches = lockedLaunchRowsToLocks(lockedLaunchRows);
   const currentSolveRequest: LastSolveInputs = {
     eid: trimmedEid,
     targetItemId: currentPrimaryTarget.targetItemId,
@@ -5567,6 +5890,7 @@ export default function MissionCraftPlannerPage() {
     ...(includeDubcap ? { includeDubcap: true } : {}),
     allowedShipDurations: currentAllowedShipDurations,
     selectedConsumptionItemIds,
+    ...(currentLockedLaunches.length > 0 ? { lockedLaunches: currentLockedLaunches } : {}),
     // Left undefined in main mode so JSON.stringify drops them and main-farm
     // requests compare the same as before.
     virtueShiftCap: inventorySource === "virtue" ? virtueShiftCap : undefined,
@@ -5698,6 +6022,7 @@ export default function MissionCraftPlannerPage() {
             targetCraftedOnly,
             targets: normalizedTargets,
             allowedShipDurations: allowedShipDurationsForSolve,
+            lockedLaunches: snapshotRequest.lockedLaunches,
             selectedConsumptionItemIds,
             solverFn: highsRef.current.solve,
             lootData: lootDataRef.current!,
@@ -5930,6 +6255,7 @@ export default function MissionCraftPlannerPage() {
         includeDubcap: lastSolveRequest.includeDubcap,
         allowedShipDurations: lastSolveRequest.allowedShipDurations,
         selectedConsumptionItemIds: lastSolveRequest.selectedConsumptionItemIds,
+        ...(lastSolveRequest.lockedLaunches ? { lockedLaunches: lastSolveRequest.lockedLaunches } : {}),
         virtueShiftCap: lastSolveRequest.virtueShiftCap,
         virtueStartTank: lastSolveRequest.virtueStartTank,
       },
@@ -6077,8 +6403,8 @@ export default function MissionCraftPlannerPage() {
 
   const cardVirtueTank = virtueTankForCard.virtueTank;
   const cardVirtueTankEdited = applyVirtueTankEdits(cardVirtueTank, virtueTankEdits, virtueTankForCard.eid) ?? null;
-  // Edits outlive the backup they were made on, so an egg left unedited can grow past the room they
-  // left: the edited tank then holds more than it can.
+  // Edits can fill the tank past its capacity (VIRTUE_TANK_EDIT_MAX_TANKS), or outlive the backup
+  // they were made on while an unedited egg grows.
   const cardVirtueTankOverfull =
     cardVirtueTankEdited && cardVirtueTankEdited !== cardVirtueTank
       ? VIRTUE_TANK_READOUT_ORDER.reduce((sum, egg) => sum + Math.max(0, cardVirtueTankEdited.fuels[egg] || 0), 0) -
@@ -6497,6 +6823,16 @@ export default function MissionCraftPlannerPage() {
                 </div>
               )}
             </div>
+
+            <LockedLaunchesEditor
+              rows={lockedLaunchRows}
+              onRowsChange={setLockedLaunchRows}
+              shipLevels={profileSnapshot?.shipLevels ?? null}
+              includeDubcap={includeDubcap}
+              onIncludeDubcap={() => setIncludeDubcap(true)}
+              open={lockedLaunchesOpen}
+              onOpenChange={setLockedLaunchesOpen}
+            />
           </div>
 
           <div className={styles.controlColumn}>
@@ -6596,10 +6932,11 @@ export default function MissionCraftPlannerPage() {
                     Couldn&apos;t load your tank ({virtueTankForCard.error}). Building the plan fetches your profile again.
                   </VirtueNotice>
                 )}
-                {cardVirtueTankOverfull && (
-                  <VirtueNotice tone="warn">
-                    Your edits plus the newer backup&apos;s other eggs come to more than the tank holds. Lower an egg
-                    so the plan starts from a tank that fits.
+                {cardVirtueTankOverfull && cardVirtueTankEdited && (
+                  <VirtueNotice tone="info">
+                    Your edited tank holds more than its {formatTankFuel(cardVirtueTankEdited.capacity)}. The plan&apos;s
+                    first tank uses all of it with no shift counted, as if you top it up on a later trip; refuels
+                    still fill to {formatTankFuel(cardVirtueTankEdited.capacity)}.
                   </VirtueNotice>
                 )}
                 {cardVirtueTank && cardVirtueTankEdited ? (

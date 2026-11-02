@@ -61,6 +61,8 @@ export type VirtueTankLaunchUnit = {
   isPrep?: boolean;
   /** Dependency order among prep units, ascending (missing counts as 0). */
   prepOrder?: number;
+  /** A locked launch (lib/locked-launches), flown first as a prep phase of its own. */
+  locked?: boolean;
   /** Event launches in chronological order, after prep and before ordinary farming. */
   launchOrder?: number;
   /** Fuel burned per launch; defaults to getVirtueFuelConfig(ship, durationType). */

@@ -50,6 +50,20 @@ ingredients.
 
 **Artifact Attainment / Mission Craft Planner**
 
+- Added **Locked launches** under Ships: launches the plan has to make, at least this many, whatever else it picks.
+  - Each row is a count, ship, length and target, or **Any target** to let the planner pick the best one for your
+goals (e.g. "which targets for my next 2 extended Henerprises?").
+  - They fly first, once your ships in the air return (before a fresh dubcap). Tick **Dubcap** to fly them in the
+event instead; ticking it turns on Include one dubcap. With a dubcap already running, unticked ones fly after it.
+  - 🔒 marks them in the mission plan, tanks and timelines.
+  - A ship and length that Ships leaves out flies only its locked launches.
+  - The plan says when a dubcap can't hold the launches locked in it.
+
+- The tank card's **Edit** can now fill the tank past its capacity: the plan's first tank uses all of it with no
+shift counted, for fuel you'll add on a later trip.
+
+- A **Max stars** goal now flies its ship even when Ships leaves that ship out (a plan said 2422 days).
+
 - Added **Max stars** goals: pick "Max stars · <ship>" in the goals list (only ships short of their top
 stars are offered) and the plan launches that ship enough to max it, alongside your other goals.
   - Under a shift cap it counts like any goal: the plan gets as close as the cap allows and says how many

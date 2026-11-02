@@ -85,6 +85,8 @@ export type DubcapScheduleBlock = Omit<DubcapTimelineBlock, "missionRowKey" | "t
   targetAfxId?: number | null;
   isPrep: boolean;
   dubcap: boolean;
+  /** Locked launches flown ahead of the event (isPrep is false for them). */
+  locked?: boolean;
 };
 
 export type DubcapPlan = {

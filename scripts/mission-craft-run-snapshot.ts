@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { z } from "zod";
 
-import { playerProfileSchema, virtueShiftCapSchema, virtueStartTankSchema } from "../lib/api-schemas";
+import { lockedLaunchSchema, playerProfileSchema, virtueShiftCapSchema, virtueStartTankSchema } from "../lib/api-schemas";
 import { SHINY_RARITIES, type ShinyRarity } from "../lib/shiny-odds";
 import { afxIdToDisplayName, itemIdToKey, itemKeyToDisplayName } from "../lib/item-utils";
 import {
@@ -47,6 +47,7 @@ const solveInputSnapshotSchema = z.object({
       .array(z.object({ ship: z.string().min(1), durationType: z.enum(["SHORT", "LONG", "EPIC"]) }))
       .optional(),
     selectedConsumptionItemIds: z.array(z.string().min(1)).optional(),
+    lockedLaunches: z.array(lockedLaunchSchema).optional(),
     // Path of Virtue only; unset falls back the same way the planner page does.
     virtueShiftCap: virtueShiftCapSchema,
     virtueStartTank: virtueStartTankSchema,
@@ -879,6 +880,7 @@ async function run(options: CliOptions): Promise<RunDiagnostics> {
       targets: loaded.snapshot.request.targets,
       allowedShipDurations: loaded.snapshot.request.allowedShipDurations,
       selectedConsumptionItemIds: loaded.snapshot.request.selectedConsumptionItemIds,
+      lockedLaunches: loaded.snapshot.request.lockedLaunches,
       targetCraftedOnly: loaded.snapshot.request.targetCraftedOnly,
       onProgress: (event) => {
         progressEvents.push(event);

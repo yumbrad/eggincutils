@@ -4,7 +4,6 @@ import Link from "next/link";
 import Image from "next/image";
 import React, { JSX, useEffect, useMemo, useRef, useState } from "react";
 
-import targetFamilies from "../../data/target-families.json";
 import { getArtifactDisplayData, getArtifactDisplayLabel } from "../../lib/artifact-display";
 import {
   getCraftingLevelProgress,
@@ -35,6 +34,7 @@ import {
   type PlannerTargetRow,
 } from "../../lib/goal-rows";
 import { afxIdToTargetFamilyName, itemIdToCanonicalKey } from "../../lib/item-utils";
+import { SEND_DURATIONS, SEND_SHIPS, SEND_TARGET_OPTIONS, SEND_UNTARGETED_ONLY_SHIPS, type SendDurationType } from "../../lib/ship-sends";
 import { recipes } from "../../lib/recipes";
 import {
   LOCAL_PREF_KEYS,
@@ -85,7 +85,7 @@ type MaxXpPlanView = "tree" | "flat";
 type CraftingXpZoomMode = "level" | "full";
 type MaxXpFlatSortKey = "artifact" | "tier" | "manualCrafts" | "autoCrafts" | "xp" | "cost" | "netRemaining" | "usedBy";
 type SortDirection = "asc" | "desc";
-type PrePlanDurationType = "SHORT" | "LONG" | "EPIC";
+type PrePlanDurationType = SendDurationType;
 type PrePlanSendRow = {
   id: string;
   ship: string;
@@ -246,36 +246,12 @@ const GOAL_TARGET_OPTIONS = buildTargetOptions();
 const GOAL_COPIES_TITLE = "Have this many copies when the plan is done. Copies you own count first; the plan crafts the rest it can.";
 const GOAL_CRAFT_COUNT_TITLE =
   "Reach this many all-time crafts; the plan makes the crafts it can. 400 maxes shiny luck; 300 maxes the GE discount. Copies you own don't count.";
-const PRE_PLAN_UNTARGETED_ONLY_SHIPS = new Set(["CHICKEN_ONE", "CHICKEN_NINE", "CHICKEN_HEAVY", "BCR"]);
-const PRE_PLAN_SHIPS = [
-  "ATREGGIES",
-  "HENERPRISE",
-  "VOYEGGER",
-  "CHICKFIANT",
-  "GALEGGTICA",
-  "CORELLIHEN_CORVETTE",
-  "MILLENIUM_CHICKEN",
-  "BCR",
-  "CHICKEN_HEAVY",
-  "CHICKEN_NINE",
-  "CHICKEN_ONE",
-];
+const PRE_PLAN_UNTARGETED_ONLY_SHIPS = SEND_UNTARGETED_ONLY_SHIPS;
+const PRE_PLAN_SHIPS = SEND_SHIPS;
 /** A hand-added dubcap send's drop multiplier; imported plan rows keep their event's own. */
 const DUBCAP_SEND_MULTIPLIER = 2;
-const PRE_PLAN_DURATIONS: Array<{ value: PrePlanDurationType; label: string }> = [
-  { value: "SHORT", label: "Short" },
-  { value: "LONG", label: "Standard" },
-  { value: "EPIC", label: "Extended" },
-];
-const PRE_PLAN_TARGET_OPTIONS = [
-  { afxId: PRE_PLAN_UNTARGETED_TARGET_AFX_ID, label: "Untargeted" },
-  ...Object.values(
-    targetFamilies as Record<string, { afxId: number; name: string; representativeItemId: string | null }>
-  )
-    .filter((entry) => Number.isFinite(entry.afxId) && entry.representativeItemId)
-    .map((entry) => ({ afxId: entry.afxId, label: entry.name }))
-    .sort((a, b) => a.label.localeCompare(b.label)),
-];
+const PRE_PLAN_DURATIONS = SEND_DURATIONS;
+const PRE_PLAN_TARGET_OPTIONS = SEND_TARGET_OPTIONS;
 const INVENTORY_MATRIX_FAMILIES: InventoryMatrixFamily[] = [
   { key: "tachyon_deflector", label: "Deflector" },
   { key: "dilithium_monocle", label: "Monocle" },

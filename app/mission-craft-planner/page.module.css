@@ -1359,6 +1359,146 @@
   color: #1a0e02;
 }
 
+.lockedChipTarget {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.lockedPanel {
+  display: grid;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.lockedPanel .consumptionHelpText {
+  margin: 0;
+}
+
+.lockedList {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lockedRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-areas:
+    "count ship length remove"
+    "target target target dubcap";
+  align-items: center;
+  gap: 6px;
+}
+
+.lockedRow + .lockedRow {
+  padding-top: 8px;
+  border-top: 1px dashed color-mix(in oklab, var(--stroke), transparent 30%);
+}
+
+@container (min-width: 560px) {
+  .lockedRow {
+    grid-template-columns: auto minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 1.2fr) auto auto;
+    grid-template-areas: "count ship length target dubcap remove";
+  }
+
+  .lockedRow + .lockedRow {
+    padding-top: 0;
+    border-top: 0;
+  }
+}
+
+.lockedRow select,
+.lockedRow input[type="text"] {
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.lockedShip {
+  grid-area: ship;
+}
+
+.lockedLength {
+  grid-area: length;
+}
+
+.lockedTarget {
+  grid-area: target;
+}
+
+.lockedCount {
+  display: inline-flex;
+  grid-area: count;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.lockedCount input[type="text"] {
+  width: 4.5ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.lockedDubcap {
+  display: inline-flex;
+  grid-area: dubcap;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.lockedDubcap input {
+  margin: 0;
+  padding: 0;
+}
+
+.lockedDubcap[data-off="1"] {
+  color: var(--muted);
+  text-decoration: line-through dashed;
+}
+
+.lockedRemove,
+.lockedAdd {
+  border: 1px solid color-mix(in oklab, var(--stroke), transparent 10%);
+  background: transparent;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.lockedRemove {
+  grid-area: remove;
+  justify-self: end;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  line-height: 1;
+}
+
+.lockedAdd {
+  justify-self: start;
+  padding: 5px 12px;
+  border-style: dashed;
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.lockedRemove:hover:not(:disabled),
+.lockedAdd:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--accent), transparent 90%);
+  color: var(--ink);
+}
+
 .shipSelectorPanel {
   margin-top: 12px;
   padding-right: 6px;
@@ -1780,7 +1920,12 @@
   font-weight: 600;
 }
 
+.tankReadoutTotal[data-over="1"] {
+  color: var(--warn-ink);
+}
+
 .tankReadoutBar {
+  position: relative;
   display: flex;
   height: 8px;
   overflow: hidden;
@@ -1795,6 +1940,15 @@
 
 .tankReadoutSeg + .tankReadoutSeg {
   border-left: 1px solid var(--panel);
+}
+
+.tankReadoutCapacityMark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--ink);
 }
 
 .tankReadoutSeg[data-egg="humility"] {
@@ -2148,6 +2302,18 @@
 .dubcapClock {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+.lockedBadge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--accent), transparent 85%);
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .dubcapBadge {
