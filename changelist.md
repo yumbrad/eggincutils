@@ -53,6 +53,12 @@ ingredients.
 
 **Artifact Attainment / Mission Craft Planner**
 
+- The craft plan has a **Craft XP** column: each row's planned crafts times that artifact's XP, with the plan's total
+and the crafting level it takes you to. Crafts of an artifact's ingredients count on their own rows, not again on
+the artifact's.
+  - **From Consumption** and **Consumed** are now one **Consumption** column: **+** for stones and fragments you get by
+consuming artifacts, **−** for artifacts the plan consumes.
+
 - In-air ships that launched in a dubcap get a **dubcap** tag and a row of their own.
 
 - Added **Locked launches** under Ships: launches the plan has to make, at least this many, whatever else it picks.

@@ -17,6 +17,7 @@ import artifactConsumption from "../../data/artifact-consumption.json";
 import artifactShortNames from "../../data/artifact-short-names.json";
 import recipes from "../../data/recipes.json";
 import { APP_BUILD } from "../../lib/app-build";
+import { getCraftingLevelProgress } from "../../lib/crafting-levels";
 import { MISSION_CRAFT_COPY } from "../../lib/mission-craft-copy";
 import {
   buildTargetOptions,
@@ -639,12 +640,47 @@ type CraftPlanDetailRow = {
   expectedMission: number;
   fromConsumption: number;
   consumedCount: number;
+  /** XP from this row's own planned crafts; its ingredients' crafts count on their own rows. */
+  craftXp: number;
   plannedCraftTooltip: string | null;
   neededTooltip: string | null;
   expectedMissionTooltip: string | null;
   fromConsumptionTooltip: string | null;
   consumedTooltip: string | null;
 };
+
+/**
+ * Gained (+, stones and fragments from consuming artifacts) or consumed (−,
+ * artifacts). Consumption only yields stones and only artifacts are consumed,
+ * so a row has one or the other; both show if that ever changes.
+ */
+function CraftConsumptionCell({ craft }: { craft: CraftPlanDetailRow }): JSX.Element {
+  const parts: Array<{ text: string; tooltip: string | null }> = [];
+  if (craft.fromConsumption > 0) {
+    parts.push({
+      text: `+${craft.fromConsumption.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+      tooltip: craft.fromConsumptionTooltip,
+    });
+  }
+  if (craft.consumedCount > 0) {
+    parts.push({ text: `−${craft.consumedCount.toLocaleString()}`, tooltip: craft.consumedTooltip });
+  }
+  if (parts.length === 0) {
+    return <>—</>;
+  }
+  return (
+    <>
+      {parts.map((part, index) => (
+        <span key={part.text}>
+          {index > 0 && " / "}
+          <span className={part.tooltip ? styles.tooltipValue : undefined} title={part.tooltip || undefined}>
+            {part.text}
+          </span>
+        </span>
+      ))}
+    </>
+  );
+}
 
 /** A plan's chance as a whole percent, never rounded to a certain 100% (or to 0% when there's any chance). */
 function formatOddsPercent(chance: number): string {
@@ -5020,7 +5056,7 @@ export default function MissionCraftPlannerPage() {
       return [] as CraftPlanDetailRow[];
     }
 
-    const recipeMap = recipes as Record<string, { ingredients: Record<string, number> } | null>;
+    const recipeMap = recipes as Record<string, { ingredients: Record<string, number>; xp?: number } | null>;
     const requiredByItemKey: Record<string, number> = {};
     const targetKey = itemIdToCanonicalKey(response.plan.targetItemId);
     const planTargets = response.plan.targets?.length
@@ -5148,6 +5184,7 @@ export default function MissionCraftPlannerPage() {
         const plannedCraftCount = plannedCraftCountByItemId.get(itemId) || 0;
         const fromConsumption = Math.max(0, consumptionYieldByItemId.get(itemId) || 0);
         const consumedCount = Math.max(0, consumedCountByItemId.get(itemId) || 0);
+        const craftXp = plannedCraftCount * Math.max(0, recipeMap[itemKey]?.xp || 0);
         const craftGoalTotal = craftGoalTotalByItemKey.get(itemKey) || 0;
         if (
           craftGoalTotal <= 0 &&
@@ -5283,6 +5320,7 @@ export default function MissionCraftPlannerPage() {
           expectedMission,
           fromConsumption,
           consumedCount,
+          craftXp,
           plannedCraftTooltip,
           neededTooltip,
           expectedMissionTooltip,
@@ -5309,6 +5347,19 @@ export default function MissionCraftPlannerPage() {
 
     return rows;
   }, [lastSolveRequest?.targetCraftedOnly, lootData, profileSnapshot, response, showAllShinyOdds]);
+  // Each row counts only its own crafts, so the rows add up without counting a craft twice.
+  const craftPlanXp = useMemo(() => {
+    const total = craftPlanDetailRows.reduce((sum, row) => sum + row.craftXp, 0);
+    if (total <= 0) {
+      return null;
+    }
+    if (!profileSnapshot) {
+      return { total, levelLabel: null };
+    }
+    const before = getCraftingLevelProgress(profileSnapshot.craftingXp || 0).level;
+    const after = getCraftingLevelProgress((profileSnapshot.craftingXp || 0) + total).level;
+    return { total, levelLabel: before === after ? `crafting level ${after}` : `crafting level ${before} → ${after}` };
+  }, [craftPlanDetailRows, profileSnapshot]);
   const relevantYieldsByMission = useMemo(
     () => (response ? rankRelevantYields(response.plan, profileSnapshot?.inventory ?? null) : new Map<number, RankedYield[]>()),
     [response, profileSnapshot]
@@ -7448,8 +7499,22 @@ export default function MissionCraftPlannerPage() {
                       <th>Have</th>
                       <th><span className={styles.stackedTableHeader}>Planned<br />Craft</span></th>
                       <th><span className={styles.stackedTableHeader}>Expected<br />Mission</span></th>
-                      <th><span className={styles.stackedTableHeader}>From<br />Consumption</span></th>
-                      <th>Consumed</th>
+                      <th>
+                        <span
+                          className={styles.tooltipValue}
+                          title="+ stones and fragments you get by consuming artifacts; − artifacts the plan consumes."
+                        >
+                          Consumption
+                        </span>
+                      </th>
+                      <th>
+                        <span
+                          className={`${styles.stackedTableHeader} ${styles.tooltipValue}`}
+                          title="Crafting XP from each row's own planned crafts. Crafts of its ingredients count on their own rows."
+                        >
+                          Craft<br />XP
+                        </span>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -7522,25 +7587,38 @@ export default function MissionCraftPlannerPage() {
                             </span>
                           </td>
                           <td>
-                            <span
-                              className={craft.fromConsumption > 0 && craft.fromConsumptionTooltip ? styles.tooltipValue : undefined}
-                              title={craft.fromConsumption > 0 ? craft.fromConsumptionTooltip || undefined : undefined}
-                            >
-                              {craft.fromConsumption.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                            </span>
+                            <CraftConsumptionCell craft={craft} />
                           </td>
                           <td>
-                            <span
-                              className={craft.consumedCount > 0 && craft.consumedTooltip ? styles.tooltipValue : undefined}
-                              title={craft.consumedCount > 0 ? craft.consumedTooltip || undefined : undefined}
-                            >
-                              {craft.consumedCount > 0 ? craft.consumedCount.toLocaleString() : "0"}
-                            </span>
+                            {craft.craftXp > 0 ? (
+                              <span
+                                className={styles.tooltipValue}
+                                title={`${craft.plannedCraftCount.toLocaleString()} ${
+                                  craft.plannedCraftCount === 1 ? "craft" : "crafts"
+                                } × ${(craft.craftXp / craft.plannedCraftCount).toLocaleString()} XP`}
+                              >
+                                {craft.craftXp.toLocaleString()}
+                              </span>
+                            ) : (
+                              "—"
+                            )}
                           </td>
                         </tr>
                       );
                     })}
                   </tbody>
+                  {craftPlanXp && (
+                    <tfoot>
+                      <tr className={styles.craftTotalRow}>
+                        <td>Total</td>
+                        <td colSpan={5} />
+                        <td>
+                          <div>{craftPlanXp.total.toLocaleString()}</div>
+                          {craftPlanXp.levelLabel && <div className={`muted ${styles.craftTotalLevel}`}>{craftPlanXp.levelLabel}</div>}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
             )}
