@@ -152,6 +152,8 @@ type PlanMissionRow = {
   secondsRemaining?: number;
   /** Only set on in-air rows: the wait for each launch, longest first. */
   launchSecondsRemaining?: number[];
+  /** Only set on in-air rows launched in a dubcap: its multiplier, already in their drops. */
+  inAirDubcapMultiplier?: number;
   /** Stable row id; virtue tank units point back at rows through it. */
   rowKey?: string;
   /** Launch during the single modeled double-capacity event. */
@@ -7595,6 +7597,7 @@ function inAirMissionRows(plannedRows: PlanMissionRow[], inFlight: InFlightProje
     inAir: true,
     secondsRemaining: row.secondsRemaining,
     launchSecondsRemaining: row.launchSecondsRemaining,
+    ...(row.dubcapMultiplier ? { inAirDubcapMultiplier: row.dubcapMultiplier } : {}),
     rowKey: claimUniqueRowKey(`${missionRowKeyBase(row)}|air`, usedRowKeys),
   }));
 }

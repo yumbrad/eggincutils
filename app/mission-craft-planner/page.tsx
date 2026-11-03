@@ -226,6 +226,8 @@ type PlanResponse = {
       inAir?: boolean;
       secondsRemaining?: number;
       launchSecondsRemaining?: number[];
+      /** In-air rows launched in a dubcap: its multiplier, already in their drops. */
+      inAirDubcapMultiplier?: number;
       /** Stable row id that virtue tank units point back at. */
       rowKey?: string;
       dubcap?: boolean;
@@ -3536,6 +3538,14 @@ function renderMissionTableRow(
           </span>
         )}
         {mission.dubcap && <span className={styles.dubcapBadge}>dubcap</span>}
+        {mission.inAir && (mission.inAirDubcapMultiplier ?? 1) > 1 && (
+          <span
+            className={styles.dubcapBadge}
+            title={`Launched in a dubcap: these bring back ×${mission.inAirDubcapMultiplier} drops, as their expected yields show`}
+          >
+            dubcap
+          </span>
+        )}
         {lockedCount > 0 && (
           <span
             className={styles.lockedBadge}

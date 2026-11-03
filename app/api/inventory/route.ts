@@ -150,6 +150,7 @@ async function inventoryResponse(query: InventoryQuery, prePlanSends: unknown, r
             level: row.level,
             targetAfxId: row.targetAfxId,
             launches: row.launches,
+            ...(row.dubcapMultiplier ? { multiplier: row.dubcapMultiplier } : {}),
           })),
         },
         prePlanSends: {

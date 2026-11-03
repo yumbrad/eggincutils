@@ -109,7 +109,8 @@ type InFlightResult = {
   missionCount: number;
   included: boolean;
   addedInventory: Record<string, number>;
-  rows: Array<{ ship: string; durationType: PrePlanDurationType; level: number; targetAfxId: number; launches: number }>;
+  /** `multiplier`: launched in a dubcap, whose drops it brings back multiplied. */
+  rows: Array<{ ship: string; durationType: PrePlanDurationType; level: number; targetAfxId: number; launches: number; multiplier?: number }>;
 };
 type InventoryResponse = {
   inventory?: Record<string, number>;
@@ -2775,7 +2776,9 @@ export default function XpGeCraftPage(): JSX.Element {
                     <li
                       key={`air-${index}-${row.ship}-${row.durationType}-${row.targetAfxId}`}
                       className={`${styles.prePlanRow} ${styles.prePlanRowInAir}`}
-                      title="Already launched: its loot counts while the box is ticked, and its stars are already yours."
+                      title={`Already launched${
+                        (row.multiplier ?? 1) > 1 ? ` in a dubcap (×${row.multiplier} drops)` : ""
+                      }: its loot counts while the box is ticked, and its stars are already yours.`}
                     >
                       <span className={styles.prePlanRowLabel}>{prePlanSendLabel({ ...row, id: "" })}</span>
                       <span className={styles.prePlanRowAirTag}>in the air</span>

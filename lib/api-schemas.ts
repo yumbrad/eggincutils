@@ -252,6 +252,7 @@ const inFlightMissionSchema = z.object({
   capacity: nonNegativeIntSchema,
   targetAfxId: nonNegativeIntSchema.nullable(),
   secondsRemaining: nonNegativeIntSchema,
+  dubcapMultiplier: z.number().int().min(2).optional(),
 });
 
 function virtueTankEggValuesSchema(valueSchema: z.ZodNumber) {
@@ -409,6 +410,7 @@ const planMissionRowSchema = z.object({
   inAir: z.boolean().optional(),
   secondsRemaining: nonNegativeIntSchema.optional(),
   launchSecondsRemaining: z.array(nonNegativeIntSchema).optional(),
+  inAirDubcapMultiplier: z.number().int().min(2).optional(),
   rowKey: z.string().min(1).optional(),
   dubcap: z.boolean().optional(),
   lockedLaunches: nonNegativeIntSchema.optional(),

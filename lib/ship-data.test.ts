@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildMissionOptions,
+  capacityEventMultiplier,
   computeShipLevels,
   computeShipLevelsFromLaunchCounts,
   shipLevelsToLaunchCounts,
@@ -94,5 +95,24 @@ describe("ship launch count helpers", () => {
     expect(chickenOne?.launchesByDuration.SHORT).toBe(2);
     expect(chickenOne?.launchesByDuration.LONG).toBe(1);
     expect(chickenNine?.launchesByDuration.SHORT).toBe(1);
+  });
+});
+
+describe("capacityEventMultiplier", () => {
+  const henerprise = (capacity: number) => ({ ship: "HENERPRISE", durationType: "EPIC", level: 7, capacity });
+
+  it("reads ordinary, doubled and tripled launches against the player's Zero-G", () => {
+    // 105 at 7 stars; 157 with Zero-G 10, 131 with Zero-G 5.
+    expect(capacityEventMultiplier(henerprise(157), 10)).toBe(1);
+    expect(capacityEventMultiplier(henerprise(314), 10)).toBe(2);
+    expect(capacityEventMultiplier(henerprise(471), 10)).toBe(3);
+    expect(capacityEventMultiplier(henerprise(131), 5)).toBe(1);
+    expect(capacityEventMultiplier(henerprise(262), 5)).toBe(2);
+  });
+
+  it("calls a launch ordinary when there's nothing to judge it by", () => {
+    expect(capacityEventMultiplier(henerprise(0), 10)).toBe(1);
+    expect(capacityEventMultiplier({ ship: "HENERPRISE", durationType: "TUTORIAL", level: 0, capacity: 500 }, 10)).toBe(1);
+    expect(capacityEventMultiplier({ ship: "NOT_A_SHIP", durationType: "EPIC", level: 0, capacity: 500 }, 10)).toBe(1);
   });
 });

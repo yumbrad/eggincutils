@@ -4,6 +4,9 @@
 
 **Craft XP / XP-GE Planner**
 
+- Ships in the air that launched in a dubcap now show as **dubcap ×2** in the send list, on their own row. Their
+doubled drops were already counted; the list just didn't say so.
+
 - Pre-plan ship sends can fly in a dubcap: tick **Dubcap ×2** when adding a send for double drops.
   - Importing an AAP plan keeps its dubcap launches' multiplier (they used to come in at single drops) and
 now includes the partly fueled virtue ship.
@@ -49,6 +52,8 @@ ingredients.
   - The post-plan XP box reflects the **Max GE Efficiency Plan** for the standalone table.
 
 **Artifact Attainment / Mission Craft Planner**
+
+- In-air ships that launched in a dubcap get a **dubcap** tag and a row of their own.
 
 - Added **Locked launches** under Ships: launches the plan has to make, at least this many, whatever else it picks.
   - Each row is a count, ship, length and target, or **Any target** to let the planner pick the best one for your

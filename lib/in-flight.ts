@@ -23,6 +23,8 @@ export type InFlightMissionRow = {
   expectedYields: Array<{ itemId: string; quantity: number }>;
   /** Longest wait among the launches folded into this row. */
   secondsRemaining: number;
+  /** Launched in a capacity event (a dubcap) with this multiplier; absent for ordinary launches. */
+  dubcapMultiplier?: number;
   /**
    * One entry per launch in this row, longest first. Grouped rows cover ships
    * that land at different times, and each frees its own slot, so scheduling
@@ -34,7 +36,7 @@ export type InFlightMissionRow = {
 export type InFlightProjection = {
   /** Expected drops still owed to the player, keyed by canonical item key. */
   yields: Record<string, number>;
-  /** One row per ship+duration+level+target, matching the plan's mission rows. */
+  /** One row per ship+duration+level+target (dubcap launches apart), matching the plan's mission rows. */
   rows: InFlightMissionRow[];
   /** Wall-clock seconds until the last outstanding mission lands. */
   secondsRemaining: number;
@@ -109,7 +111,8 @@ export async function projectInFlightMissions(
     const nominalCapacity =
       (levelLoot ? getNominalMissionCapacity(mission.ship, durationType, levelLoot.level) : 0) || capacity;
 
-    const rowKey = `${mission.ship}|${durationType}|${mission.level}|${targetAfxId}`;
+    const multiplier = mission.dubcapMultiplier && mission.dubcapMultiplier > 1 ? mission.dubcapMultiplier : 1;
+    const rowKey = `${mission.ship}|${durationType}|${mission.level}|${targetAfxId}|${multiplier}`;
     const existing = rowByKey.get(rowKey);
     const row: InFlightMissionRow = existing || {
       missionId,
@@ -122,6 +125,7 @@ export async function projectInFlightMissions(
       expectedYields: [],
       secondsRemaining: 0,
       launchSecondsRemaining: [],
+      ...(multiplier > 1 ? { dubcapMultiplier: multiplier } : {}),
     };
     row.launches += 1;
     row.secondsRemaining = Math.max(row.secondsRemaining, mission.secondsRemaining);

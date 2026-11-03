@@ -5,7 +5,7 @@ import zlib from "zlib";
 
 import type { LiveDubcapEvent } from "./dubcap-events";
 import { MAX_RECENT_LAUNCHES, type LaunchRecord } from "./launch-progress";
-import { buildMissionOptions, computeShipLevels, MissionRecord, ShipLevelInfo } from "./ship-data";
+import { buildMissionOptions, capacityEventMultiplier, computeShipLevels, MissionRecord, ShipLevelInfo } from "./ship-data";
 import {
   parseVirtueTankFuels,
   parseVirtueTankLimits,
@@ -64,6 +64,8 @@ export type InFlightMission = {
   /** null when the mission was sent without a target. */
   targetAfxId: number | null;
   secondsRemaining: number;
+  /** Launched in a capacity event (a dubcap) with this multiplier, judged from `capacity`; absent for ordinary launches. */
+  dubcapMultiplier?: number;
 };
 
 type BackupInventoryItem = {
@@ -314,7 +316,7 @@ export async function getPlayerProfile(
         sparseMissionInfos(decodedResponse, root),
         root.lookupEnum("ei.ArtifactSpec.Name").values,
         inventorySource,
-        { backupApproxTimeSeconds: data.backup?.approxTime || 0 }
+        { backupApproxTimeSeconds: data.backup?.approxTime || 0, epicResearchZerogLevel }
       );
 
       return {
@@ -717,10 +719,10 @@ export function parseInFlightMissions(
   items: SparseMissionInfo[],
   artifactAfxIdByName: Record<string, number>,
   inventorySource: InventorySource = "main",
-  timing: { nowSeconds?: number; backupApproxTimeSeconds?: number } = {}
+  options: { nowSeconds?: number; backupApproxTimeSeconds?: number; epicResearchZerogLevel?: number } = {}
 ): InFlightMission[] {
-  const nowSeconds = timing.nowSeconds ?? Date.now() / 1000;
-  const backupApproxTimeSeconds = timing.backupApproxTimeSeconds ?? 0;
+  const nowSeconds = options.nowSeconds ?? Date.now() / 1000;
+  const backupApproxTimeSeconds = options.backupApproxTimeSeconds ?? 0;
   const missions: InFlightMission[] = [];
   for (const item of items) {
     if (!item.ship || !item.durationType || !item.status) {
@@ -733,14 +735,21 @@ export function parseInFlightMissions(
       continue;
     }
     const targetAfxIdRaw = item.targetArtifact != null ? artifactAfxIdByName[item.targetArtifact] : undefined;
+    const level = Math.max(0, Math.round(item.level || 0));
+    const capacity = Math.max(0, Math.round(item.capacity || 0));
+    const multiplier =
+      options.epicResearchZerogLevel == null
+        ? 1
+        : capacityEventMultiplier({ ship: item.ship, durationType: item.durationType, level, capacity }, options.epicResearchZerogLevel);
     missions.push({
       ship: item.ship,
       durationType: item.durationType,
       status: item.status,
-      level: Math.max(0, Math.round(item.level || 0)),
-      capacity: Math.max(0, Math.round(item.capacity || 0)),
+      level,
+      capacity,
       targetAfxId: typeof targetAfxIdRaw === "number" ? targetAfxIdRaw : null,
       secondsRemaining: Math.round(secondsUntilReturn(item, nowSeconds, backupApproxTimeSeconds)),
+      ...(multiplier > 1 ? { dubcapMultiplier: multiplier } : {}),
     });
   }
   return missions;

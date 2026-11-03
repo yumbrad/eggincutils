@@ -101,6 +101,20 @@ describe("projectInFlightMissions", () => {
     expect(result.secondsRemaining).toBe(3600);
   });
 
+  it("keeps dubcap launches in rows of their own, with their doubled drops", async () => {
+    const result = await projectInFlightMissions(
+      [mission(), mission({ capacity: 48, dubcapMultiplier: 2 }), mission({ capacity: 48, dubcapMultiplier: 2 })],
+      { lootData: lootData(), includeRarities: RARITIES, includeStoneFragments: true }
+    );
+
+    expect(result.rows.map((row) => [row.launches, row.dubcapMultiplier])).toEqual([
+      [1, undefined],
+      [2, 2],
+    ]);
+    // 50% drop rate * (24 + 48 + 48).
+    expect(result.yields.quantum_metronome_1).toBeCloseTo(60, 6);
+  });
+
   it("returns an empty projection when nothing is outstanding", async () => {
     const result = await projectInFlightMissions([], {
       lootData: lootData(),
@@ -182,6 +196,23 @@ describe("parseInFlightMissions", () => {
     it("uses the snapshot as-is when there is nothing to date it against", () => {
       expect(remaining({ secondsRemaining: 4 * 3600 })).toBe(4 * 3600);
     });
+  });
+
+  it("tags launches flown in a dubcap from their recorded capacity", () => {
+    // Henerprise extended at 7 stars carries 105; Zero-G 10 makes it 157.
+    const items = [157, 314, 471].map((capacity) => ({
+      ship: "HENERPRISE",
+      durationType: "EPIC",
+      status: "EXPLORING",
+      level: 7,
+      capacity,
+    }));
+
+    expect(
+      parseInFlightMissions(items, afxIds, "main", { epicResearchZerogLevel: 10 }).map((entry) => entry.dubcapMultiplier)
+    ).toEqual([undefined, 2, 3]);
+    // Without the research level there's no telling, so none are tagged.
+    expect(parseInFlightMissions(items, afxIds).some((entry) => entry.dubcapMultiplier)).toBe(false);
   });
 
   it("reads a set target and leaves an absent one null", () => {

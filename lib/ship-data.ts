@@ -208,6 +208,26 @@ export function getNominalMissionCapacity(ship: string, durationType: DurationTy
   return Math.floor(params.capacity + params.levelCapacityBump * Math.max(0, Math.round(level)));
 }
 
+/**
+ * The capacity event a launch flew in, read from its recorded capacity: 2
+ * for a dubcap launch, 1 for an ordinary one. Ordinary capacity is the
+ * ship's stars plus Zero-G research, so a launch 1.5× or more above it flew
+ * in an event. (Zero-G bought since the launch can hide one.)
+ */
+export function capacityEventMultiplier(
+  mission: { ship: string; durationType: string; level: number; capacity: number },
+  epicResearchZerogLevel: number
+): number {
+  const durationType = mission.durationType as DurationType;
+  const nominal = DURATIONS.includes(durationType) ? getNominalMissionCapacity(mission.ship, durationType, mission.level) : null;
+  const ordinary = nominal ? Math.floor(nominal * (1 + 0.05 * Math.max(0, epicResearchZerogLevel))) : 0;
+  if (ordinary <= 0 || !(mission.capacity > 0)) {
+    return 1;
+  }
+  const ratio = mission.capacity / ordinary;
+  return ratio >= 1.5 ? Math.round(ratio) : 1;
+}
+
 /** Biggest capacity anyone flies this ship and duration with: its top stars and Zero-G research 10 (+50%). */
 export function getMaxBoostedMissionCapacity(ship: string, durationType: DurationType): number | null {
   const entry = shipConfig.find((candidate) => candidate.ship === ship);
