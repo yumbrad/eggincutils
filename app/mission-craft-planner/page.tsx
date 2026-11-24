@@ -49,7 +49,7 @@ import {
 import { plannerPlanFueling, writeSavedPlannerPlanLaunches } from "../../lib/preplan-import";
 import { planLaunchProgress, type LaunchRecord, type PlanLaunchProgress } from "../../lib/launch-progress";
 import useHighsWorker from "../../lib/use-highs-worker";
-import { planForTarget, computeMonolithicPaths, type PlannerProgressEvent } from "../../lib/planner";
+import { planForTarget, computeMonolithicPaths, type PlanBudget, type PlannerProgressEvent } from "../../lib/planner";
 import { createDemoProfile, isBlankEid } from "../../lib/demo-profile";
 import type { LootJson } from "../../lib/loot-data";
 import type { DubcapPlan } from "../../lib/dubcap";
@@ -281,6 +281,7 @@ type PlanResponse = {
     /** Path of Virtue tank mode only; absent on main-farm plans and older saved sessions. */
     virtueTanks?: VirtueTankPlannerResult;
     dubcap?: DubcapPlan;
+    budget?: PlanBudget;
   };
 };
 
@@ -317,6 +318,12 @@ type SolveSnapshotRequest = {
   selectedConsumptionItemIds?: string[];
   /** Left out when there are none. */
   lockedLaunches?: LockedLaunch[];
+  /** Fly only the locked launches; left out when off or there are none. */
+  onlyLockedLaunches?: boolean;
+  /** Finish by (epoch ms); left out when there's no finish time. */
+  finishByMs?: number;
+  /** Snapshot files only: the finish time as the plan got it, in seconds from when it was built. */
+  finishWithinSeconds?: number;
   /** Path of Virtue only: the shift-cap slider and the Initial Tank toggle. */
   virtueShiftCap?: number;
   virtueStartTank?: VirtueTankStartMode;
@@ -470,8 +477,11 @@ function storePlanFile(raw: string, deviceEid: string): string | null {
   if (!isRestorableVirtueTankSession(response.plan.virtueTanks, profileSnapshot.virtueTank)) {
     return "That plan file is from an older version of the planner and can't be loaded.";
   }
+  // What the page compares its inputs against leaves out snapshot-only fields.
+  const requestInputs: SolveSnapshotRequest = { ...request };
+  delete requestInputs.finishWithinSeconds;
   const lastSolveRequest: LastSolveInputs = {
-    ...request,
+    ...requestInputs,
     eid: demo ? "" : deviceEid,
     sourceFilters: { ...sourceFilters, inventorySource: source },
     ...(file.profileOverrides ? { profileOverrides: file.profileOverrides } : {}),
@@ -505,6 +515,8 @@ function storePlanFile(raw: string, deviceEid: string): string | null {
     ...(request.selectedConsumptionItemIds ? { selectedConsumptionItemIds: request.selectedConsumptionItemIds } : {}),
     shipDurations,
     lockedLaunches: sanitizeLockedLaunches(request.lockedLaunches),
+    ...(request.onlyLockedLaunches ? { onlyLockedLaunches: true } : {}),
+    ...(request.finishByMs != null && request.finishByMs > Date.now() ? { finishByMs: request.finishByMs, finishByOn: true } : {}),
   });
   writeStoredString([LOCAL_PREF_KEYS.plannerInventorySource], source);
   if (source === "main") {
@@ -835,6 +847,10 @@ type PlannerSourcePreferences = {
   selectedConsumptionItemIds?: string[];
   shipDurations?: ShipDurationSelection;
   lockedLaunches?: LockedLaunch[];
+  onlyLockedLaunches?: boolean;
+  /** Finish by (epoch ms), dropped once it has passed; kept while unticked so ticking brings it back. */
+  finishByMs?: number;
+  finishByOn?: boolean;
 };
 
 type PlannerSourcePreferenceStore = Partial<Record<InventorySource, PlannerSourcePreferences>>;
@@ -4160,6 +4176,71 @@ function lockedLaunchRowsToLocks(rows: LockedLaunchRow[]): LockedLaunch[] {
 const ANY_TARGET_VALUE = "any";
 
 /**
+ * A "?" after a control's name that shows what the control does: on click or
+ * tap (an info-disclosure, which closes on a click elsewhere), and while a
+ * mouse is over it.
+ */
+function HelpTip({ label, children }: { label: string; children: ReactNode }) {
+  const [pinned, setPinned] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  return (
+    <details
+      className={`info-disclosure ${styles.helpTip}`}
+      open={pinned || hovered}
+      onToggle={(event) => {
+        // Closed from outside (a click elsewhere, Escape).
+        if (!event.currentTarget.open) {
+          setPinned(false);
+          setHovered(false);
+        }
+      }}
+      onPointerEnter={(event) => event.pointerType === "mouse" && setHovered(true)}
+      onPointerLeave={(event) => event.pointerType === "mouse" && setHovered(false)}
+    >
+      <summary
+        className={styles.helpTipButton}
+        aria-label={`About ${label}`}
+        onClick={(event) => {
+          event.preventDefault();
+          setPinned((value) => !value);
+        }}
+      >
+        ?
+      </summary>
+      <p className="muted">{children}</p>
+    </details>
+  );
+}
+
+/** The goals a partial plan leaves short, as its banners list them. */
+function GoalShortfallList({ goals }: { goals: Array<{ itemId: string; requested: number; shortfall: number; craftGoal?: boolean }> }) {
+  return (
+    <ul className={styles.shiftCapShortfalls}>
+      {goals.map((goal, index) => (
+        <li key={`${goal.itemId}:${index}`}>
+          {itemIdToLabel(goal.itemId)}: expected {formatGoalAmount(goal.requested - goal.shortfall, goal.craftGoal)} of{" "}
+          {formatGoalAmount(goal.requested, goal.craftGoal)}
+          {isShipStarsItem(goal.itemId) ? " launch points" : goal.craftGoal ? " additional crafts" : ""} · short by{" "}
+          {formatGoalAmount(goal.shortfall, goal.craftGoal)}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** "Sun 2:00 PM": a time within the next week or so. */
+function formatShortDateTime(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+/** A datetime-local input's value (local time, to the minute). */
+function toDateTimeLocalValue(ms: number): string {
+  const date = new Date(ms);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
  * Advanced options' Locked launches: sends the plan has to make, at least
  * this many each (lib/locked-launches), as a list of rows like the goals'.
  * Ticking Dubcap on a row turns on Include one dubcap; with it off, ticked
@@ -4168,6 +4249,8 @@ const ANY_TARGET_VALUE = "any";
 function LockedLaunchesEditor({
   rows,
   onRowsChange,
+  onlyLocked,
+  onOnlyLockedChange,
   shipLevels,
   includeDubcap,
   onIncludeDubcap,
@@ -4176,6 +4259,9 @@ function LockedLaunchesEditor({
 }: {
   rows: LockedLaunchRow[];
   onRowsChange: (rows: LockedLaunchRow[]) => void;
+  /** Send only these: no other launches (PlannerOptions.onlyLockedLaunches). */
+  onlyLocked: boolean;
+  onOnlyLockedChange: (onlyLocked: boolean) => void;
   shipLevels: ShipLevelInfo[] | null;
   includeDubcap: boolean;
   onIncludeDubcap: () => void;
@@ -4217,7 +4303,7 @@ function LockedLaunchesEditor({
           <span className={styles.shipSelectorCount}>
             {total > 0 ? (
               <>
-                {total.toLocaleString()} <em>locked</em>
+                {total.toLocaleString()} <em>{onlyLocked ? "locked · only these" : "locked"}</em>
               </>
             ) : (
               <em>none</em>
@@ -4246,8 +4332,9 @@ function LockedLaunchesEditor({
       {open && (
         <div className={styles.lockedPanel}>
           <p className={styles.consumptionHelpText}>
-            Launches the plan has to make, at least this many, whatever else it picks. They fly first, once your ships in
-            the air return; ticked ones fly in the dubcap.
+            {onlyLocked && rows.length > 0
+              ? "The plan's only launches: it picks targets for the any-target rows. They fly first, once your ships in the air return; ticked ones fly in the dubcap."
+              : "Launches the plan has to make, at least this many, whatever else it picks. They fly first, once your ships in the air return; ticked ones fly in the dubcap."}
           </p>
           {rows.length > 0 && (
             <ul className={styles.lockedList}>
@@ -4370,6 +4457,25 @@ function LockedLaunchesEditor({
           >
             + Lock a launch
           </button>
+          {rows.length > 0 && (
+            <div className={styles.checkWithHelp}>
+              <label className={styles.customCheck} htmlFor="onlyLockedLaunches">
+                <input
+                  id="onlyLockedLaunches"
+                  type="checkbox"
+                  checked={onlyLocked}
+                  onChange={(event) => onOnlyLockedChange(event.target.checked)}
+                />
+                <span aria-hidden="true" />
+                <span>Send only these</span>
+              </label>
+              <HelpTip label="Send only these">
+                The plan makes these launches and no others, and picks targets for the any-target rows to get your goals
+                as far as these launches can. Goals they can&apos;t reach are left short. Count how many you can send
+                yourself, e.g. what your fuel or the craft sale allows.
+              </HelpTip>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -4736,6 +4842,11 @@ export default function MissionCraftPlannerPage() {
   const [includeDubcap, setIncludeDubcap] = useState(false);
   const [lockedLaunchRows, setLockedLaunchRows] = useState<LockedLaunchRow[]>([]);
   const [lockedLaunchesOpen, setLockedLaunchesOpen] = useState(false);
+  const [onlyLockedLaunches, setOnlyLockedLaunches] = useState(false);
+  const [finishByOn, setFinishByOn] = useState(false);
+  const [finishByMs, setFinishByMs] = useState<number | null>(null);
+  // Only a ticked Finish by with a time limits the plan.
+  const activeFinishByMs = finishByOn ? finishByMs : null;
   const [loading, setLoading] = useState(false);
   const appUpdated = useAppUpdated();
   const [error, setError] = useState<string | null>(null);
@@ -4851,6 +4962,9 @@ export default function MissionCraftPlannerPage() {
     selectedConsumptionItemIds,
     shipDurations,
     lockedLaunches: lockedLaunchRowsToLocks(lockedLaunchRows),
+    ...(onlyLockedLaunches ? { onlyLockedLaunches: true } : {}),
+    ...(finishByMs != null ? { finishByMs } : {}),
+    ...(finishByOn ? { finishByOn: true } : {}),
   });
 
   const applySourcePreferences = (preferences: PlannerSourcePreferences | null | undefined) => {
@@ -4881,6 +4995,11 @@ export default function MissionCraftPlannerPage() {
     );
     setShipDurations(normalizeShipDurations(preferences?.shipDurations) || buildDefaultShipDurations());
     setLockedLaunchRows(lockedLaunchesToRows(sanitizeLockedLaunches(preferences?.lockedLaunches)));
+    setOnlyLockedLaunches(preferences?.onlyLockedLaunches === true);
+    const savedFinishBy = Number(preferences?.finishByMs);
+    const finishByLive = Number.isFinite(savedFinishBy) && savedFinishBy > Date.now();
+    setFinishByMs(finishByLive ? savedFinishBy : null);
+    setFinishByOn(finishByLive && preferences?.finishByOn === true);
   };
 
   const handleInventorySourceChange = (nextSource: InventorySource) => {
@@ -5930,6 +6049,9 @@ export default function MissionCraftPlannerPage() {
     selectedConsumptionItemIds,
     shipDurations,
     lockedLaunchRows,
+    onlyLockedLaunches,
+    finishByMs,
+    finishByOn,
     inventorySource,
     prefsLoaded,
   ]);
@@ -5952,6 +6074,8 @@ export default function MissionCraftPlannerPage() {
     allowedShipDurations: currentAllowedShipDurations,
     selectedConsumptionItemIds,
     ...(currentLockedLaunches.length > 0 ? { lockedLaunches: currentLockedLaunches } : {}),
+    ...(currentLockedLaunches.length > 0 && onlyLockedLaunches ? { onlyLockedLaunches: true } : {}),
+    ...(activeFinishByMs != null ? { finishByMs: activeFinishByMs } : {}),
     // Left undefined in main mode so JSON.stringify drops them and main-farm
     // requests compare the same as before.
     virtueShiftCap: inventorySource === "virtue" ? virtueShiftCap : undefined,
@@ -5967,6 +6091,10 @@ export default function MissionCraftPlannerPage() {
   async function runBuildPlan(options: { fasterOption?: boolean } = {}) {
     if (!plannerReady) {
       setError("The local planner is still loading. Try again in a moment.");
+      return;
+    }
+    if (activeFinishByMs != null && activeFinishByMs <= Date.now()) {
+      setError("The finish time has passed. Pick a later one, or clear it.");
       return;
     }
     setFasterOptionPlanned(null);
@@ -6084,6 +6212,9 @@ export default function MissionCraftPlannerPage() {
             targets: normalizedTargets,
             allowedShipDurations: allowedShipDurationsForSolve,
             lockedLaunches: snapshotRequest.lockedLaunches,
+            onlyLockedLaunches: snapshotRequest.onlyLockedLaunches,
+            finishWithinSeconds:
+              snapshotRequest.finishByMs != null ? Math.max(0, (snapshotRequest.finishByMs - Date.now()) / 1000) : undefined,
             selectedConsumptionItemIds,
             solverFn: highsRef.current.solve,
             lootData: lootDataRef.current!,
@@ -6317,6 +6448,11 @@ export default function MissionCraftPlannerPage() {
         allowedShipDurations: lastSolveRequest.allowedShipDurations,
         selectedConsumptionItemIds: lastSolveRequest.selectedConsumptionItemIds,
         ...(lastSolveRequest.lockedLaunches ? { lockedLaunches: lastSolveRequest.lockedLaunches } : {}),
+        ...(lastSolveRequest.onlyLockedLaunches ? { onlyLockedLaunches: true } : {}),
+        ...(lastSolveRequest.finishByMs != null ? { finishByMs: lastSolveRequest.finishByMs } : {}),
+        ...(response.plan.budget?.finishWithinSeconds !== undefined
+          ? { finishWithinSeconds: response.plan.budget.finishWithinSeconds }
+          : {}),
         virtueShiftCap: lastSolveRequest.virtueShiftCap,
         virtueStartTank: lastSolveRequest.virtueStartTank,
       },
@@ -6490,7 +6626,8 @@ export default function MissionCraftPlannerPage() {
   };
   const planVirtueTanks = response?.plan.virtueTanks ?? null;
   const planGoalShortfalls = response?.plan.targetBreakdowns.filter((goal) => goal.shortfall > 1e-6) ?? [];
-  const planHasGoalShortfalls = planVirtueTanks != null && planGoalShortfalls.length > 0;
+  const planBudget = response?.plan.budget ?? null;
+  const planHasGoalShortfalls = (planVirtueTanks != null || planBudget != null) && planGoalShortfalls.length > 0;
   // Advisory shifts for completing all goals. Older saved plans may instead
   // carry a plan whose packing exceeded the selected cap.
   const planOverCapByPacking =
@@ -6509,7 +6646,32 @@ export default function MissionCraftPlannerPage() {
     return detent == null ? VIRTUE_SHIFT_CAP_DETENTS.length - 1 : VIRTUE_SHIFT_CAP_DETENTS.indexOf(detent);
   })();
   const planNeededShiftsDetent = planNeededShifts != null ? shiftCapDetentFor(planNeededShifts) : null;
-  const virtueBannerShown = Boolean(virtueTankView && planVirtueTanks && (planHasGoalShortfalls || planNeededShifts != null));
+  // A plan with a budget explains its shortfalls in its own banner.
+  const virtueBannerShown = Boolean(
+    virtueTankView && planVirtueTanks && !planBudget && (planHasGoalShortfalls || planNeededShifts != null)
+  );
+  const budgetBanner = (() => {
+    if (!planBudget || (!planHasGoalShortfalls && !planBudget.overFinishTime)) {
+      return null;
+    }
+    const startMs = planReceivedAtMs ?? Date.now();
+    const finishBy =
+      planBudget.finishWithinSeconds !== undefined ? formatShortDateTime(startMs + planBudget.finishWithinSeconds * 1000) : null;
+    const within = [
+      ...(planBudget.onlyLockedLaunches ? ["the locked launches"] : []),
+      ...(finishBy ? [`launches back by ${finishBy}`] : []),
+    ].join(" and ");
+    const inAirPastFinish =
+      planBudget.finishWithinSeconds !== undefined && (planSchedule?.inAirSeconds ?? 0) > planBudget.finishWithinSeconds;
+    const overrun = !planBudget.overFinishTime || !planSchedule
+      ? ""
+      : inAirPastFinish
+        ? ` Ships already in the air land after it, at ${formatShortDateTime(startMs + planSchedule.inAirSeconds * 1000)}.`
+        : ` No plan turned up that ends by then: this one ends ${formatShortDateTime(startMs + planSchedule.totalSeconds * 1000)}.`;
+    return planHasGoalShortfalls
+      ? { headline: `Not every goal fits ${within}.`, detail: `Planned as far toward them as possible.${overrun}` }
+      : { headline: "This plan runs past the finish time.", detail: overrun.trim() };
+  })();
   // Only a finished search establishes a minimum; otherwise it is a suggestion.
   // Older over-cap plans don't say; they read as proven, as they always have.
   const planNeededShiftsProven = planVirtueTanks?.overCap
@@ -6888,6 +7050,8 @@ export default function MissionCraftPlannerPage() {
             <LockedLaunchesEditor
               rows={lockedLaunchRows}
               onRowsChange={setLockedLaunchRows}
+              onlyLocked={onlyLockedLaunches}
+              onOnlyLockedChange={setOnlyLockedLaunches}
               shipLevels={profileSnapshot?.shipLevels ?? null}
               includeDubcap={includeDubcap}
               onIncludeDubcap={() => setIncludeDubcap(true)}
@@ -7022,7 +7186,21 @@ export default function MissionCraftPlannerPage() {
                 <>
                   <div className={styles.shiftCapBlock}>
                     <div className={styles.shiftCapHead}>
-                      <label className={styles.fieldLabel} htmlFor="virtueShiftCap">Shift cap</label>
+                      <span className={styles.labelWithHelp}>
+                        <label className={styles.fieldLabel} htmlFor="virtueShiftCap">Shift cap</label>
+                        <HelpTip label="Shift cap">
+                          {virtueShiftCap === 0 ? (
+                            <>No refuels: the plan uses the initial tank and shows any goals it can&apos;t reach.</>
+                          ) : (
+                            <>
+                              The plan stays within this cap and shows any goal shortfalls. Room for up to{" "}
+                              {pluralize(Math.floor(virtueShiftCap / 2), "refuel loop")}. A loop costs 1 shift per egg
+                              refilled + 1 back to Humility, e.g.{" "}
+                              <span className={styles.shiftCapRoute}>C → R → K → H</span> = 4.
+                            </>
+                          )}
+                        </HelpTip>
+                      </span>
                       <output className={styles.shiftCapValue} htmlFor="virtueShiftCap">
                         {virtueShiftCap === 0 ? (
                           "No refuels"
@@ -7054,7 +7232,7 @@ export default function MissionCraftPlannerPage() {
                           setVirtueShiftCap(VIRTUE_SHIFT_CAP_DETENTS[Number(event.target.value)] ?? DEFAULT_VIRTUE_SHIFT_CAP)
                         }
                         aria-valuetext={virtueShiftCap === 0 ? "No refuels" : `Up to ${virtueShiftCap} shifts`}
-                        aria-describedby="virtueShiftCapHint"
+                        aria-describedby={virtueShiftCap > 0 && cardVirtueTank ? "virtueShiftCapHint" : undefined}
                       />
                       {shiftCapNeedIndex != null && planNeededShifts != null && (
                         <div
@@ -7088,34 +7266,20 @@ export default function MissionCraftPlannerPage() {
                       <span>Fewer shifts</span>
                       <span>Save time</span>
                     </div>
-                    <div className={styles.shiftCapHint} id="virtueShiftCapHint">
-                      {virtueShiftCap === 0 ? (
+                    {virtueShiftCap > 0 && cardVirtueTank && (
+                      <div className={styles.shiftCapHint} id="virtueShiftCapHint">
                         <span>
-                          No refuels. The plan uses the initial tank and shows any goals it cannot reach.
+                          Using all {virtueShiftCap} costs about{" "}
+                          <strong>
+                            {formatSoulEggs(
+                              virtueShiftsCostSoulEggs(cardVirtueTank.soulEggs, cardVirtueTank.shiftCount, virtueShiftCap)
+                            )}{" "}
+                            SE
+                          </strong>{" "}
+                          at your Soul Eggs and shift count.
                         </span>
-                      ) : (
-                        <>
-                          <span>
-                            The plan stays within this cap and shows any goal shortfalls.{" "}
-                            Room for up to {pluralize(Math.floor(virtueShiftCap / 2), "refuel loop")}. A loop costs 1
-                            shift per egg refilled + 1 back to Humility, e.g.{" "}
-                            <span className={styles.shiftCapRoute}>C → R → K → H</span> = 4.
-                          </span>
-                          {cardVirtueTank && (
-                            <span>
-                              Using all {virtueShiftCap} costs about{" "}
-                              <strong>
-                                {formatSoulEggs(
-                                  virtueShiftsCostSoulEggs(cardVirtueTank.soulEggs, cardVirtueTank.shiftCount, virtueShiftCap)
-                                )}{" "}
-                                SE
-                              </strong>{" "}
-                              at your Soul Eggs and shift count.
-                            </span>
-                          )}
-                        </>
-                      )}
-                    </div>
+                      </div>
+                    )}
                   </div>
                 </>
               ) : (
@@ -7138,32 +7302,81 @@ export default function MissionCraftPlannerPage() {
                   </div>
                 </div>
               )}
-              <label className={styles.customCheck} htmlFor="includeDubcap">
-                <input
-                  id="includeDubcap"
-                  type="checkbox"
-                  checked={includeDubcap}
-                  onChange={(event) => setIncludeDubcap(event.target.checked)}
-                  aria-describedby="dubcapHint"
-                />
-                <span aria-hidden="true" />
-                <span>Include one dubcap</span>
-              </label>
-              <p className={styles.dubcapHint} id="dubcapHint">
-                {knownLiveDubcap ? (
-                  <>
-                    A {knownLiveDubcap.multiplier === 2 ? "double" : `${knownLiveDubcap.multiplier}×`} capacity event
-                    {knownLiveDubcap.ultra ? " (Ultra)" : ""} is running until{" "}
-                    {new Date(knownLiveDubcap.endsAtMs).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}.
-                    Plans launch into the time left as each slot frees up.
-                  </>
-                ) : (
-                  <>
-                    Uses the dubcap running when you build the plan, if there is one. Otherwise one fresh 48-hour window
-                    with double drops, once prep and current missions return; calendar waiting is excluded.
-                  </>
+              <div className={styles.finishByBlock}>
+                <div className={styles.checkWithHelp}>
+                  <label className={styles.customCheck} htmlFor="finishByOn">
+                    <input
+                      id="finishByOn"
+                      type="checkbox"
+                      checked={finishByOn}
+                      onChange={(event) => {
+                        const on = event.target.checked;
+                        setFinishByOn(on);
+                        // A fresh tick starts a day out, on the hour.
+                        if (on && (finishByMs == null || finishByMs <= Date.now())) {
+                          setFinishByMs(Math.ceil((Date.now() + 24 * 3_600_000) / 3_600_000) * 3_600_000);
+                        }
+                      }}
+                    />
+                    <span aria-hidden="true" />
+                    <span>Finish by</span>
+                  </label>
+                  <HelpTip label="Finish by">
+                    The plan only makes launches that are back by this time, counting from when you build it, with
+                    ships already in the air holding their slots until they land. Goals that don&apos;t fit are left
+                    short, as far along as the time gets them.
+                  </HelpTip>
+                </div>
+                {finishByOn && (
+                  <div className={styles.finishByRow}>
+                    <input
+                      id="finishBy"
+                      type="datetime-local"
+                      className={styles.textInput}
+                      aria-label="Finish by"
+                      value={finishByMs != null ? toDateTimeLocalValue(finishByMs) : ""}
+                      min={toDateTimeLocalValue(Date.now())}
+                      onChange={(event) => {
+                        const ms = event.target.value ? new Date(event.target.value).getTime() : NaN;
+                        setFinishByMs(Number.isFinite(ms) ? ms : null);
+                      }}
+                      aria-describedby="finishByHint"
+                    />
+                    <span className={styles.finishByHint} id="finishByHint" data-past={finishByMs != null && finishByMs <= Date.now() ? "1" : undefined}>
+                      {finishByMs == null
+                        ? "Pick a time"
+                        : finishByMs <= Date.now()
+                          ? "Already passed"
+                          : `in ${formatDurationFromHours((finishByMs - Date.now()) / 3_600_000)}`}
+                    </span>
+                  </div>
                 )}
-              </p>
+              </div>
+              <div className={styles.checkWithHelp}>
+                <label className={styles.customCheck} htmlFor="includeDubcap">
+                  <input
+                    id="includeDubcap"
+                    type="checkbox"
+                    checked={includeDubcap}
+                    onChange={(event) => setIncludeDubcap(event.target.checked)}
+                    aria-describedby={knownLiveDubcap ? "dubcapHint" : undefined}
+                  />
+                  <span aria-hidden="true" />
+                  <span>Include one dubcap</span>
+                </label>
+                <HelpTip label="Include one dubcap">
+                  Uses the dubcap running when you build the plan, if there is one. Otherwise one fresh 48-hour window
+                  with double drops, once prep and current missions return; calendar waiting is excluded.
+                </HelpTip>
+              </div>
+              {knownLiveDubcap && (
+                <p className={styles.dubcapHint} id="dubcapHint">
+                  A {knownLiveDubcap.multiplier === 2 ? "double" : `${knownLiveDubcap.multiplier}×`} capacity event
+                  {knownLiveDubcap.ultra ? " (Ultra)" : ""} is running until{" "}
+                  {new Date(knownLiveDubcap.endsAtMs).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}.
+                  Plans launch into the time left as each slot frees up.
+                </p>
+              )}
               <label className={styles.customCheck} htmlFor="fastMode">
                 <input
                   id="fastMode"
@@ -7285,6 +7498,18 @@ export default function MissionCraftPlannerPage() {
           <span>PLAN OUTPUT</span>
         </div>
       )}
+      {/* Mounted empty before any plan, so the banner is announced when it appears. */}
+      <div role="status">
+        {budgetBanner && (
+          <div className={styles.shiftCapBanner} data-tone="warn">
+            {VIRTUE_WARN_ICON}
+            <div className={styles.shiftCapBannerText}>
+              <strong>{budgetBanner.headline}</strong> {budgetBanner.detail}
+              {planHasGoalShortfalls && <GoalShortfallList goals={planGoalShortfalls} />}
+            </div>
+          </div>
+        )}
+      </div>
       {/* Mounted empty in virtue mode, before any plan, so the banner is announced when it appears. */}
       {(inventorySource === "virtue" || virtueTankView) && (
         <div role="status">
@@ -7293,19 +7518,7 @@ export default function MissionCraftPlannerPage() {
               {VIRTUE_WARN_ICON}
               <div className={styles.shiftCapBannerText}>
                 <strong>{shiftCapBanner.headline}</strong> {shiftCapBanner.detail}
-                {planHasGoalShortfalls && (
-                  <ul className={styles.shiftCapShortfalls}>
-                    {planGoalShortfalls.map((goal, index) => (
-                      <li key={`${goal.itemId}:${index}`}>
-                        {itemIdToLabel(goal.itemId)}: expected{" "}
-                        {formatGoalAmount(goal.requested - goal.shortfall, goal.craftGoal)} of{" "}
-                        {formatGoalAmount(goal.requested, goal.craftGoal)}
-                        {isShipStarsItem(goal.itemId) ? " launch points" : goal.craftGoal ? " additional crafts" : ""} · short by{" "}
-                        {formatGoalAmount(goal.shortfall, goal.craftGoal)}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                {planHasGoalShortfalls && <GoalShortfallList goals={planGoalShortfalls} />}
                 {planFasterOption && (
                   <>
                     {" "}

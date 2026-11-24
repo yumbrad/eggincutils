@@ -675,6 +675,11 @@ export const plannerResultSchema = z.object({
       tankIndex: nonNegativeIntSchema.optional(),
     }))),
   }).optional(),
+  budget: z.object({
+    onlyLockedLaunches: z.boolean().optional(),
+    finishWithinSeconds: nonNegativeFiniteSchema.optional(),
+    overFinishTime: z.boolean().optional(),
+  }).optional(),
 });
 
 export const planApiResponseSchema = z.object({

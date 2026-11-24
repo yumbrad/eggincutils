@@ -189,6 +189,154 @@ describe("locked launches", () => {
   );
 });
 
+// Two targets on each mission: the cube target drops a cube a launch, untargeted one in five.
+function targetedLootFor(options: MissionOption[]): LootJson {
+  const target = (targetAfxId: number, cubes: number) => ({ totalDrops: 5000, targetAfxId,
+    items: [{ afxId: 0, afxLevel: 1, itemId: "puzzle-cube-1", counts: [cubes, 0, 0, 0] }] });
+  return { missions: options.map((option) => ({ afxShip: 0, afxDurationType: 0, missionId: option.missionId,
+    levels: [{ level: 0, targets: [target(10000, 1000), target(23, 5000)] }] })) } as LootJson;
+}
+
+const total = (result: PlannerResult) => result.missions.filter((row) => !row.inAir).reduce((sum, row) => sum + row.launches, 0);
+const shortBy = (result: PlannerResult) => result.targetBreakdowns.reduce((sum, goal) => sum + goal.shortfall, 0);
+
+describe("only the locked launches", () => {
+  it(
+    "fly just those, leaving the goal short",
+    async () => {
+      const result = await plan([extended, chickShort], 6, [
+        { ship: "CHICKFIANT", durationType: "SHORT", targetAfxId: null, launches: 2 },
+      ], { onlyLockedLaunches: true });
+      expect(total(result)).toBe(2);
+      expect(launchesOf(result, "CHICKFIANT", "SHORT")).toBe(2);
+      expect(shortBy(result)).toBeCloseTo(4, 5);
+      expect(result.budget).toEqual({ onlyLockedLaunches: true });
+      expect(result.notes[0]).toBe("With only the locked launches, some goals can't be reached. Planned as far toward them as possible.");
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
+    "fly every one even when fewer would do",
+    async () => {
+      const result = await plan([extended, chickShort], 1, [
+        { ship: "HENERPRISE", durationType: "EPIC", targetAfxId: null, launches: 3 },
+      ], { onlyLockedLaunches: true });
+      expect(total(result)).toBe(3);
+      expect(launchesOf(result, "HENERPRISE", "EPIC")).toBe(3);
+      expect(shortBy(result)).toBe(0);
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
+    "pick the target that gets furthest for any-target rows",
+    async () => {
+      const options = [extended, chickShort];
+      const result = await plan(options, 6, [
+        { ship: "CHICKFIANT", durationType: "SHORT", targetAfxId: null, launches: 3 },
+      ], { onlyLockedLaunches: true, lootData: targetedLootFor(options) });
+      expect(total(result)).toBe(3);
+      expect(result.missions.filter((row) => row.targetAfxId === 23).reduce((sum, row) => sum + row.launches, 0)).toBe(3);
+      expect(shortBy(result)).toBeCloseTo(3, 5);
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
+    "do nothing without locks",
+    async () => {
+      const result = await plan([extended, chickShort], 2, [], { onlyLockedLaunches: true });
+      expect(result.budget).toBeUndefined();
+      expect(shortBy(result)).toBe(0);
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
+    "fly just those in a Path of Virtue tank",
+    async () => {
+      const result = await plan([extended, chickShort], 6, [
+        { ship: "HENERPRISE", durationType: "EPIC", targetAfxId: null, launches: 2 },
+      ], {
+        onlyLockedLaunches: true,
+        objectiveMode: "virtueFuel",
+        virtueTank: {
+          shiftCap: 0,
+          startMode: "current",
+          capacity: 500 * T,
+          currentContents: { curiosity: 100 * T, integrity: 100 * T, kindness: 100 * T, resilience: 100 * T },
+          currentHumility: 0,
+        },
+      });
+      expect(total(result)).toBe(2);
+      expect(launchesOf(result, "HENERPRISE", "EPIC")).toBe(2);
+      expect(shortBy(result)).toBeCloseTo(4, 5);
+      expect(result.virtueTanks!.goalsUnmet).toBe(true);
+    },
+    SOLVER_TIMEOUT_MS
+  );
+});
+
+describe("a finish time", () => {
+  it(
+    "fits as many launches as the time allows",
+    async () => {
+      // A day fits seven 3.2-hour shorts per slot and no 38.4-hour extended.
+      const result = await plan([extended, chickShort], 100, [], { finishWithinSeconds: 24 * 3600 });
+      expect(launchesOf(result, "HENERPRISE")).toBe(0);
+      expect(launchesOf(result, "CHICKFIANT", "SHORT")).toBe(21);
+      expect(result.schedule.totalSeconds).toBeLessThanOrEqual(24 * 3600);
+      expect(shortBy(result)).toBeCloseTo(79, 5);
+      expect(result.budget).toEqual({ finishWithinSeconds: 24 * 3600 });
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
+    "changes nothing when the goals fit",
+    async () => {
+      const free = await plan([extended, chickShort], 6, []);
+      const result = await plan([extended, chickShort], 6, [], { finishWithinSeconds: 7 * 24 * 3600 });
+      expect(shortBy(result)).toBe(0);
+      expect(result.schedule.totalSeconds).toBe(free.schedule.totalSeconds);
+      expect(result.notes.some((note) => note.includes("can't be reached"))).toBe(false);
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
+    "counts the slots ships in the air still hold",
+    async () => {
+      const profile: PlayerProfile = {
+        ...profileFor([extended, chickShort]),
+        inFlightMissions: [0, 1].map(() => ({
+          ship: "CHICKFIANT", durationType: "SHORT", status: "EXPLORING", level: 0, capacity: 1, targetAfxId: null,
+          secondsRemaining: 12 * 3600,
+        })),
+      };
+      const result = await plan([extended, chickShort], 100, [], { finishWithinSeconds: 24 * 3600 }, profile);
+      // Two slots are busy for 12 hours: 3 + 3 + 7 shorts fit.
+      expect(launchesOf(result, "CHICKFIANT", "SHORT")).toBe(13);
+      expect(result.schedule.totalSeconds).toBeLessThanOrEqual(24 * 3600);
+    },
+    SOLVER_TIMEOUT_MS
+  );
+
+  it(
+    "combines with only the locked launches",
+    async () => {
+      const result = await plan([extended, chickShort], 100, [
+        { ship: "CHICKFIANT", durationType: "SHORT", targetAfxId: null, launches: 5 },
+      ], { onlyLockedLaunches: true, finishWithinSeconds: 24 * 3600 });
+      expect(total(result)).toBe(5);
+      expect(result.budget).toEqual({ onlyLockedLaunches: true, finishWithinSeconds: 24 * 3600 });
+      expect(result.notes[0]).toContain("With only the locked launches and launches all back within 1d,");
+    },
+    SOLVER_TIMEOUT_MS
+  );
+});
+
 describe("locked launch rows", () => {
   it("keep valid rows only, untargeted for ships that can't target", () => {
     expect(

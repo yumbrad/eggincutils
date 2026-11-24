@@ -280,6 +280,20 @@ export type PlannerResult = {
   /** Path of Virtue tank mode only: the plan split into fuel tanks and refuel loops. */
   virtueTanks?: VirtueTankPlannerResult;
   dubcap?: DubcapPlan;
+  /** The plan's budget when it had one besides the shift cap (PlannerOptions.onlyLockedLaunches, finishWithinSeconds). */
+  budget?: PlanBudget;
+};
+
+/**
+ * A budget the goals have to fit in: only the locked launches, or a finish
+ * time. Goals it can't reach are left short, as far along as it gets them.
+ */
+export type PlanBudget = {
+  onlyLockedLaunches?: boolean;
+  /** Seconds from when the plan was built. */
+  finishWithinSeconds?: number;
+  /** The plan still runs past the finish time (its schedule is longer than the solve's bound). */
+  overFinishTime?: boolean;
 };
 
 /** What the solver produces: the launches still to be made, before the
@@ -313,6 +327,16 @@ export type PlannerOptions = {
    * the locks ask for.
    */
   lockOnlyShipDurations?: string[];
+  /**
+   * Fly the locked launches and nothing else: the plan picks targets for
+   * any-target rows and gets the goals as far as those launches allow.
+   */
+  onlyLockedLaunches?: boolean;
+  /**
+   * Finish within this many seconds from now (in-air ships included): the
+   * plan gets the goals as far as that time allows.
+   */
+  finishWithinSeconds?: number;
   selectedConsumptionItemIds?: string[];
   maxSolveMs?: number;
   disableMissionYieldIndex?: boolean;
@@ -719,23 +743,29 @@ function distributeLaunchesAcrossLanes(launchesRaw: number, durationSecondsRaw: 
     return allocations;
   }
 
+  // Each launch goes to the lane that frees up first, which is the shortest
+  // schedule for launches of one length. Lanes within one launch of the
+  // emptiest take turns, so whole rounds of turns go at once while they stay
+  // below the next lane.
   while (remaining > 0) {
     const order = laneOrderByLoad(projected);
-    const first = order[0];
-    const second = order[1];
-    const gap = projected[second] - projected[first];
-    let chunk = 1;
-    if (gap > 0) {
-      chunk = Math.ceil(gap / durationSeconds);
+    const minLoad = projected[order[0]];
+    const turns = order.filter((lane) => projected[lane] < minLoad + durationSeconds - SCORE_EPS);
+    const next = order.find((lane) => !turns.includes(lane));
+    const highestTurn = Math.max(...turns.map((lane) => projected[lane]));
+    const room = next === undefined ? Number.POSITIVE_INFINITY : Math.floor((projected[next] - highestTurn) / durationSeconds + SCORE_EPS);
+    const rounds = Math.min(room, Math.floor(remaining / turns.length));
+    if (rounds >= 1) {
+      for (const lane of turns) {
+        allocations[lane] += rounds;
+        projected[lane] += rounds * durationSeconds;
+      }
+      remaining -= rounds * turns.length;
     } else {
-      const minLoad = projected[first];
-      const tiedCount = order.filter((lane) => Math.abs(projected[lane] - minLoad) < SCORE_EPS).length;
-      chunk = Math.floor(remaining / Math.max(1, tiedCount));
+      allocations[order[0]] += 1;
+      projected[order[0]] += durationSeconds;
+      remaining -= 1;
     }
-    const assign = Math.max(1, Math.min(remaining, chunk));
-    allocations[first] += assign;
-    projected[first] += assign * durationSeconds;
-    remaining -= assign;
   }
 
   return allocations;
@@ -1876,7 +1906,67 @@ type LockedLaunchSolveOptions = {
   /** The ordinary locks fly first: before a fresh dubcap, so its model counts them as prep. */
   first: boolean;
   onlyShipDurations: string[];
+  /** They are the plan's only launches (PlannerOptions.onlyLockedLaunches). */
+  exact?: boolean;
 };
+
+/**
+ * What a plan has to fit in besides the shift cap (PlannerOptions
+ * onlyLockedLaunches and finishWithinSeconds). Either one makes the solve a
+ * partial plan, as a shift cap that can't reach the goals does: the most goal
+ * completion, then progress toward the goals left short, then the fastest
+ * plan at that.
+ */
+type PlanBudgetSolveOptions = {
+  /** The locked launches are the only ones (LockedLaunchSolveOptions.exact). */
+  onlyLocked?: boolean;
+  deadline?: PlanDeadlineSolveOptions;
+};
+
+type PlanDeadlineSolveOptions = {
+  /** Seconds from now by which every launch is back. */
+  seconds: number;
+  /** When each mission slot frees up from its in-air ship. */
+  laneStartSeconds: number[];
+  /** Launches with no mission variable that still hold slots: no-yield prep, the partly fueled ship. */
+  fixedLaunches: Array<{ durationSeconds: number; launches: number }>;
+};
+
+/** Solve time limit for each stage of a plan with a budget, which otherwise has none on the main farm. */
+const BUDGET_PLAN_SOLVE_TIME_LIMIT_SECONDS = 60;
+/** Re-plans with a tighter finish time when a plan's schedule runs past the one asked for. */
+const FINISH_TIME_MAX_RETRIES = 3;
+
+/**
+ * Rows that keep a plan within a finish time on three mission slots, each
+ * free once its in-air ship lands: the slot time fits, and for each launch
+ * length, no more launches at least that long than the slots have room for.
+ * Both are necessary for any schedule; the planner checks the real one after.
+ */
+function deadlineRows(deadline: PlanDeadlineSolveOptions, actions: MissionAction[], missionVars: string[]): string[] {
+  const room = [0, 1, 2].map((lane) => Math.max(0, deadline.seconds - Math.max(0, deadline.laneStartSeconds[lane] || 0)));
+  const fixed = deadline.fixedLaunches.filter((entry) => entry.launches > 0 && entry.durationSeconds > 0);
+  const fixedSlot = fixed.reduce((sum, entry) => sum + Math.round(entry.launches) * entry.durationSeconds, 0);
+  const rows: string[] = [];
+  if (actions.length === 0) {
+    return rows;
+  }
+  const slotTerms = actions.map((action, index) => ({ coefficient: action.durationSeconds, variable: missionVars[index] }));
+  rows.push(`  dl_s: ${formatLinearExpression(slotTerms)} <= ${formatLpNumber(Math.max(0, Math.floor(room.reduce((a, b) => a + b, 0) - fixedSlot)))}`);
+  const durations = Array.from(new Set(actions.map((action) => action.durationSeconds).filter((seconds) => seconds > 0))).sort((a, b) => a - b);
+  durations.forEach((durationSeconds, index) => {
+    const terms = actions.flatMap((action, actionIndex) =>
+      action.durationSeconds >= durationSeconds ? [{ coefficient: 1, variable: missionVars[actionIndex] }] : []
+    );
+    const slots = room.reduce((sum, seconds) => sum + Math.floor(seconds / durationSeconds + SCORE_EPS), 0);
+    const fixedLong = fixed.reduce((sum, entry) => sum + (entry.durationSeconds >= durationSeconds ? Math.round(entry.launches) : 0), 0);
+    // Rows that every plan meets anyway only slow the solve.
+    if (slots - fixedLong < 100_000) {
+      rows.push(`  dl_r_${index}: ${formatLinearExpression(terms)} <= ${formatLpNumber(Math.max(0, slots - fixedLong))}`);
+    }
+  });
+  return rows;
+}
 
 function formatLpNumber(value: number): string {
   if (!Number.isFinite(value)) {
@@ -2489,6 +2579,8 @@ async function solveUnifiedCraftMissionPlan(options: {
   craftSkeleton?: CraftModelSkeleton;
   /** Path of Virtue tank mode (virtue objective only): fuel tank, refuel loop and shift cap rows. */
   virtueTank?: VirtueTankSolveOptions;
+  /** A budget besides the shift cap: makes this a partial plan (PlanBudgetSolveOptions). */
+  budget?: PlanBudgetSolveOptions;
   onSolveMetrics?: (metrics: UnifiedSolveMetrics) => void;
   solverFn?: SolverFunction;
 }): Promise<UnifiedPlan> {
@@ -2519,6 +2611,7 @@ async function solveUnifiedCraftMissionPlan(options: {
     consumptionOptions = [],
     craftSkeleton,
     virtueTank,
+    budget,
     onSolveMetrics,
     solverFn: solverFnOption,
   } = options;
@@ -2561,15 +2654,16 @@ async function solveUnifiedCraftMissionPlan(options: {
   const normalizedTimeRef = Math.max(1, timeRef);
   const objectiveContext = normalizeObjectiveContext(objectiveMode, priorityTime, minimumTimePriority);
   const tankModel = virtueTank && objectiveContext.mode === "virtueFuel" ? buildVirtueTankModel(actions, virtueTank) : null;
-  const partialTankPlan = tankModel !== null && Boolean(virtueTank!.softDemand);
+  // Partial plans: a shift cap too low for the goals (softDemand), or a budget.
+  const partialPlan = (tankModel !== null && Boolean(virtueTank!.softDemand)) || Boolean(budget);
   const craftShortfallVars = new Map(
-    partialTankPlan ? craftModels.filter((model) => model.craftFloor > 0).map((model) => [model.itemKey, `uc_${model.craftVar}`]) : []
+    partialPlan ? craftModels.filter((model) => model.craftFloor > 0).map((model) => [model.itemKey, `uc_${model.craftVar}`]) : []
   );
   // Equal weight per goal, scaled to keep even million-copy goals numerically
   // significant. Only goal rows may have slack: missing ingredients cannot
   // be used to manufacture crafts in a partial plan.
   const completionScale = 1_000_000;
-  const goalShortfallTerms = partialTankPlan
+  const goalShortfallTerms = partialPlan
     ? [
         ...itemKeys.filter((key) => (demandByItem.get(key) || 0) > 0).map((key) => ({
           coefficient: completionScale / demandByItem.get(key)!, variable: unmetVarByItem.get(key)!,
@@ -2584,7 +2678,7 @@ async function solveUnifiedCraftMissionPlan(options: {
   // leave short (VirtueTankSolveOptions.softDemand): progress crafts (pc_)
   // are fractional crafts from what the plan leaves over, with their own item
   // rows (pp_) on top of the real ones, so they never feed a real craft.
-  const progressLayer = partialTankPlan && !lpRelaxation;
+  const progressLayer = partialPlan && !lpRelaxation;
   const progressCraftVar = (model: CraftCostModel) => `pc_${model.craftVar}`;
   const progressCraftShortfallVar = (model: CraftCostModel) => `ucp_${model.craftVar}`;
   const progressUnmetVar = (itemIndex: number) => `up_${itemIndex}`;
@@ -2681,7 +2775,7 @@ async function solveUnifiedCraftMissionPlan(options: {
   }
 
   const unmetPenaltyCoeff = maxObjectiveCoeff * 1_000_000;
-  if (!partialTankPlan) {
+  if (!partialPlan) {
     for (const itemKey of itemKeys) {
       objectiveTerms.push({ coefficient: unmetPenaltyCoeff, variable: unmetVarByItem.get(itemKey)! });
     }
@@ -2723,7 +2817,7 @@ async function solveUnifiedCraftMissionPlan(options: {
       });
     }
   }
-  lines.push(`  obj: ${formatLinearExpression(partialTankPlan ? goalShortfallTerms : objectiveTerms)}`);
+  lines.push(`  obj: ${formatLinearExpression(partialPlan ? goalShortfallTerms : objectiveTerms)}`);
 
   lines.push("Subject To");
   lines.push(...dubcapModel.constraints);
@@ -2843,7 +2937,9 @@ async function solveUnifiedCraftMissionPlan(options: {
     if (indexes.length === 0) {
       throw new Error(`locked ${group.ship} ${group.durationType} launches have no compatible missions`);
     }
-    lines.push(`  lk_${groupIndex}: ${indexes.map((index) => missionVars[index]).join(" + ")} >= ${formatLpNumber(group.launches)}`);
+    lines.push(
+      `  lk_${groupIndex}: ${indexes.map((index) => missionVars[index]).join(" + ")} ${lockedLaunches?.exact ? "=" : ">="} ${formatLpNumber(group.launches)}`
+    );
     lockedConstraintCount += 1;
     group.targets.forEach((target, targetIndex) => {
       const targeted = indexes.filter((index) => lockedTargetMatches(target.targetAfxId, actions[index].targetAfxId));
@@ -2856,6 +2952,22 @@ async function solveUnifiedCraftMissionPlan(options: {
       lockedConstraintCount += 1;
     });
   });
+  // Only the locked launches: every launch belongs to a lock.
+  if (lockedLaunches?.exact) {
+    const unlocked = actions.flatMap((action, index) => (lockedGroups.some((group) => lockedGroupMatches(group, action)) ? [] : [index]));
+    if (unlocked.length > 0) {
+      lines.push(`  lko: ${unlocked.map((index) => missionVars[index]).join(" + ")} <= 0`);
+      lockedConstraintCount += 1;
+    }
+  }
+  if (budget?.deadline) {
+    const rows = deadlineRows(budget.deadline, actions, missionVars);
+    if (dubcapModel.groups.length > 0) {
+      rows.push(`  dl_db: dbmk <= ${formatLpNumber(budget.deadline.seconds / 3600)}`);
+    }
+    lines.push(...rows);
+    lockedConstraintCount += rows.length;
+  }
   (lockedLaunches?.onlyShipDurations ?? []).forEach((shape, shapeIndex) => {
     const indexes = actions.flatMap((action, index) => (`${action.ship}|${action.durationType}` === shape ? [index] : []));
     const cap = lockedGroups
@@ -3234,7 +3346,7 @@ async function solveUnifiedCraftMissionPlan(options: {
   lines.push("Bounds");
   lines.push(...dubcapModel.bounds);
   for (const model of craftModels) {
-    lines.push(`  ${formatLpNumber(partialTankPlan ? 0 : model.craftFloor)} <= ${model.craftVar} <= ${formatLpNumber(model.craftBound)}`);
+    lines.push(`  ${formatLpNumber(partialPlan ? 0 : model.craftFloor)} <= ${model.craftVar} <= ${formatLpNumber(model.craftBound)}`);
     const shortfallVar = craftShortfallVars.get(model.itemKey);
     if (shortfallVar) {
       lines.push(`  0 <= ${shortfallVar} <= ${formatLpNumber(model.craftFloor)}`);
@@ -3266,7 +3378,7 @@ async function solveUnifiedCraftMissionPlan(options: {
     });
   }
   for (const [itemKey, variable] of unmetVarByItem) {
-    lines.push(partialTankPlan
+    lines.push(partialPlan
       ? `  0 <= ${variable} <= ${formatLpNumber(demandByItem.get(itemKey) || 0)}`
       : hardDemand ? `  0 <= ${variable} <= 0` : `  ${variable} >= 0`);
   }
@@ -3363,7 +3475,13 @@ async function solveUnifiedCraftMissionPlan(options: {
   const useExactMipGap = !lpRelaxation && (strictGeObjective || hasGeCostUpperBound);
   const effectiveTimeLimitSeconds =
     timeLimitSeconds ??
-    (tankModel ? VIRTUE_TANK_SOLVE_TIME_LIMIT_SECONDS : dubcapModel.groups.length > 0 ? DUBCAP_SOLVE_TIME_LIMIT_SECONDS : undefined);
+    (tankModel
+      ? VIRTUE_TANK_SOLVE_TIME_LIMIT_SECONDS
+      : dubcapModel.groups.length > 0
+        ? DUBCAP_SOLVE_TIME_LIMIT_SECONDS
+        : budget
+          ? BUDGET_PLAN_SOLVE_TIME_LIMIT_SECONDS
+          : undefined);
   // The fewest-shifts search only needs the shift count proven: stop once the
   // bound rules out one shift fewer, rather than closing 1% of a shift-sized
   // objective, which can take minutes. Mission time is re-optimized at N.
@@ -3376,7 +3494,7 @@ async function solveUnifiedCraftMissionPlan(options: {
       ? { objective_bound: virtueTank!.objectiveCutoff }
       : {};
   const solveOptions = {
-    ...(lpRelaxation && integerVars.length === 0 ? {} : { mip_rel_gap: useExactMipGap || partialTankPlan ? 0 : 0.01, ...minShiftGap, ...objectiveCutoff }),
+    ...(lpRelaxation && integerVars.length === 0 ? {} : { mip_rel_gap: useExactMipGap || partialPlan ? 0 : 0.01, ...minShiftGap, ...objectiveCutoff }),
     ...(effectiveTimeLimitSeconds !== undefined && Number.isFinite(effectiveTimeLimitSeconds) && effectiveTimeLimitSeconds > 0
       ? { time_limit: effectiveTimeLimitSeconds }
       : {}),
@@ -3387,7 +3505,7 @@ async function solveUnifiedCraftMissionPlan(options: {
       result.Status === "Time limit reached" && Number.isFinite(result.ObjectiveValue) &&
       Math.abs(result.ObjectiveValue as number) < 1e20 && Object.keys(result.Columns || {}).length > 0
     );
-  if (partialTankPlan && usableIncumbent(solution)) {
+  if (partialPlan && usableIncumbent(solution)) {
     // Lexicographic solve: time and shifts may only improve after retaining
     // the best completion found. A failed polish keeps the first incumbent.
     const shortfallBound = goalShortfallTerms.reduce(
@@ -3413,7 +3531,9 @@ async function solveUnifiedCraftMissionPlan(options: {
     // goals and no more shifts, get the goals left short as far along as the
     // fuel it leaves allows (progress crafts), then as fast as possible at
     // that progress. Launches that only bring part of a craft's ingredients
-    // are worth making now.
+    // are worth making now. A budget (only the locked launches, a finish
+    // time) leaves no spare launches to add, so its plan may instead change
+    // which launches it makes, keeping the goals it completes.
     const goalsShort = shortfallBound > 1e-6;
     if (progressLayer && goalsShort && progressShortfallTerms.length > 0) {
       const columnValue = (variable: string) => solution.Columns?.[variable]?.Primal || 0;
@@ -3425,12 +3545,14 @@ async function solveUnifiedCraftMissionPlan(options: {
           `  shift_budget: ${formatLinearExpression(shiftTerms)} <= ${formatLpNumber(shiftsTaken + 1e-6)}`);
       }
       // The plan's own launches stay; spare fuel only adds to them.
-      missionVars.forEach((variable, index) => {
-        const launches = Math.round(columnValue(variable));
-        if (launches > 0) {
-          progressLines.splice(progressLines.indexOf("Bounds"), 0, `  keep_${index}: ${variable} >= ${launches}`);
-        }
-      });
+      if (!budget) {
+        missionVars.forEach((variable, index) => {
+          const launches = Math.round(columnValue(variable));
+          if (launches > 0) {
+            progressLines.splice(progressLines.indexOf("Bounds"), 0, `  keep_${index}: ${variable} >= ${launches}`);
+          }
+        });
+      }
       try {
         const progressed = await solve(progressLines.join("\n"), { ...solveOptions, mip_rel_gap: 0, ...polishTimeLimit() });
         if (usableIncumbent(progressed)) {
@@ -3479,7 +3601,7 @@ async function solveUnifiedCraftMissionPlan(options: {
   // incumbents are often the do-nothing plan. A timed-out tank solve is kept
   // only if it has an incumbent that meets every goal (checked below).
   const acceptTankTimeLimit =
-    (tankModel !== null || dubcapModel.groups.length > 0) &&
+    (tankModel !== null || dubcapModel.groups.length > 0 || partialPlan) &&
     status === "Time limit reached" &&
     Number.isFinite(solution.ObjectiveValue as number) &&
     Math.abs(solution.ObjectiveValue as number) < 1e20 &&
@@ -3525,7 +3647,7 @@ async function solveUnifiedCraftMissionPlan(options: {
     actions,
     missionCounts,
     targetCraftedOnlyKeys: effectiveTargetCraftedOnlyKeys,
-    craftFloorByItem: partialTankPlan
+    craftFloorByItem: partialPlan
       ? new Map(Array.from(craftFloorByItem, ([key, floor]) => [key, Math.min(floor, crafts[key] || 0)]))
       : craftFloorByItem,
   });
@@ -3566,7 +3688,7 @@ async function solveUnifiedCraftMissionPlan(options: {
     const progressed = goalProgress.filter((goal) => goal.crafts >= 0.01);
     if (progressed.length > 0) {
       notes.push(
-        `Spare fuel within the cap goes to launches toward the goals it leaves short: ${progressed
+        `${tankModel ? "Spare fuel within the cap goes to launches" : "The plan's launches also go"} toward the goals it leaves short: ${progressed
           .map((goal) => isShipStarsItem(goal.itemKey)
             ? `${itemKeyToTierLabel(goal.itemKey)} gets ${(goal.crafts / STAR_POINT_UNITS).toFixed(1)} more launch points`
             : `${itemKeyToTierLabel(goal.itemKey)} ${goal.crafts >= 0.995
@@ -3576,7 +3698,7 @@ async function solveUnifiedCraftMissionPlan(options: {
       );
     }
   }
-  if (acceptTankTimeLimit && !partialTankPlan && Object.values(remainingDemand).some((qty) => qty > 1e-6)) {
+  if (acceptTankTimeLimit && !partialPlan && Object.values(remainingDemand).some((qty) => qty > 1e-6)) {
     throw new Error(`unified HiGHS solve status '${status}' before meeting every goal`);
   }
   let virtueShifts: number | undefined;
@@ -3608,7 +3730,7 @@ async function solveUnifiedCraftMissionPlan(options: {
         (sum, term) => sum + (term.coefficient / completionScale) * Math.max(0, solution.Columns?.[term.variable]?.Primal || 0), 0
       ),
     } : {}),
-    ...(partialTankPlan ? {
+    ...(partialPlan ? {
       goalShortfallScore:
         itemKeys.reduce((sum, key) => sum + ((demandByItem.get(key) || 0) > 0 ? remainingDemand[key] / demandByItem.get(key)! : 0), 0) +
         craftModels.reduce((sum, model) => sum + (model.craftFloor > 0 ? Math.max(0, model.craftFloor - (crafts[model.itemKey] || 0)) / model.craftFloor : 0), 0),
@@ -6758,32 +6880,88 @@ export async function planForTarget(
         }
       : profile;
 
-  const result = virtueTank
-    ? await planVirtueTankLaunches(
-        planningProfile,
-        targetItemId,
-        quantity,
-        priorityTimeRaw,
-        plannerOptions,
-        virtueTank,
-        inAirLanes,
-        fueling?.launch
-      )
-    : await planForNewLaunches(
-        planningProfile,
-        targetItemId,
-        quantity,
-        priorityTimeRaw,
-        plannerOptions,
-        undefined,
-        inAirLanes
-      );
-
-  const scheduled = withInFlightSchedule(result, inFlight);
+  const planWithin = async (finishWithinSeconds: number | undefined): Promise<PlannerResult> => {
+    const options = finishWithinSeconds === undefined ? plannerOptions : { ...plannerOptions, finishWithinSeconds };
+    const planned = virtueTank
+      ? await planVirtueTankLaunches(planningProfile, targetItemId, quantity, priorityTimeRaw, options, virtueTank, inAirLanes, fueling?.launch)
+      : await planForNewLaunches(planningProfile, targetItemId, quantity, priorityTimeRaw, options, undefined, inAirLanes);
+    return withInFlightSchedule(planned, inFlight);
+  };
+  const finishWithin =
+    plannerOptions.finishWithinSeconds !== undefined && Number.isFinite(plannerOptions.finishWithinSeconds)
+      ? Math.max(0, Math.round(plannerOptions.finishWithinSeconds))
+      : undefined;
+  let scheduled = await planWithin(finishWithin);
+  // The solve keeps a plan within the finish time by bounds every schedule
+  // has to meet, so the schedule can still run over: re-plan with the time
+  // shortened by the overrun until it fits, or keep the plan closest to it.
+  let overFinishTime = false;
+  if (finishWithin !== undefined) {
+    let solveSeconds = finishWithin;
+    let closest = scheduled;
+    // Ships already in the air that land after the finish time put it out of reach.
+    const reachable = inFlight.secondsRemaining <= finishWithin;
+    for (let retry = 0; reachable && retry < FINISH_TIME_MAX_RETRIES && scheduled.schedule.totalSeconds > finishWithin; retry += 1) {
+      solveSeconds -= scheduled.schedule.totalSeconds - finishWithin;
+      if (solveSeconds <= 0) {
+        break;
+      }
+      try {
+        plannerOptions.onProgress?.({
+          phase: "refinement",
+          message: `The plan runs past the finish time; re-planning to finish ${missionDurationLabel(finishWithin - solveSeconds)} sooner…`,
+          elapsedMs: 0,
+        });
+      } catch {
+        // Ignore progress callback errors.
+      }
+      scheduled = await planWithin(solveSeconds);
+      if (scheduled.schedule.totalSeconds < closest.schedule.totalSeconds) {
+        closest = scheduled;
+      }
+    }
+    if (scheduled.schedule.totalSeconds > finishWithin) {
+      scheduled = closest;
+      overFinishTime = true;
+    }
+  }
+  const onlyLocked = Boolean(plannerOptions.onlyLockedLaunches) && (plannerOptions.lockedLaunches?.length ?? 0) > 0;
+  if (onlyLocked || finishWithin !== undefined) {
+    scheduled.budget = {
+      ...(onlyLocked ? { onlyLockedLaunches: true } : {}),
+      ...(finishWithin !== undefined ? { finishWithinSeconds: finishWithin } : {}),
+      ...(overFinishTime ? { overFinishTime: true } : {}),
+    };
+    scheduled.notes = [...budgetNotes(scheduled, onlyLocked, finishWithin, overFinishTime), ...scheduled.notes];
+  }
   if (starShips.notes.length > 0) {
     scheduled.notes = [...starShips.notes, ...scheduled.notes];
   }
   return shiny.shinyGoals.length > 0 ? { ...scheduled, shinyGoals: shiny.shinyGoals } : scheduled;
+}
+
+/** What a plan with a budget says about it, ahead of its other notes. */
+function budgetNotes(plan: PlannerResult, onlyLocked: boolean, finishWithin: number | undefined, overFinishTime: boolean): string[] {
+  const notes: string[] = [];
+  const short = plan.targetBreakdowns.some((goal) => goal.shortfall > 1e-6);
+  const limits = [
+    ...(onlyLocked ? ["only the locked launches"] : []),
+    ...(finishWithin !== undefined ? [`launches all back within ${missionDurationLabel(finishWithin)}`] : []),
+  ].join(" and ");
+  if (short) {
+    notes.push(`With ${limits}, some goals can't be reached. Planned as far toward them as possible.`);
+  }
+  if (onlyLocked) {
+    notes.push("Only the locked launches: the plan makes no other launches and picks targets for the any-target ones.");
+  }
+  if (overFinishTime) {
+    notes.push(
+      `No plan found fits the finish time exactly: this one takes ${missionDurationLabel(plan.schedule.totalSeconds)} of the ${missionDurationLabel(finishWithin!)} allowed${
+        plan.inFlight.secondsRemaining > finishWithin! ? ", since ships already in the air land after it" : ""
+      }.`
+    );
+  }
+  return notes;
 }
 
 /**
@@ -6794,7 +6972,9 @@ export async function planForTarget(
 function withLockedLaunchShips(plannerOptions: PlannerOptions, profile: PlayerProfile): PlannerOptions {
   const locks = sanitizeLockedLaunches(plannerOptions.lockedLaunches);
   if (locks.length === 0) {
-    return plannerOptions.lockedLaunches ? { ...plannerOptions, lockedLaunches: undefined } : plannerOptions;
+    return plannerOptions.lockedLaunches || plannerOptions.onlyLockedLaunches
+      ? { ...plannerOptions, lockedLaunches: undefined, onlyLockedLaunches: undefined }
+      : plannerOptions;
   }
   for (const lock of locks) {
     const level = profile.shipLevels.find((entry) => entry.ship === lock.ship);
@@ -6802,14 +6982,25 @@ function withLockedLaunchShips(plannerOptions: PlannerOptions, profile: PlayerPr
       throw new LockedLaunchError(`Locked launches: ${shipDisplayName(lock.ship)} isn't unlocked on this save yet.`);
     }
   }
+  const lockedShapes = Array.from(new Set(locks.map((lock) => `${lock.ship}|${lock.durationType}`)));
+  // Only the locked launches: Ships doesn't matter, the locks name every launch.
+  if (plannerOptions.onlyLockedLaunches) {
+    return {
+      ...plannerOptions,
+      lockedLaunches: locks,
+      allowedShipDurations: lockedShapes.map((shape) => {
+        const [ship, durationType] = shape.split("|");
+        return { ship, durationType };
+      }),
+      lockOnlyShipDurations: [],
+    };
+  }
   const allowed = plannerOptions.allowedShipDurations;
   if (!allowed || allowed.length === 0) {
     return { ...plannerOptions, lockedLaunches: locks };
   }
   const allowedShapes = new Set(allowed.map((entry) => `${entry.ship}|${entry.durationType}`));
-  const lockOnly = Array.from(new Set(locks.map((lock) => `${lock.ship}|${lock.durationType}`))).filter(
-    (shape) => !allowedShapes.has(shape)
-  );
+  const lockOnly = lockedShapes.filter((shape) => !allowedShapes.has(shape));
   return {
     ...plannerOptions,
     lockedLaunches: locks,
@@ -7057,6 +7248,9 @@ async function planVirtueTankLaunches(
     }
   }
   const currentHumility = Math.max(0, Number.isFinite(tank.currentHumility) ? (tank.currentHumility as number) : 0);
+  const budgeted =
+    (Boolean(plannerOptions.onlyLockedLaunches) && (plannerOptions.lockedLaunches?.length ?? 0) > 0) ||
+    plannerOptions.finishWithinSeconds !== undefined;
   const reportProgress = (phase: PlannerProgressEvent["phase"], message: string) => {
     try {
       plannerOptions.onProgress?.({ phase, message, elapsedMs: Date.now() - startedAtMs });
@@ -7223,7 +7417,7 @@ async function planVirtueTankLaunches(
     }
     if (goalsUnmet) {
       notes.push("Partial plan: maximize the sum of each goal's completion fraction, then minimize mission time, shifts and launch effort. Ingredient balances remain fully supplied.");
-      if (neededShifts === undefined) {
+      if (neededShifts === undefined && !budgeted) {
         notes.unshift(`Some goals could not be reached within ${shiftCap} shifts. Planned as much as possible within the selected cap.`);
       }
     }
@@ -7397,6 +7591,11 @@ async function planVirtueTankLaunches(
     return finish(fewest, { neededShifts, proven: isProvenFewest(neededShifts), note: noteFor?.(fewest), faster });
   };
 
+  // A budget besides the cap (only the locked launches, a finish time) makes
+  // the plan a partial one: as far toward the goals as both allow.
+  if (budgeted) {
+    return finish(await partialWithinCap());
+  }
   const atCap = await planWithinCap(shiftCap);
   if (atCap.fits && atCap.plan) {
     const atCapShifts = packedShifts(atCap.plan);
@@ -7652,8 +7851,20 @@ async function planForNewLaunches(
   // Ordinary locks fly first, except while a dubcap is already running:
   // every launch in it is doubled, so they wait until it's over.
   const lockedLaunchesFirst = !(plannerOptions.includeDubcap && liveDubcapWindow(profile.liveDubcap));
+  // A budget makes the plan a partial one (PlanBudgetSolveOptions).
+  const onlyLocked = hasLocks && Boolean(plannerOptions.onlyLockedLaunches);
+  const finishWithinSeconds =
+    plannerOptions.finishWithinSeconds !== undefined && Number.isFinite(plannerOptions.finishWithinSeconds)
+      ? Math.max(0, plannerOptions.finishWithinSeconds)
+      : undefined;
+  const budgeted = onlyLocked || finishWithinSeconds !== undefined;
   const lockedSolve: LockedLaunchSolveOptions | undefined = hasLocks
-    ? { groups: lockedGroups, first: lockedLaunchesFirst, onlyShipDurations: plannerOptions.lockOnlyShipDurations ?? [] }
+    ? {
+        groups: lockedGroups,
+        first: lockedLaunchesFirst,
+        onlyShipDurations: plannerOptions.lockOnlyShipDurations ?? [],
+        ...(onlyLocked ? { exact: true } : {}),
+      }
     : undefined;
   const isLockedShape = (action: MissionAction) =>
     lockedGroups.some((group) => group.ship === action.ship && group.durationType === action.durationType);
@@ -7686,7 +7897,7 @@ async function planForNewLaunches(
     }
   }
   // What doesn't scale with a solved block: craft-count floors, stars and locked launches.
-  const hasUnscaledGoals = hasCraftGoals || normalizedTargets.starGoals.size > 0 || hasLocks;
+  const hasUnscaledGoals = hasCraftGoals || normalizedTargets.starGoals.size > 0 || hasLocks || budgeted;
   const targetKey = normalizedTargets.primaryTargetKey;
   // Tank mode swaps the fuel/time slider for the shift cap: mission time is the
   // whole objective, and fuel only counts through the shifts it forces.
@@ -7804,6 +8015,7 @@ async function planForNewLaunches(
     !plannerOptions.disableNormalFastIncumbent &&
     !plannerOptions.includeDubcap &&
     !hasLocks &&
+    !budgeted &&
     quantityInt >= FAST_QUANTITY_ACCELERATION_MIN_QUANTITY
   ) {
     reportProgress({
@@ -7904,7 +8116,7 @@ async function planForNewLaunches(
   // for fuel as well as time instead (pruneVirtueTankActions), the same on
   // every path.
   const missionActionFilter =
-    !tankRun && !plannerOptions.includeDubcap && !hasLocks && missionYieldIndexEnabled(plannerOptions.disableMissionYieldIndex, injectedLootData)
+    !tankRun && !plannerOptions.includeDubcap && !hasLocks && !budgeted && missionYieldIndexEnabled(plannerOptions.disableMissionYieldIndex, injectedLootData)
     ? buildMissionActionFilterFromYieldIndex({
         relevantItems: closure,
         missionDropRarities,
@@ -7927,7 +8139,10 @@ async function planForNewLaunches(
     ? NORMAL_MODE_MAX_CANDIDATES
     : FAST_MODE_MAX_CANDIDATES;
   const candidateLimit = fastMode ? fastCandidateLimit : NORMAL_MODE_MAX_CANDIDATES;
-  const progressionCandidates = progressionDeduped.unique.slice(0, candidateLimit);
+  // Only the locked launches leaves no room for prep launches to level ships first.
+  const progressionCandidates = (
+    onlyLocked ? progressionDeduped.unique.filter((candidate) => candidate.prepSteps.length === 0) : progressionDeduped.unique
+  ).slice(0, candidateLimit);
   const candidateReuseKey = [
     progressionKey,
     `target:${targetKey}`,
@@ -7941,7 +8156,8 @@ async function planForNewLaunches(
     `fast:${fastMode ? 1 : 0}`,
     `dubcap:${plannerOptions.includeDubcap ? (profile.liveDubcap ? `live:${Math.round(profile.liveDubcap.secondsRemaining)}:${profile.liveDubcap.multiplier}` : 1) : 0}`,
     `filter:${missionActionFilter?.key || "none"}`,
-    `locks:${hasLocks ? `${lockedLaunchGroupsKey(lockedGroups)}:${lockedLaunchesFirst ? 1 : 0}:${lockedSolve!.onlyShipDurations.join(",")}` : "none"}`,
+    `locks:${hasLocks ? `${lockedLaunchGroupsKey(lockedGroups)}:${lockedLaunchesFirst ? 1 : 0}:${lockedSolve!.onlyShipDurations.join(",")}:${onlyLocked ? "only" : "also"}` : "none"}`,
+    `finish:${finishWithinSeconds ?? "none"}`,
     `tank:${
       tankRun
         ? [
@@ -8313,6 +8529,24 @@ async function planForNewLaunches(
     const fuelingLaunch = tankRun?.fuelingLaunch;
     const fuelingSlotSeconds = fuelingLaunch?.durationSeconds ?? 0;
     const fuelingLaunches = fuelingLaunch ? 1 : 0;
+    const budgetFor = (input: CandidateEvalInput): PlanBudgetSolveOptions | undefined =>
+      budgeted
+        ? {
+            ...(onlyLocked ? { onlyLocked: true } : {}),
+            ...(finishWithinSeconds !== undefined
+              ? {
+                  deadline: {
+                    seconds: finishWithinSeconds,
+                    laneStartSeconds: tankRun?.inAirLaneFreeSeconds ?? inAirLaneFreeSeconds,
+                    fixedLaunches: [
+                      ...input.prepNoYieldOptions.map(({ option, launches }) => ({ durationSeconds: option.durationSeconds, launches })),
+                      ...(fuelingLaunch ? [{ durationSeconds: fuelingLaunch.durationSeconds, launches: 1 }] : []),
+                    ],
+                  },
+                }
+              : {}),
+          }
+        : undefined;
     // What a candidate's no-yield prep (and the partly fueled ship) adds to
     // its tank score, which its solve objective leaves out: that share of the
     // slot time over three slots, plus the launch effort.
@@ -8479,6 +8713,7 @@ async function planForNewLaunches(
         consumptionOptions,
         craftSkeleton,
         virtueTank,
+        budget: budgetFor(input),
         solverFn,
         onSolveMetrics: (metrics) => {
           if (!optional) {
@@ -8590,6 +8825,7 @@ async function planForNewLaunches(
             lockedLaunches: lockedSolve,
             phasedChainConstraints: input.phasedChainConstraints,
             geCostUpperBound: baselineUnified.geCost,
+            budget: budgetFor(input),
             lpRelaxation: false,
             targetCraftedOnly,
             targetCraftedOnlyKeys: targetCraftedOnly ? normalizedTargets.targetCraftedOnlyKeys : undefined,
@@ -8654,7 +8890,7 @@ async function planForNewLaunches(
       b: { unmetTotal: number; weightedScore: number; geCost: number; fuelCost: number; totalSlotSeconds: number; totalLaunches: number }
     ): number => {
       const unmetDiff = a.unmetTotal - b.unmetTotal;
-      if (Math.abs(unmetDiff) > (tankRun?.softDemand ? 1e-9 : 1e-6)) {
+      if (Math.abs(unmetDiff) > (tankRun?.softDemand || budgeted ? 1e-9 : 1e-6)) {
         return unmetDiff;
       }
 
@@ -9419,7 +9655,7 @@ async function planForNewLaunches(
       }
       // A rounded relaxed plan knows nothing about whole tanks and loops, so
       // tank mode never falls back to one.
-      if (!best && !tankRun && !plannerOptions.includeDubcap && !hasLocks) {
+      if (!best && !tankRun && !plannerOptions.includeDubcap && !hasLocks && !budgeted) {
         const bestLp = lpScreened[0];
         if (bestLp) {
           best = {
@@ -9585,7 +9821,7 @@ async function planForNewLaunches(
       await tryScaledQuantityIncumbent();
     }
 
-    if (!plannerOptions.includeDubcap && objectiveMode === "ge" && !geOnlyMode && !fastMode && best.unmetTotal <= 1e-6 && best.geCost > SCORE_EPS) {
+    if (!plannerOptions.includeDubcap && !budgeted && objectiveMode === "ge" && !geOnlyMode && !fastMode && best.unmetTotal <= 1e-6 && best.geCost > SCORE_EPS) {
       const polishInput = await prepareCandidateInput(best.candidate);
       if (polishInput) {
         const baselineExpectedHours = estimateThreeSlotExpectedHours({
@@ -9830,7 +10066,7 @@ async function planForNewLaunches(
     const comparisonAvailableActions = outputActions;
     // Tank mode skips the monolithic incumbents: they solve without the tank
     // rows, and in benchmarks never beat a tank-mode plan.
-    if (outputUnmetTotal <= 1e-6 && !tankRun && !plannerOptions.includeDubcap && !hasLocks) {
+    if (outputUnmetTotal <= 1e-6 && !tankRun && !plannerOptions.includeDubcap && !hasLocks && !budgeted) {
       const monolithicCombos = chosenCombosForPlan(outputActions, outputUnified.missionCounts);
       if (monolithicCombos.length > 0) {
         const fullQuantityCraftSkeleton = getCraftSkeletonCached({
@@ -10379,9 +10615,12 @@ async function planForNewLaunches(
       throw error;
     }
     const details = error instanceof Error ? error.message : String(error);
-    // The heuristic fallback knows nothing of locked launches.
+    // The heuristic fallback knows nothing of locked launches or budgets.
     if (hasLocks && !tankRun && !plannerOptions.includeDubcap) {
       throw new Error(`Planning with locked launches failed (${details}).`);
+    }
+    if (budgeted && !tankRun && !plannerOptions.includeDubcap) {
+      throw new Error(`Planning ${onlyLocked ? "with only the locked launches" : "to a finish time"} failed (${details}).`);
     }
     // The heuristic fallback is fuel-blind: it would hand back a plan that
     // ignores the tank and the shift cap, so tank mode surfaces the failure.

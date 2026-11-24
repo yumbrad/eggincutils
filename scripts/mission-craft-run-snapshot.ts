@@ -48,6 +48,10 @@ const solveInputSnapshotSchema = z.object({
       .optional(),
     selectedConsumptionItemIds: z.array(z.string().min(1)).optional(),
     lockedLaunches: z.array(lockedLaunchSchema).optional(),
+    onlyLockedLaunches: z.boolean().optional(),
+    finishByMs: z.number().finite().optional(),
+    // The finish time as the plan got it, in seconds from when it was built.
+    finishWithinSeconds: z.number().finite().min(0).optional(),
     // Path of Virtue only; unset falls back the same way the planner page does.
     virtueShiftCap: virtueShiftCapSchema,
     virtueStartTank: virtueStartTankSchema,
@@ -881,6 +885,8 @@ async function run(options: CliOptions): Promise<RunDiagnostics> {
       allowedShipDurations: loaded.snapshot.request.allowedShipDurations,
       selectedConsumptionItemIds: loaded.snapshot.request.selectedConsumptionItemIds,
       lockedLaunches: loaded.snapshot.request.lockedLaunches,
+      onlyLockedLaunches: loaded.snapshot.request.onlyLockedLaunches,
+      finishWithinSeconds: loaded.snapshot.request.finishWithinSeconds,
       targetCraftedOnly: loaded.snapshot.request.targetCraftedOnly,
       onProgress: (event) => {
         progressEvents.push(event);
