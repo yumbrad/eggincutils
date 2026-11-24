@@ -3836,3 +3836,122 @@
 .finishByHint[data-past="1"] {
   color: var(--warn-ink);
 }
+
+/* Avoid sends while I sleep: bedtime and wake-up. */
+.finishByRow .sleepTime {
+  flex: 0 1 132px;
+}
+
+/* Start: now, a dubcap's start, or a set time. */
+.startRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.startRow .virtueOptSegment label {
+  padding-inline: 10px;
+}
+
+/* A clock timeline: nights behind the slots, relaunches that wait for the morning. */
+/* Drawn over the launches, so a night reads across the blocks it falls on. */
+.clockNight {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(24, 32, 90, 0.16);
+  pointer-events: none;
+}
+
+:global(:root[data-theme="dark"]) .clockNight {
+  background: rgba(0, 0, 8, 0.42);
+}
+
+.clockWait {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  border: 1px dashed color-mix(in oklab, var(--warn-ink), transparent 35%);
+  border-radius: 6px;
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in oklab, var(--warn-ink), transparent 80%) 0 3px,
+    transparent 3px 7px
+  );
+}
+
+.timelineBlock[data-alarm="1"] {
+  outline: 2px solid var(--warn-ink);
+  outline-offset: -2px;
+}
+
+.clockAxis {
+  position: relative;
+  height: 14px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 14px;
+}
+
+.clockAxis span {
+  position: absolute;
+  top: 0;
+  padding-left: 3px;
+  border-left: 1px solid color-mix(in oklab, var(--muted), transparent 50%);
+  white-space: nowrap;
+}
+
+.clockSummary {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 10px;
+  font-size: 12.5px;
+}
+
+.clockSummary p {
+  margin: 0;
+}
+
+.clockWaits summary {
+  cursor: pointer;
+}
+
+.clockWaits ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.clockWarn {
+  color: var(--warn-ink);
+}
+
+.clockHint {
+  padding: 6px 10px;
+  border: 1px solid color-mix(in oklab, var(--accent), transparent 60%);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--accent), transparent 92%);
+}
+
+.clockHintButton {
+  margin-left: 4px;
+  padding: 1px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.clockHintButton:hover {
+  background: color-mix(in oklab, var(--accent), transparent 85%);
+}
+
+.dubcapLane tr[data-alarm="1"] > td {
+  background: color-mix(in oklab, var(--warn-ink), transparent 90%);
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { projectInFlightMissions } from "./in-flight";
+import { profileAfter, projectInFlightMissions } from "./in-flight";
 import type { LootJson } from "./loot-data";
 import { parseInFlightMissions, type InFlightMission } from "./profile";
 
@@ -242,5 +242,28 @@ describe("parseInFlightMissions", () => {
       secondsRemaining: 1235,
     });
     expect(parsed[1].targetAfxId).toBeNull();
+  });
+});
+
+describe("profileAfter", () => {
+  const profile = {
+    inFlightMissions: [{ secondsRemaining: 100 }, { secondsRemaining: 5000 }],
+    liveDubcap: { secondsRemaining: 3000, multiplier: 2 },
+    eid: "x",
+  };
+
+  it("brings ships home and runs a live event down", () => {
+    const later = profileAfter(profile, 1000);
+    expect(later.inFlightMissions.map((mission) => mission.secondsRemaining)).toEqual([0, 4000]);
+    expect(later.liveDubcap).toEqual({ secondsRemaining: 2000, multiplier: 2 });
+    expect(later.eid).toBe("x");
+  });
+
+  it("drops an event that is over by then", () => {
+    expect(profileAfter(profile, 3000).liveDubcap).toBeUndefined();
+  });
+
+  it("leaves the profile alone for a start now", () => {
+    expect(profileAfter(profile, 0)).toBe(profile);
   });
 });

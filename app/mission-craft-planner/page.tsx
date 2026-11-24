@@ -52,7 +52,21 @@ import useHighsWorker from "../../lib/use-highs-worker";
 import { planForTarget, computeMonolithicPaths, type PlanBudget, type PlannerProgressEvent } from "../../lib/planner";
 import { createDemoProfile, isBlankEid } from "../../lib/demo-profile";
 import type { LootJson } from "../../lib/loot-data";
-import type { DubcapPlan } from "../../lib/dubcap";
+import type { DubcapPlan, DubcapScheduleBlock } from "../../lib/dubcap";
+import { profileAfter } from "../../lib/in-flight";
+import {
+  bestStartTime,
+  isAsleepAt,
+  scheduleAroundSleep,
+  sleepIntervals,
+  sleepLengthMinutes,
+  type ClockFixedLaunch,
+  type ClockSchedule,
+  type ClockScheduleInput,
+  type ClockStage,
+  type SleepWindow,
+  type StartTimeOption,
+} from "../../lib/sleep-schedule";
 import type { LiveDubcapEvent } from "../../lib/dubcap-events";
 import {
   formatVirtueFuelQuantity,
@@ -324,6 +338,12 @@ type SolveSnapshotRequest = {
   finishByMs?: number;
   /** Snapshot files only: the finish time as the plan got it, in seconds from when it was built. */
   finishWithinSeconds?: number;
+  /** A start later than when the plan is built (epoch ms); left out for a start now. */
+  startAtMs?: number;
+  /** A finish-time plan that starts at a dubcap expected then (epoch ms): the finish time counts from it. */
+  dubcapStartMs?: number;
+  /** Snapshot files only: how far ahead the start was, in seconds; the plan moved ships in the air on that much. */
+  startDelaySeconds?: number;
   /** Path of Virtue only: the shift-cap slider and the Initial Tank toggle. */
   virtueShiftCap?: number;
   virtueStartTank?: VirtueTankStartMode;
@@ -480,6 +500,7 @@ function storePlanFile(raw: string, deviceEid: string): string | null {
   // What the page compares its inputs against leaves out snapshot-only fields.
   const requestInputs: SolveSnapshotRequest = { ...request };
   delete requestInputs.finishWithinSeconds;
+  delete requestInputs.startDelaySeconds;
   const lastSolveRequest: LastSolveInputs = {
     ...requestInputs,
     eid: demo ? "" : deviceEid,
@@ -851,7 +872,21 @@ type PlannerSourcePreferences = {
   /** Finish by (epoch ms), dropped once it has passed; kept while unticked so ticking brings it back. */
   finishByMs?: number;
   finishByOn?: boolean;
+  /** When the plan starts; times that have passed are dropped. */
+  startMode?: PlanStartMode;
+  startAtMs?: number;
+  dubcapStartMs?: number;
 };
+
+/** Now, when a dubcap starts (one running now, or the time set for the next), or a time set by hand. */
+type PlanStartMode = "now" | "dubcap" | "custom";
+
+/** Bedtime and wake-up, saved for every farm (LOCAL_PREF_KEYS.plannerSleep). */
+type SleepPreferences = { on: boolean; bedMinutes: number; wakeMinutes: number };
+
+const DEFAULT_SLEEP: SleepPreferences = { on: false, bedMinutes: 23 * 60, wakeMinutes: 7 * 60 };
+/** The player is up when they build a plan: sends in its first half hour never wait for the morning. */
+const AWAKE_AT_START_SECONDS = 30 * 60;
 
 type PlannerSourcePreferenceStore = Partial<Record<InventorySource, PlannerSourcePreferences>>;
 
@@ -1189,8 +1224,19 @@ function sortTimelineSegmentsForLegend(segments: TimelineSegment[]): TimelineSeg
   });
 }
 
-function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | null {
-  if (plan.dubcap) return buildDubcapTimeline(plan);
+type MissionSegments = {
+  segments: TimelineSegment[];
+  prepSegments: TimelineSegment[];
+  missionSegments: TimelineSegment[];
+  missionSlotSeconds: number;
+  prepSlotSeconds: number;
+  modelTotalSlotSeconds: number;
+  hiddenPrepSlotSeconds: number;
+  missionColorByKey: Map<string, string>;
+};
+
+/** The plan's launches as timeline segments (prep, then mission rows less the prep they cover). */
+function buildMissionSegments(plan: PlanResponse["plan"]): MissionSegments {
   const missionColorByKey = buildMissionColorMap(plan.missions);
   // In-air missions are not launches to schedule — they are slots already
   // occupied, so they seed the lanes instead of being packed into them.
@@ -1333,6 +1379,49 @@ function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | nul
       targetAfxId: null,
     });
   }
+  return {
+    segments,
+    prepSegments,
+    missionSegments,
+    missionSlotSeconds,
+    prepSlotSeconds,
+    modelTotalSlotSeconds,
+    hiddenPrepSlotSeconds,
+    missionColorByKey,
+  };
+}
+
+/** In-air ships hold the slots first, the longest wait on slot 1 (as the planners seed them). */
+function inAirTimelineSeeds(plan: PlanResponse["plan"], missionColorByKey: Map<string, string>) {
+  return plan.missions
+    .filter((mission) => mission.inAir)
+    .flatMap((mission) =>
+      (mission.launchSecondsRemaining || [mission.secondsRemaining || 0]).map((seconds) => ({
+        mission,
+        seconds: Math.max(0, Math.round(seconds)),
+      }))
+    )
+    .sort((a, b) => b.seconds - a.seconds)
+    .slice(0, 3)
+    .map(({ mission, seconds }) => ({
+      mission,
+      seconds,
+      label: `${titleCaseShip(mission.ship)} ${durationTypeWithLevelLabel(mission.durationType, mission.level)}`,
+      subtitle: `In air · ${afxIdToTargetFamilyName(mission.targetAfxId)}`,
+      color: missionColorByKey.get(missionColorKey(mission)) || prepTimelineColor(missionColorKey(mission)),
+    }));
+}
+
+function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | null {
+  if (plan.dubcap) return buildDubcapTimeline(plan);
+  const {
+    segments,
+    missionSlotSeconds,
+    prepSlotSeconds,
+    modelTotalSlotSeconds,
+    hiddenPrepSlotSeconds,
+    missionColorByKey,
+  } = buildMissionSegments(plan);
 
   const inAirLaunches = plan.missions
     .filter((mission) => mission.inAir)
@@ -1452,6 +1541,23 @@ function buildMissionTimeline(plan: PlanResponse["plan"]): MissionTimeline | nul
   };
 }
 
+/** A dubcap schedule block's legend entry: one per mission row (event launches apart from ordinary ones) or prep shape. */
+function dubcapBlockLook(plan: PlanResponse["plan"], block: DubcapScheduleBlock, colors: Map<string, string>) {
+  const mission = plan.missions.find((row) => row.rowKey === block.missionRowKey);
+  const colorKey = mission ? missionColorKey(mission) : `${block.ship}|${block.durationType}`;
+  const phase: "prep" | "mission" = block.isPrep ? "prep" : "mission";
+  const id = block.isPrep
+    ? `event-prep:${block.ship}|${block.durationType}|${block.level}`
+    : `event-plan:${block.fueling ? "fueling" : block.missionRowKey ?? colorKey}:${block.dubcap ? "dubcap" : block.locked ? "locked" : "ordinary"}`;
+  return {
+    id,
+    label: `${titleCaseShip(block.ship)} ${durationTypeWithLevelLabel(block.durationType, block.level)}`,
+    subtitle: `${block.fueling ? "Partly fueled · " : ""}${block.locked ? "Locked · " : ""}${block.isPrep ? "Prep" : afxIdToTargetFamilyName(block.targetAfxId ?? 10000)}${block.dubcap ? ` · dubcap ×${plan.dubcap?.multiplier ?? 2}` : ""}`,
+    phase,
+    color: colors.get(colorKey) ?? prepTimelineColor(colorKey),
+  };
+}
+
 function buildDubcapTimeline(plan: PlanResponse["plan"]): MissionTimeline | null {
   const event = plan.dubcap!;
   const colors = buildMissionColorMap(plan.missions);
@@ -1459,21 +1565,16 @@ function buildDubcapTimeline(plan: PlanResponse["plan"]): MissionTimeline | null
   // ones) or prep shape; lane blocks are the runs that make it up.
   const segmentsById = new Map<string, TimelineSegment>();
   const lanes: TimelineLaneBlock[][] = event.fullLanes.map((lane, laneIndex) => lane.map((block, index) => {
-    const mission = plan.missions.find((row) => row.rowKey === block.missionRowKey);
-    const colorKey = mission ? missionColorKey(mission) : `${block.ship}|${block.durationType}`;
-    const phase = block.isPrep ? "prep" : "mission";
-    const id = block.isPrep
-      ? `event-prep:${block.ship}|${block.durationType}|${block.level}`
-      : `event-plan:${block.fueling ? "fueling" : block.missionRowKey ?? colorKey}:${block.dubcap ? "dubcap" : block.locked ? "locked" : "ordinary"}`;
+    const { id, label, subtitle, phase, color } = dubcapBlockLook(plan, block, colors);
     const totalSeconds = block.endSeconds - block.startSeconds;
     let segment = segmentsById.get(id);
     if (!segment) {
       segment = {
         id,
-        label: `${titleCaseShip(block.ship)} ${durationTypeWithLevelLabel(block.durationType, block.level)}`,
-        subtitle: `${block.fueling ? "Partly fueled · " : ""}${block.locked ? "Locked · " : ""}${block.isPrep ? "Prep" : afxIdToTargetFamilyName(block.targetAfxId ?? 10000)}${block.dubcap ? ` · dubcap ×${event.multiplier}` : ""}`,
+        label,
+        subtitle,
         phase,
-        color: colors.get(colorKey) ?? prepTimelineColor(colorKey),
+        color,
         launches: 0,
         durationSeconds: totalSeconds / block.launches,
         totalSlotSeconds: 0,
@@ -1524,6 +1625,461 @@ function buildDubcapTimeline(plan: PlanResponse["plan"]): MissionTimeline | null
     : null;
 }
 
+/** How a clock-schedule key is drawn. */
+type ClockDisplay = {
+  label: string;
+  subtitle: string;
+  color: string;
+  phase: TimelineSegment["phase"];
+  /** The fuel tank it launches from (Path of Virtue). */
+  tankIndex?: number;
+  /** The dubcap schedule block it came from, for the event's launch table. */
+  block?: DubcapScheduleBlock;
+};
+
+type ClockInAirSeed = { label: string; subtitle: string; color: string; seconds: number };
+
+/** A plan's launches as the sleep-aware scheduler takes them, and how to draw its keys. */
+type PlanClockParts = {
+  input: Omit<ClockScheduleInput, "startMs" | "sleep">;
+  display: Map<string, ClockDisplay>;
+  inAir: ClockInAirSeed[];
+};
+
+type PlanClock = PlanClockParts & { input: ClockScheduleInput; schedule: ClockSchedule };
+
+function addClockKind(kinds: ClockStage["kinds"], kind: ClockStage["kinds"][number]): void {
+  const existing = kinds.find((entry) => entry.key === kind.key);
+  if (existing) {
+    existing.count += kind.count;
+  } else {
+    kinds.push({ ...kind });
+  }
+}
+
+/**
+ * Main farm: prep first, in any order, then the mission rows in any order,
+ * each ship's levels in turn. Unattributed prep slot time sits at the front
+ * of every slot.
+ */
+function mainFarmClockParts(plan: PlanResponse["plan"]): PlanClockParts | null {
+  const built = buildMissionSegments(plan);
+  const inAir = inAirTimelineSeeds(plan, built.missionColorByKey);
+  if (built.segments.length === 0 && inAir.length === 0) {
+    return null;
+  }
+  const display = new Map<string, ClockDisplay>(
+    built.segments.map((segment) => [
+      segment.id,
+      { label: segment.label, subtitle: segment.subtitle, color: segment.color, phase: segment.phase },
+    ])
+  );
+  const prepKinds = built.prepSegments
+    .filter((segment) => segment.launches > 0)
+    .map((segment) => ({ key: segment.id, durationSeconds: segment.durationSeconds, count: segment.launches }));
+  // The heuristic timeline's packing order, so the unchanged order is the one it draws.
+  const missionKinds = groupTimelineSegmentsForLaneBalance(built.missionSegments)
+    .flatMap((group) => groupTimelineSegmentsByPhase(group).flat())
+    .map((segment) => ({
+      key: segment.id,
+      durationSeconds: segment.durationSeconds,
+      count: segment.launches,
+      chain: `${segment.ship}|${segment.durationType}`,
+      rank: segment.level ?? 0,
+    }));
+  const fixed: ClockFixedLaunch[] =
+    built.hiddenPrepSlotSeconds > 0
+      ? [0, 1, 2].map((lane) => ({
+          key: "prep-residual",
+          lane,
+          startSeconds: 0,
+          durationSeconds: built.hiddenPrepSlotSeconds / 3,
+          pseudo: true,
+        }))
+      : [];
+  return {
+    input: {
+      laneFreeSeconds: inAir.map((seed) => seed.seconds),
+      fixed,
+      stages: [{ kinds: prepKinds }, { kinds: missionKinds }],
+    },
+    display,
+    inAir,
+  };
+}
+
+/**
+ * Dubcap plans: prep and locked launches keep their slots and order ahead of
+ * the event; the event's launches go in any order (tank by tank) as long as
+ * they leave by its last-launch time; ordinary launches follow once the event
+ * is over and its ships are back. `anchorSeconds` pins a fresh event to its
+ * expected start.
+ */
+function dubcapClockParts(plan: PlanResponse["plan"], anchorSeconds: number | null): PlanClockParts | null {
+  const event = plan.dubcap;
+  if (!event) {
+    return null;
+  }
+  const colors = buildMissionColorMap(plan.missions);
+  const inAir = inAirTimelineSeeds(plan, colors);
+  const display = new Map<string, ClockDisplay>();
+  const fixed: ClockFixedLaunch[] = [];
+  let fueling: ClockStage | null = null;
+  const eventByTank = new Map<number, ClockStage["kinds"]>();
+  const ordinaryByTank = new Map<number, ClockStage["kinds"]>();
+  const blocks = event.fullLanes
+    .flatMap((lane, laneIndex) => lane.map((block) => ({ block, laneIndex })))
+    .sort((a, b) => a.block.startSeconds - b.block.startSeconds || a.laneIndex - b.laneIndex);
+  for (const { block, laneIndex } of blocks) {
+    if (block.launches <= 0) continue;
+    const look = dubcapBlockLook(plan, block, colors);
+    const key = block.tankIndex != null ? `${look.id}|tank${block.tankIndex}` : look.id;
+    if (!display.has(key)) {
+      display.set(key, { label: look.label, subtitle: look.subtitle, color: look.color, phase: look.phase, tankIndex: block.tankIndex, block });
+    }
+    const each = (block.endSeconds - block.startSeconds) / block.launches;
+    const kind = { key, durationSeconds: each, count: block.launches, chain: `${block.ship}|${block.durationType}`, rank: block.level };
+    if (block.dubcap && block.fueling) {
+      if (event.live) {
+        fixed.push({ key, lane: laneIndex, startSeconds: block.startSeconds, durationSeconds: each, event: true });
+      } else {
+        fueling = { event: true, ordered: true, kinds: [{ key, durationSeconds: each, count: 1 }] };
+      }
+    } else if (block.dubcap) {
+      const kinds = eventByTank.get(block.tankIndex ?? 0) ?? [];
+      addClockKind(kinds, kind);
+      eventByTank.set(block.tankIndex ?? 0, kinds);
+    } else if (block.isPrep || block.locked) {
+      for (let launch = 0; launch < block.launches; launch += 1) {
+        fixed.push({ key, lane: laneIndex, startSeconds: block.startSeconds + launch * each, durationSeconds: each });
+      }
+    } else {
+      const kinds = ordinaryByTank.get(block.tankIndex ?? 0) ?? [];
+      addClockKind(kinds, kind);
+      ordinaryByTank.set(block.tankIndex ?? 0, kinds);
+    }
+  }
+  const byTank = (stages: Map<number, ClockStage["kinds"]>) => Array.from(stages.entries()).sort((a, b) => a[0] - b[0]);
+  const stages: ClockStage[] = [
+    ...(fueling ? [fueling] : []),
+    ...byTank(eventByTank).map(([, kinds]): ClockStage => ({ event: true, kinds })),
+    ...byTank(ordinaryByTank).map(([, kinds], index): ClockStage => ({
+      gate: index === 0 ? "return" : "start",
+      chainGate: "return",
+      kinds,
+    })),
+  ];
+  return {
+    input: {
+      laneFreeSeconds: inAir.map((seed) => seed.seconds),
+      fixed,
+      stages,
+      event: {
+        windowSeconds: event.windowSeconds,
+        marginSeconds: event.launchMarginSeconds,
+        ...(event.live ? { startSeconds: 0 } : anchorSeconds != null ? { startSeconds: Math.max(0, anchorSeconds) } : {}),
+      },
+    },
+    display,
+    inAir,
+  };
+}
+
+/**
+ * Path of Virtue: tank by tank in the packer's order. Within a tank the
+ * launches go in any order (they share its fuel), locked launches and each
+ * prep phase first.
+ */
+function virtueClockParts(plan: PlanResponse["plan"], view: VirtueTankPlanView): PlanClockParts | null {
+  const unitById = new Map(view.result.units.map((unit) => [unit.id, unit]));
+  const inAir = inAirTimelineSeeds(plan, buildMissionColorMap(plan.missions));
+  const display = new Map<string, ClockDisplay>();
+  const stages: ClockStage[] = [];
+  let stageKey: string | null = null;
+  for (const entry of view.pack.launchOrder) {
+    const unit = unitById.get(entry.unitId);
+    if (!unit || entry.launches <= 0) continue;
+    const kindOf = unit.locked ? "locked" : unit.isPrep || unit.preFueled ? `prep:${unit.prepOrder ?? 0}` : "fly";
+    const nextKey = `${entry.tankIndex}|${kindOf}`;
+    if (nextKey !== stageKey) {
+      stages.push({ kinds: [] });
+      stageKey = nextKey;
+    }
+    const key = `${entry.unitId}|tank${entry.tankIndex}`;
+    const unitView = view.units.get(entry.unitId);
+    if (!display.has(key)) {
+      display.set(key, {
+        label: unitView?.label ?? entry.unitId,
+        subtitle: unitView?.subtitle ?? "",
+        color: unitView?.color ?? prepTimelineColor(entry.unitId),
+        phase: unitView && unitView.missionIndex == null ? "prep" : "mission",
+        tankIndex: entry.tankIndex,
+      });
+    }
+    addClockKind(stages[stages.length - 1].kinds, {
+      key,
+      durationSeconds: unit.durationSeconds,
+      count: entry.launches,
+      chain: `${unit.ship}|${unit.durationType}`,
+      rank: unit.level,
+    });
+  }
+  if (stages.length === 0 && inAir.length === 0) {
+    return null;
+  }
+  return { input: { laneFreeSeconds: inAir.map((seed) => seed.seconds), stages }, display, inAir };
+}
+
+function clockAt(startMs: number, seconds: number): string {
+  return formatClockTime(new Date(startMs + seconds * 1000), startMs);
+}
+
+/** The plan's three slots on the clock: nights shaded, waits for the morning marked. */
+function ClockLanes({ clock, sleep }: { clock: PlanClock; sleep: SleepWindow | null }) {
+  const { schedule, display, inAir } = clock;
+  const startMs = schedule.startMs;
+  const totalSeconds = Math.max(1, schedule.makespanSeconds, ...inAir.map((seed) => seed.seconds));
+  const at = (seconds: number) => Math.max(0, Math.min(100, (seconds / totalSeconds) * 100));
+  const nights = sleep
+    ? sleepIntervals(startMs, startMs + totalSeconds * 1000, sleep).map((night) => ({
+        from: (night.fromMs - startMs) / 1000,
+        to: (night.toMs - startMs) / 1000,
+      }))
+    : [];
+  // Midnights, labeled with the day they start (thinned out on long plans).
+  const days: Array<{ seconds: number; label: string }> = [];
+  const midnight = new Date(startMs);
+  midnight.setHours(24, 0, 0, 0);
+  while (midnight.getTime() < startMs + totalSeconds * 1000 && days.length < 400) {
+    days.push({
+      seconds: (midnight.getTime() - startMs) / 1000,
+      label: midnight.toLocaleDateString(undefined, { weekday: "short" }),
+    });
+    midnight.setDate(midnight.getDate() + 1);
+  }
+  const labelEvery = Math.max(1, Math.ceil(days.length / 10));
+  const nightBands = nights.map((night, index) => (
+    <div
+      key={`night:${index}`}
+      className={styles.clockNight}
+      style={{ left: `${at(night.from)}%`, width: `${at(night.to) - at(night.from)}%` }}
+      aria-hidden="true"
+    />
+  ));
+  return (
+    <div className={styles.timelineLanes}>
+      {schedule.lanes.map((lane, laneIndex) => {
+        const seed = inAir[laneIndex];
+        let cursor = 0;
+        const items: ReactNode[] = [];
+        if (seed && seed.seconds > 0) {
+          items.push(
+            <div
+              key="in-air"
+              className={styles.timelineBlock}
+              data-phase="inAir"
+              style={{ left: "0%", width: `${Math.max(at(seed.seconds), 0.7)}%`, "--timeline-block-color": seed.color } as CSSProperties}
+              title={[seed.label, seed.subtitle, "Already launched — this slot is busy until it lands", `Lands ${clockAt(startMs, seed.seconds)}`].join("\n")}
+            >
+              <span className={styles.timelineBlockLabel}>in air</span>
+            </div>
+          );
+          cursor = seed.seconds;
+        }
+        lane.forEach((block, blockIndex) => {
+          const waitFrom = block.waitFromSeconds ?? block.startSeconds;
+          if (waitFrom - cursor > 60) {
+            items.push(
+              <div
+                key={`idle:${blockIndex}`}
+                className={styles.timelineIdle}
+                style={{ left: `${at(cursor)}%`, width: `${at(waitFrom) - at(cursor)}%` }}
+                title={`Slot idle ${formatDurationFromHours((waitFrom - cursor) / 3600)}`}
+              />
+            );
+          }
+          if (block.waitFromSeconds != null) {
+            items.push(
+              <div
+                key={`wait:${blockIndex}`}
+                className={styles.clockWait}
+                style={{ left: `${at(block.waitFromSeconds)}%`, width: `${at(block.startSeconds) - at(block.waitFromSeconds)}%` }}
+                title={`Back ${clockAt(startMs, block.waitFromSeconds)} while you're asleep: the next send waits until ${clockAt(startMs, block.startSeconds)}`}
+              />
+            );
+          }
+          const look = display.get(block.key);
+          const each = (block.endSeconds - block.startSeconds) / Math.max(1, block.launches);
+          items.push(
+            <div
+              key={`block:${blockIndex}`}
+              className={styles.timelineBlock}
+              data-phase={look?.phase ?? "mission"}
+              data-alarm={block.alarm || block.late ? "1" : undefined}
+              style={
+                {
+                  left: `${at(block.startSeconds)}%`,
+                  width: `${Math.max(at(block.endSeconds) - at(block.startSeconds), 0.7)}%`,
+                  "--timeline-block-color": look?.color,
+                } as CSSProperties
+              }
+              title={[
+                look?.label ?? block.key,
+                look?.subtitle ?? "",
+                block.pseudo
+                  ? "Progression-only slot workload"
+                  : block.launches > 1
+                    ? `${block.launches.toLocaleString()} launches, one every ${formatDurationFromHours(each / 3600)}`
+                    : "1 launch",
+                `${clockAt(startMs, block.startSeconds)} → ${clockAt(startMs, block.endSeconds)}`,
+                ...(block.alarm ? ["Sent while you'd be asleep, to leave before the dubcap's last launch"] : []),
+                ...(block.late ? ["Leaves after the dubcap's last launch: no double drops"] : []),
+              ]
+                .filter(Boolean)
+                .join("\n")}
+            >
+              <span className={styles.timelineBlockLabel}>
+                {look?.tankIndex != null && <span className={styles.timelineTankBadge}>{look.tankIndex + 1}</span>}
+                {block.pseudo ? "prep" : `x${block.launches.toLocaleString()}`}
+              </span>
+            </div>
+          );
+          cursor = block.endSeconds;
+        });
+        return (
+          <div key={`lane:${laneIndex}`} className={styles.timelineLaneRow}>
+            <div className={styles.timelineLaneLabel}>Slot {laneIndex + 1}</div>
+            <div className={styles.timelineTrack}>
+              {items}
+              {nightBands}
+            </div>
+          </div>
+        );
+      })}
+      {days.length > 0 && (
+        <div className={styles.timelineLaneRow} aria-hidden="true">
+          <span />
+          <div className={styles.clockAxis}>
+            {days.map((day, index) =>
+              index % labelEvery === 0 ? (
+                <span key={day.seconds} style={{ left: `${at(day.seconds)}%` }}>
+                  {day.label}
+                </span>
+              ) : null
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** What the clock schedule means for the player: when it ends, which relaunches wait for the morning. */
+function ClockSummary({
+  clock,
+  sleep,
+  finishByMs,
+  dubcapAnchorMs,
+  bestStart,
+  onUseStart,
+}: {
+  clock: PlanClock;
+  sleep: SleepWindow | null;
+  finishByMs: number | null;
+  dubcapAnchorMs: number | null;
+  bestStart: { current: StartTimeOption; best: StartTimeOption } | null;
+  onUseStart: (ms: number) => void;
+}) {
+  const { schedule, display } = clock;
+  const startMs = schedule.startMs;
+  const endMs = startMs + schedule.makespanSeconds * 1000;
+  const slotLabel = (lane: number) => `Slot ${lane + 1}`;
+  const nameOf = (key: string) => display.get(key)?.label ?? key;
+  const prepEnd = Math.max(0, ...schedule.sends.filter((send) => !send.event).filter((send) => !schedule.event || send.startSeconds < schedule.event.startSeconds).map((send) => send.endSeconds));
+  const lateForEvent = dubcapAnchorMs != null && schedule.event && prepEnd > schedule.event.startSeconds + 60;
+  // Only a start that gets the plan done sooner is worth a mention: a wait overnight is just sleep.
+  const better = bestStart && bestStart.best.offsetSeconds > 0 &&
+    startMs + bestStart.best.offsetSeconds * 1000 > Date.now() &&
+    bestStart.best.finishSeconds < bestStart.current.finishSeconds - 30 * 60
+    ? bestStart.best
+    : null;
+  return (
+    <div className={styles.clockSummary}>
+      <p>
+        {sleep ? (
+          <>
+            Sends only while you&apos;re up (asleep {formatTimeOfDay(sleep.bedMinutes)} – {formatTimeOfDay(sleep.wakeMinutes)}).{" "}
+          </>
+        ) : null}
+        Starts <b>{formatShortDateTime(startMs)}</b>, last ship back <b>{formatShortDateTime(endMs)}</b>.
+        {schedule.event && dubcapAnchorMs != null && (
+          <> The dubcap starts <b>{formatShortDateTime(startMs + schedule.event.startSeconds * 1000)}</b>.</>
+        )}
+      </p>
+      {lateForEvent && (
+        <p className={styles.clockWarn}>
+          Prep and current missions aren&apos;t back until {formatShortDateTime(startMs + prepEnd * 1000)}, after the dubcap
+          starts: its launches wait for them.
+        </p>
+      )}
+      {sleep &&
+        (schedule.waits.length === 0 ? (
+          <p>Every relaunch lands while you&apos;re up.</p>
+        ) : (
+          <details className={styles.clockWaits}>
+            <summary>
+              {pluralize(schedule.waits.length, "relaunch waits", "relaunches wait")} for the morning (
+              {formatDurationFromHours(schedule.waitSeconds / 3600)} idle in all).
+            </summary>
+            <ul>
+              {schedule.waits.slice(0, 12).map((send, index) => (
+                <li key={index}>
+                  {slotLabel(send.lane)} frees up {clockAt(startMs, send.readySeconds)}: send the {nameOf(send.key)} at{" "}
+                  {clockAt(startMs, send.startSeconds)}
+                </li>
+              ))}
+              {schedule.waits.length > 12 && <li>…and {schedule.waits.length - 12} more</li>}
+            </ul>
+          </details>
+        ))}
+      {schedule.alarms > 0 && (
+        <p className={styles.clockWarn}>
+          To leave before the dubcap&apos;s last launch,{" "}
+          {schedule.sends
+            .filter((send) => send.alarm)
+            .map((send) => `${slotLabel(send.lane)}'s ${nameOf(send.key)} goes at ${clockAt(startMs, send.startSeconds)}`)
+            .join("; ")}
+          , while you&apos;d be asleep.
+        </p>
+      )}
+      {schedule.late > 0 && (
+        <p className={styles.clockWarn}>
+          {pluralize(schedule.late, "event launch leaves", "event launches leave")} after the dubcap&apos;s last launch time and
+          won&apos;t get its drops.
+        </p>
+      )}
+      {finishByMs != null && endMs > finishByMs + 60_000 && (
+        <p className={styles.clockWarn}>
+          {sleep ? "With your sleep hours, the" : "The"} last ship is back after your finish time ({formatShortDateTime(finishByMs)}).
+        </p>
+      )}
+      {better && (
+        <p className={styles.clockHint}>
+          Start at <b>{formatShortDateTime(startMs + better.offsetSeconds * 1000)}</b> instead and{" "}
+          {better.schedule.waits.length === 0
+            ? "no relaunch waits for the morning"
+            : `only ${pluralize(better.schedule.waits.length, "relaunch waits", "relaunches wait")} for the morning`}
+          , and the last ship is back{" "}
+          {formatDurationFromHours((bestStart!.current.finishSeconds - better.finishSeconds) / 3600)} sooner.{" "}
+          <button type="button" className={styles.clockHintButton} onClick={() => onUseStart(startMs + better.offsetSeconds * 1000)}>
+            Start then
+          </button>
+        </p>
+      )}
+    </div>
+  );
+}
+
 function eventClock(seconds: number): string {
   const minutes = Math.floor(Math.max(0, seconds) / 60);
   return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}`;
@@ -1534,8 +2090,64 @@ function eventClock(seconds: number): string {
  * or from when the profile was read (a live one). `tankLabels` names the fuel
  * tanks in Path of Virtue.
  */
-function DubcapTimeline({ event, tankLabels }: { event: DubcapPlan; tankLabels?: string[] }) {
+function DubcapTimeline({ event, tankLabels, clockPlan }: { event: DubcapPlan; tankLabels?: string[]; clockPlan?: PlanClock | null }) {
   const drops = event.multiplier === 2 ? "double" : `${event.multiplier}×`;
+  if (clockPlan?.schedule.event) {
+    const startMs = clockPlan.schedule.startMs;
+    const lanes = clockPlan.schedule.lanes.map((lane) => lane.filter((block) => block.event));
+    const launches = lanes.flat().reduce((sum, block) => sum + block.launches, 0);
+    return (
+      <section className={styles.timelinePanel}>
+        <h3 style={{ marginTop: 0 }}>{event.live ? "Live dubcap launches" : "Dubcap launch window"}</h3>
+        <p className="muted">
+          {pluralize(launches, "launch", "launches")} with {drops} drops. The event runs{" "}
+          {clockAt(startMs, clockPlan.schedule.event.startSeconds)} to {clockAt(startMs, clockPlan.schedule.event.endSeconds)}; the last
+          launch leaves by {clockAt(startMs, clockPlan.schedule.event.lastLaunchSeconds)}.
+        </p>
+        {launches > 0 ? (
+          <div className={styles.dubcapLanes}>
+            {lanes.map((lane, index) => (
+              <div className={styles.dubcapLane} key={index}>
+                <h4>Slot {index + 1}</h4>
+                <table>
+                  <thead><tr><th>Launch</th><th>Ship / target</th><th>Return</th></tr></thead>
+                  <tbody>{lane.map((block, blockIndex) => {
+                    const source = clockPlan.display.get(block.key)?.block;
+                    const duration = (block.endSeconds - block.startSeconds) / block.launches;
+                    return (
+                      <tr key={`${block.key}:${blockIndex}`} data-alarm={block.alarm || block.late ? "1" : undefined}>
+                        <td className={styles.dubcapClock}>
+                          {clockAt(startMs, block.startSeconds)}
+                          {block.launches > 1 && <>–{clockAt(startMs, block.endSeconds - duration)}</>}
+                        </td>
+                        <td>
+                          {block.launches > 1 && <>{block.launches}× </>}{source ? titleCaseShip(source.ship) : block.key}<br />
+                          {source && (
+                            <span className="muted">
+                              {durationTypeWithLevelLabel(source.durationType, source.level)} · {afxIdToTargetFamilyName(source.targetAfxId ?? 10000)}
+                              {source.fueling && <> · partly fueled</>}
+                            </span>
+                          )}
+                          {block.launches > 1 && <div className="muted">Every {formatDurationFromHours(duration / 3600)}</div>}
+                          {source?.tankIndex != null && (
+                            <div className="muted">{tankLabels?.[source.tankIndex] ?? `Tank ${source.tankIndex + 1}`}</div>
+                          )}
+                          {block.alarm && <div className={styles.clockWarn}>While you&apos;d be asleep</div>}
+                          {block.late && <div className={styles.clockWarn}>After the last launch time</div>}
+                        </td>
+                        <td className={styles.dubcapClock}>{clockAt(startMs, block.endSeconds)}</td>
+                      </tr>
+                    );
+                  })}</tbody>
+                </table>
+                {lane.length === 0 && <p className="muted">No event launches in this slot.</p>}
+              </div>
+            ))}
+          </div>
+        ) : <p className="muted">This plan needs no launches during the event.</p>}
+      </section>
+    );
+  }
   // A live event's clock counts from now, so it reads "+h:mm".
   const clock = (seconds: number) => `${event.live ? "+" : ""}${eventClock(seconds)}`;
   return (
@@ -1970,7 +2582,9 @@ function groupTankLaunches(view: VirtueTankPlanView, tank: VirtueTank): VirtueTa
 
 function buildVirtueTankPlanView(
   plan: PlanResponse["plan"],
-  snapshot: VirtueTankSnapshot | undefined
+  snapshot: VirtueTankSnapshot | undefined,
+  /** Launch times from the clock schedule (sleep or a dubcap's start), for the refuel windows. */
+  clockLaunchStarts?: Array<{ tankIndex: number; at: number }>
 ): VirtueTankPlanView | null {
   const result = plan.virtueTanks;
   if (!result?.pack) {
@@ -2023,8 +2637,8 @@ function buildVirtueTankPlanView(
   }
 
   // One start time per launch: a schedule block of n launches starts one every (end - start) / n.
-  const launchStarts: Array<{ tankIndex: number; at: number }> = [];
-  for (const lane of pack.schedule.lanes) {
+  const launchStarts: Array<{ tankIndex: number; at: number }> = clockLaunchStarts ? [...clockLaunchStarts] : [];
+  for (const lane of clockLaunchStarts ? [] : pack.schedule.lanes) {
     for (const block of lane) {
       const each = block.launches > 0 ? (block.endSeconds - block.startSeconds) / block.launches : 0;
       for (let launch = 0; launch < block.launches; launch += 1) {
@@ -3145,7 +3759,20 @@ function VirtueFuelTanksPanel({ view, planStartMs }: { view: VirtueTankPlanView;
 }
 
 /** Panel G in tank mode: the packer's schedule, each block badged with the tank it launches from. */
-function VirtueTankTimeline({ view, plan }: { view: VirtueTankPlanView; plan: PlanResponse["plan"] }) {
+function VirtueTankTimeline({
+  view,
+  plan,
+  clock,
+  sleep,
+  summary,
+}: {
+  view: VirtueTankPlanView;
+  plan: PlanResponse["plan"];
+  /** The schedule on the clock (a sleep window or a dubcap's start): drawn instead of the packer's. */
+  clock?: PlanClock | null;
+  sleep?: SleepWindow | null;
+  summary?: ReactNode;
+}) {
   const { pack } = view;
   const totalSeconds = Math.max(1, pack.schedule.makespanSeconds);
   const at = (seconds: number) => Math.max(0, Math.min(100, (seconds / totalSeconds) * 100));
@@ -3175,15 +3802,17 @@ function VirtueTankTimeline({ view, plan }: { view: VirtueTankPlanView; plan: Pl
       <p className={`muted ${styles.timelineIntro}`}>
         The number on each block is the tank it launches from.
       </p>
+      {summary}
       <div className={styles.timelineStats}>
         <span>
           Model total: <strong>{formatDurationFromHours(plan.expectedHours)}</strong>
         </span>
         <span>
-          Timeline makespan: <strong>{formatDurationFromHours(pack.schedule.makespanSeconds / 3600)}</strong>
+          Timeline makespan:{" "}
+          <strong>{formatDurationFromHours((clock ? clock.schedule.makespanSeconds : pack.schedule.makespanSeconds) / 3600)}</strong>
         </span>
       </div>
-      <div className={styles.timelineLanes}>
+      {clock ? <ClockLanes clock={clock} sleep={sleep ?? null} /> : <div className={styles.timelineLanes}>
         {pack.schedule.lanes.map((lane, laneIndex) => {
           const seed = inAirLaunches[laneIndex];
           let cursor = 0;
@@ -3262,7 +3891,7 @@ function VirtueTankTimeline({ view, plan }: { view: VirtueTankPlanView; plan: Pl
             </div>
           );
         })}
-      </div>
+      </div>}
       <div className={styles.timelineLegend} data-tanks="1">
         {legendIds.map((unitId) => {
           const unitView = view.units.get(unitId);
@@ -4229,6 +4858,70 @@ function GoalShortfallList({ goals }: { goals: Array<{ itemId: string; requested
 }
 
 /** "Sun 2:00 PM": a time within the next week or so. */
+/**
+ * When the next dubcap probably starts: they almost always begin on a Sunday at
+ * 9 AM Pacific (every one since mid-2023), every few weeks. The event feed only
+ * lists one once it is running, so this is a guess the player can change.
+ */
+function nextLikelyDubcapStartMs(fromMs: number): number {
+  try {
+    const pacific = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      weekday: "short",
+      hour: "numeric",
+      hourCycle: "h23",
+    });
+    const from = new Date(fromMs);
+    for (let day = 0; day <= 8; day += 1) {
+      for (const utcHour of [16, 17]) {
+        const ms = Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate() + day, utcHour);
+        if (ms <= fromMs) continue;
+        const parts = pacific.formatToParts(new Date(ms));
+        if (parts.find((part) => part.type === "weekday")?.value === "Sun" && Number(parts.find((part) => part.type === "hour")?.value) === 9) {
+          return ms;
+        }
+      }
+    }
+  } catch {
+    // No time zone data: fall through to a day out.
+  }
+  return Math.ceil((fromMs + 24 * 3_600_000) / 3_600_000) * 3_600_000;
+}
+
+function readSleepPreferences(): SleepPreferences {
+  try {
+    const parsed = JSON.parse(readFirstStoredString([LOCAL_PREF_KEYS.plannerSleep]) || "null") as Partial<SleepPreferences> | null;
+    const minutes = (value: unknown, fallback: number) =>
+      typeof value === "number" && Number.isInteger(value) && value >= 0 && value < 1440 ? value : fallback;
+    return {
+      on: parsed?.on === true,
+      bedMinutes: minutes(parsed?.bedMinutes, DEFAULT_SLEEP.bedMinutes),
+      wakeMinutes: minutes(parsed?.wakeMinutes, DEFAULT_SLEEP.wakeMinutes),
+    };
+  } catch {
+    return DEFAULT_SLEEP;
+  }
+}
+
+/** "23:00" for a time input. */
+function toTimeInputValue(minutes: number): string {
+  const whole = Math.round(((minutes % 1440) + 1440) % 1440);
+  return `${String(Math.floor(whole / 60)).padStart(2, "0")}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+function fromTimeInputValue(value: string): number | null {
+  const match = /^(\d{1,2}):(\d{2})/.exec(value);
+  if (!match) return null;
+  const minutes = Number(match[1]) * 60 + Number(match[2]);
+  return Number.isFinite(minutes) && minutes >= 0 && minutes < 1440 ? minutes : null;
+}
+
+/** "11 PM", "6:30 AM". */
+function formatTimeOfDay(minutes: number): string {
+  const date = new Date(2000, 0, 1, Math.floor(minutes / 60), minutes % 60);
+  return date.toLocaleTimeString(undefined, minutes % 60 === 0 ? { hour: "numeric" } : { hour: "numeric", minute: "2-digit" });
+}
+
 function formatShortDateTime(ms: number): string {
   return new Date(ms).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
@@ -4847,6 +5540,18 @@ export default function MissionCraftPlannerPage() {
   const [finishByMs, setFinishByMs] = useState<number | null>(null);
   // Only a ticked Finish by with a time limits the plan.
   const activeFinishByMs = finishByOn ? finishByMs : null;
+  const [sleepPrefs, setSleepPrefs] = useState<SleepPreferences>(DEFAULT_SLEEP);
+  const sleepWindow: SleepWindow | null =
+    sleepPrefs.on && sleepLengthMinutes(sleepPrefs) > 0
+      ? { bedMinutes: sleepPrefs.bedMinutes, wakeMinutes: sleepPrefs.wakeMinutes }
+      : null;
+  const [startMode, setStartMode] = useState<PlanStartMode>("now");
+  const [startAtMs, setStartAtMs] = useState<number | null>(null);
+  const [dubcapStartMs, setDubcapStartMs] = useState<number | null>(null);
+  // The start only matters to the options that tie a plan to the clock; with all of them off it is now.
+  const startRowShown = sleepPrefs.on || finishByOn || includeDubcap;
+  const effectiveStartMode: PlanStartMode =
+    !startRowShown || (startMode === "dubcap" && !includeDubcap) ? "now" : startMode;
   const [loading, setLoading] = useState(false);
   const appUpdated = useAppUpdated();
   const [error, setError] = useState<string | null>(null);
@@ -4857,6 +5562,8 @@ export default function MissionCraftPlannerPage() {
   // When the plan's clock starts. A restored plan keeps its original stamp so
   // the projected completion does not silently slide forward with the page.
   const [planReceivedAtMs, setPlanReceivedAtMs] = useState<number | null>(null);
+  // How far ahead of the solve its start was (a set start time), for solve snapshots.
+  const [solvedStartDelaySeconds, setSolvedStartDelaySeconds] = useState<number | null>(null);
   const [profileSnapshot, setProfileSnapshot] = useState<ProfileSnapshot | null>(null);
   const [demoNoticeDismissed, setDemoNoticeDismissed] = useState(false);
   const [prefsLoaded, setPrefsLoaded] = useState(false);
@@ -4867,6 +5574,12 @@ export default function MissionCraftPlannerPage() {
   const [compareError, setCompareError] = useState<string | null>(null);
   const [compareExpandedRow, setCompareExpandedRow] = useState<number | null>(null);
   const [lastSolveRequest, setLastSolveRequest] = useState<LastSolveInputs | null>(null);
+  // Where the plan's clock starts: its set start time, or when it was built.
+  const planClockStartMs =
+    planReceivedAtMs == null ? null : Math.max(planReceivedAtMs, lastSolveRequest?.startAtMs ?? 0);
+  const planStartDelaySeconds =
+    solvedStartDelaySeconds ??
+    (planClockStartMs != null && planReceivedAtMs != null ? Math.max(0, (planClockStartMs - planReceivedAtMs) / 1000) : 0);
   const [launchProgress, setLaunchProgress] = useState<LaunchProgressState | null>(null);
   const [shipDurations, setShipDurations] = useState<ShipDurationSelection>(buildDefaultShipDurations);
   const [shipSelectorOpen, setShipSelectorOpen] = useState(false);
@@ -4965,6 +5678,9 @@ export default function MissionCraftPlannerPage() {
     ...(onlyLockedLaunches ? { onlyLockedLaunches: true } : {}),
     ...(finishByMs != null ? { finishByMs } : {}),
     ...(finishByOn ? { finishByOn: true } : {}),
+    ...(startMode !== "now" ? { startMode } : {}),
+    ...(startAtMs != null ? { startAtMs } : {}),
+    ...(dubcapStartMs != null ? { dubcapStartMs } : {}),
   });
 
   const applySourcePreferences = (preferences: PlannerSourcePreferences | null | undefined) => {
@@ -5000,6 +5716,15 @@ export default function MissionCraftPlannerPage() {
     const finishByLive = Number.isFinite(savedFinishBy) && savedFinishBy > Date.now();
     setFinishByMs(finishByLive ? savedFinishBy : null);
     setFinishByOn(finishByLive && preferences?.finishByOn === true);
+    const now = Date.now();
+    const savedStartAt = Number(preferences?.startAtMs);
+    const savedDubcapStart = Number(preferences?.dubcapStartMs);
+    setStartAtMs(Number.isFinite(savedStartAt) && savedStartAt > now ? savedStartAt : null);
+    setDubcapStartMs(Number.isFinite(savedDubcapStart) && savedDubcapStart > now ? savedDubcapStart : null);
+    const savedMode = preferences?.startMode;
+    setStartMode(
+      savedMode === "dubcap" || (savedMode === "custom" && Number.isFinite(savedStartAt) && savedStartAt > now) ? savedMode : "now"
+    );
   };
 
   const handleInventorySourceChange = (nextSource: InventorySource) => {
@@ -5126,13 +5851,72 @@ export default function MissionCraftPlannerPage() {
 
   // Tank mode schedules launches tank by tank (the packer's schedule), so its
   // timeline replaces the heuristic one below.
-  const virtueTankView = useMemo(
+  const virtueTankViewBase = useMemo(
     () =>
       response
         ? buildVirtueTankPlanView(response.plan, profileSnapshot?.plannedVirtueTank ?? profileSnapshot?.virtueTank)
         : null,
     [profileSnapshot, response]
   );
+  // A dubcap still to come, pinned to the start time set for it.
+  const dubcapAnchorMs =
+    response?.plan.dubcap && !response.plan.dubcap.live && effectiveStartMode === "dubcap" && dubcapStartMs != null
+      ? dubcapStartMs
+      : null;
+  const sleepBed = sleepWindow?.bedMinutes ?? null;
+  const sleepWake = sleepWindow?.wakeMinutes ?? null;
+  // The plan on the clock: launches only while the player is up, and a dubcap
+  // at its expected start. Without either, the timelines below draw as before.
+  const planClock = useMemo((): PlanClock | null => {
+    if (!response || planClockStartMs == null || (sleepBed == null && dubcapAnchorMs == null)) {
+      return null;
+    }
+    const plan = response.plan;
+    const parts = plan.dubcap
+      ? dubcapClockParts(plan, dubcapAnchorMs != null ? (dubcapAnchorMs - planClockStartMs) / 1000 : null)
+      : virtueTankViewBase
+        ? virtueClockParts(plan, virtueTankViewBase)
+        : mainFarmClockParts(plan);
+    if (!parts) {
+      return null;
+    }
+    const input: ClockScheduleInput = {
+      ...parts.input,
+      startMs: planClockStartMs,
+      sleep: sleepBed != null && sleepWake != null ? { bedMinutes: sleepBed, wakeMinutes: sleepWake } : null,
+      awakeForSeconds: AWAKE_AT_START_SECONDS,
+    };
+    return { ...parts, input, schedule: scheduleAroundSleep(input) };
+  }, [response, planClockStartMs, sleepBed, sleepWake, dubcapAnchorMs, virtueTankViewBase]);
+  const virtueTankView = useMemo(() => {
+    if (!virtueTankViewBase || !planClock || !response) {
+      return virtueTankViewBase;
+    }
+    const starts = planClock.schedule.sends.flatMap((send) => {
+      const tankIndex = planClock.display.get(send.key)?.tankIndex;
+      return send.pseudo || tankIndex == null ? [] : [{ tankIndex, at: send.startSeconds }];
+    });
+    return buildVirtueTankPlanView(response.plan, profileSnapshot?.plannedVirtueTank ?? profileSnapshot?.virtueTank, starts);
+  }, [virtueTankViewBase, planClock, profileSnapshot, response]);
+  // A later start with fewer relaunches at night, worked out after the page draws.
+  const [bestStart, setBestStart] = useState<{
+    input: ClockScheduleInput;
+    current: StartTimeOption;
+    best: StartTimeOption;
+  } | null>(null);
+  useEffect(() => {
+    setBestStart(null);
+    if (!planClock || !planClock.input.sleep || planClock.input.event || planClock.schedule.sends.length > 600) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const result = bestStartTime(planClock.input);
+      if (result) {
+        setBestStart({ input: planClock.input, ...result });
+      }
+    }, 60);
+    return () => window.clearTimeout(timer);
+  }, [planClock]);
   const missionTimeline = useMemo(
     () => (response && !response.plan.virtueTanks ? buildMissionTimeline(response.plan) : null),
     [response]
@@ -5161,15 +5945,17 @@ export default function MissionCraftPlannerPage() {
   // Wall-clock finish if the player starts launching now. Taken from the
   // timeline makespan so the date always agrees with the chart below it: in-air
   // ships hold their slots first, then prep and the plan's own launches.
+  // On the clock schedule when there is one: it waits for mornings and a dubcap's start.
   const projectedCompletion = useMemo(() => {
-    if (timelineTotalSeconds == null || planReceivedAtMs == null || timelineTotalSeconds <= 0) {
+    const totalSeconds = planClock ? planClock.schedule.makespanSeconds : timelineTotalSeconds;
+    if (totalSeconds == null || planClockStartMs == null || totalSeconds <= 0) {
       return null;
     }
     return {
-      totalSeconds: timelineTotalSeconds,
-      at: new Date(planReceivedAtMs + timelineTotalSeconds * 1000),
+      totalSeconds,
+      at: new Date(planClockStartMs + totalSeconds * 1000),
     };
-  }, [timelineTotalSeconds, planReceivedAtMs]);
+  }, [planClock, timelineTotalSeconds, planClockStartMs]);
   const craftPlanDetailRows = useMemo(() => {
     if (!response) {
       return [] as CraftPlanDetailRow[];
@@ -5662,6 +6448,7 @@ export default function MissionCraftPlannerPage() {
       setVirtueTankEdits(parseStoredVirtueTankEdits(readFirstStoredString([LOCAL_PREF_KEYS.plannerVirtueTankEdits])));
       const savedFastMode = readStoredBoolean([LOCAL_PREF_KEYS.plannerFastMode]);
       setIncludeDubcap(readStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDubcap]) ?? false);
+      setSleepPrefs(readSleepPreferences());
       if (savedFastMode != null) {
         setFastMode(savedFastMode);
       }
@@ -5910,6 +6697,15 @@ export default function MissionCraftPlannerPage() {
   useEffect(() => {
     if (prefsLoaded) writeStoredBoolean([LOCAL_PREF_KEYS.plannerIncludeDubcap], includeDubcap);
   }, [includeDubcap, prefsLoaded]);
+  useEffect(() => {
+    if (prefsLoaded) writeStoredString([LOCAL_PREF_KEYS.plannerSleep], JSON.stringify(sleepPrefs));
+  }, [sleepPrefs, prefsLoaded]);
+  // Dubcap start with no time set (or one that has passed) starts from the likely next one.
+  useEffect(() => {
+    if (prefsLoaded && effectiveStartMode === "dubcap" && !knownLiveDubcap && dubcapStartMs == null) {
+      setDubcapStartMs(nextLikelyDubcapStartMs(Date.now()));
+    }
+  }, [prefsLoaded, effectiveStartMode, knownLiveDubcap, dubcapStartMs]);
 
   useEffect(() => {
     if (!prefsLoaded) {
@@ -6052,6 +6848,9 @@ export default function MissionCraftPlannerPage() {
     onlyLockedLaunches,
     finishByMs,
     finishByOn,
+    startMode,
+    startAtMs,
+    dubcapStartMs,
     inventorySource,
     prefsLoaded,
   ]);
@@ -6076,6 +6875,11 @@ export default function MissionCraftPlannerPage() {
     ...(currentLockedLaunches.length > 0 ? { lockedLaunches: currentLockedLaunches } : {}),
     ...(currentLockedLaunches.length > 0 && onlyLockedLaunches ? { onlyLockedLaunches: true } : {}),
     ...(activeFinishByMs != null ? { finishByMs: activeFinishByMs } : {}),
+    ...(effectiveStartMode === "custom" && startAtMs != null ? { startAtMs } : {}),
+    // A dubcap's start only changes the solve through a finish time (which counts from it).
+    ...(effectiveStartMode === "dubcap" && activeFinishByMs != null && dubcapStartMs != null && !knownLiveDubcap
+      ? { dubcapStartMs }
+      : {}),
     // Left undefined in main mode so JSON.stringify drops them and main-farm
     // requests compare the same as before.
     virtueShiftCap: inventorySource === "virtue" ? virtueShiftCap : undefined,
@@ -6095,6 +6899,11 @@ export default function MissionCraftPlannerPage() {
     }
     if (activeFinishByMs != null && activeFinishByMs <= Date.now()) {
       setError("The finish time has passed. Pick a later one, or clear it.");
+      return;
+    }
+    const plannedStartMs = currentSolveRequest.startAtMs ?? currentSolveRequest.dubcapStartMs;
+    if (activeFinishByMs != null && plannedStartMs != null && activeFinishByMs <= plannedStartMs) {
+      setError("The finish time is before the plan starts. Pick a later finish time or an earlier start.");
       return;
     }
     setFasterOptionPlanned(null);
@@ -6189,8 +6998,20 @@ export default function MissionCraftPlannerPage() {
           etaMs: null,
         });
 
+        // A later start: the plan sees ships in the air (and a live dubcap) as they will be then.
+        const solveNowMs = Date.now();
+        const startDelaySeconds =
+          snapshotRequest.startAtMs != null ? Math.max(0, (snapshotRequest.startAtMs - solveNowMs) / 1000) : 0;
+        const solveProfile = startDelaySeconds > 0 ? profileAfter(profile, startDelaySeconds) : profile;
+        // The finish time counts from the start: a set time, or a dubcap still to come (a live one starts now).
+        const finishFromMs =
+          snapshotRequest.startAtMs != null
+            ? Math.max(solveNowMs, snapshotRequest.startAtMs)
+            : snapshotRequest.dubcapStartMs != null && !profile.liveDubcap
+              ? Math.max(solveNowMs, snapshotRequest.dubcapStartMs)
+              : solveNowMs;
         const result = await planForTarget(
-          profile as Parameters<typeof planForTarget>[0],
+          solveProfile as Parameters<typeof planForTarget>[0],
           primaryTarget.targetItemId,
           normalizedQuantity,
           snapshotRequest.priorityTime,
@@ -6214,7 +7035,7 @@ export default function MissionCraftPlannerPage() {
             lockedLaunches: snapshotRequest.lockedLaunches,
             onlyLockedLaunches: snapshotRequest.onlyLockedLaunches,
             finishWithinSeconds:
-              snapshotRequest.finishByMs != null ? Math.max(0, (snapshotRequest.finishByMs - Date.now()) / 1000) : undefined,
+              snapshotRequest.finishByMs != null ? Math.max(0, (snapshotRequest.finishByMs - finishFromMs) / 1000) : undefined,
             selectedConsumptionItemIds,
             solverFn: highsRef.current.solve,
             lootData: lootDataRef.current!,
@@ -6247,6 +7068,7 @@ export default function MissionCraftPlannerPage() {
         };
         setResponse(planResponse);
         setPlanReceivedAtMs(Date.now());
+        setSolvedStartDelaySeconds(startDelaySeconds > 0 ? startDelaySeconds : null);
         setProfileSnapshot(profile);
         setLastSolveRequest(snapshotRequest);
         if (options.fasterOption && snapshotRequest.virtueShiftCap != null) {
@@ -6453,6 +7275,9 @@ export default function MissionCraftPlannerPage() {
         ...(response.plan.budget?.finishWithinSeconds !== undefined
           ? { finishWithinSeconds: response.plan.budget.finishWithinSeconds }
           : {}),
+        ...(lastSolveRequest.startAtMs != null ? { startAtMs: lastSolveRequest.startAtMs } : {}),
+        ...(lastSolveRequest.dubcapStartMs != null ? { dubcapStartMs: lastSolveRequest.dubcapStartMs } : {}),
+        ...(planStartDelaySeconds > 0 ? { startDelaySeconds: planStartDelaySeconds } : {}),
         virtueShiftCap: lastSolveRequest.virtueShiftCap,
         virtueStartTank: lastSolveRequest.virtueStartTank,
       },
@@ -6650,13 +7475,30 @@ export default function MissionCraftPlannerPage() {
   const virtueBannerShown = Boolean(
     virtueTankView && planVirtueTanks && !planBudget && (planHasGoalShortfalls || planNeededShifts != null)
   );
+  const clockSummary = planClock ? (
+    <ClockSummary
+      clock={planClock}
+      sleep={planClock.input.sleep}
+      finishByMs={lastSolveRequest?.finishByMs ?? null}
+      dubcapAnchorMs={dubcapAnchorMs}
+      bestStart={bestStart && bestStart.input === planClock.input ? bestStart : null}
+      onUseStart={(ms) => {
+        setStartMode("custom");
+        setStartAtMs(Math.ceil(ms / 60_000) * 60_000);
+      }}
+    />
+  ) : null;
   const budgetBanner = (() => {
     if (!planBudget || (!planHasGoalShortfalls && !planBudget.overFinishTime)) {
       return null;
     }
-    const startMs = planReceivedAtMs ?? Date.now();
+    const startMs = planClockStartMs ?? Date.now();
     const finishBy =
-      planBudget.finishWithinSeconds !== undefined ? formatShortDateTime(startMs + planBudget.finishWithinSeconds * 1000) : null;
+      lastSolveRequest?.finishByMs != null
+        ? formatShortDateTime(lastSolveRequest.finishByMs)
+        : planBudget.finishWithinSeconds !== undefined
+          ? formatShortDateTime(startMs + planBudget.finishWithinSeconds * 1000)
+          : null;
     const within = [
       ...(planBudget.onlyLockedLaunches ? ["the locked launches"] : []),
       ...(finishBy ? [`launches back by ${finishBy}`] : []),
@@ -7377,6 +8219,164 @@ export default function MissionCraftPlannerPage() {
                   Plans launch into the time left as each slot frees up.
                 </p>
               )}
+              <div className={styles.finishByBlock}>
+                <div className={styles.checkWithHelp}>
+                  <label className={styles.customCheck} htmlFor="sleepOn">
+                    <input
+                      id="sleepOn"
+                      type="checkbox"
+                      checked={sleepPrefs.on}
+                      onChange={(event) => {
+                        const on = event.target.checked;
+                        setSleepPrefs((prefs) => ({ ...prefs, on }));
+                      }}
+                    />
+                    <span aria-hidden="true" />
+                    <span>Avoid sends while I sleep</span>
+                  </label>
+                  <HelpTip label="Avoid sends while I sleep">
+                    Puts the plan on your clock. A slot that frees up while you&apos;re asleep waits for the morning, and
+                    where the plan leaves the order open, launches go in the order that brings ships back while you&apos;re
+                    up. The launches themselves stay the same. Saved for every plan.
+                  </HelpTip>
+                </div>
+                {sleepPrefs.on && (
+                  <div className={styles.finishByRow}>
+                    <input
+                      type="time"
+                      className={`${styles.textInput} ${styles.sleepTime}`}
+                      aria-label="Bedtime"
+                      value={toTimeInputValue(sleepPrefs.bedMinutes)}
+                      onChange={(event) => {
+                        const minutes = fromTimeInputValue(event.target.value);
+                        if (minutes != null) setSleepPrefs((prefs) => ({ ...prefs, bedMinutes: minutes }));
+                      }}
+                    />
+                    <span className={styles.finishByHint}>to</span>
+                    <input
+                      type="time"
+                      className={`${styles.textInput} ${styles.sleepTime}`}
+                      aria-label="Wake-up time"
+                      value={toTimeInputValue(sleepPrefs.wakeMinutes)}
+                      onChange={(event) => {
+                        const minutes = fromTimeInputValue(event.target.value);
+                        if (minutes != null) setSleepPrefs((prefs) => ({ ...prefs, wakeMinutes: minutes }));
+                      }}
+                    />
+                    <span className={styles.finishByHint}>
+                      {sleepLengthMinutes(sleepPrefs) > 0
+                        ? `${formatDurationFromHours(sleepLengthMinutes(sleepPrefs) / 60)} asleep`
+                        : "Pick two times"}
+                    </span>
+                  </div>
+                )}
+              </div>
+              {startRowShown && (
+                <div className={styles.finishByBlock}>
+                  <div className={styles.startRow}>
+                    <span className={styles.labelWithHelp}>
+                      <span className={styles.fieldLabel}>Start</span>
+                      <HelpTip label="Start">
+                        When you send the plan&apos;s first launches. Ships already in the air land when they land. Dubcap
+                        start puts a dubcap that hasn&apos;t begun at its start time, with prep before it; while one is
+                        running, the plan starts now. A set time plans as if you built it then.
+                      </HelpTip>
+                    </span>
+                    <fieldset className={styles.virtueOptSegment}>
+                      <legend>Start</legend>
+                      <label htmlFor="planStartNow">
+                        <input
+                          id="planStartNow"
+                          type="radio"
+                          name="planStart"
+                          checked={effectiveStartMode === "now"}
+                          onChange={() => setStartMode("now")}
+                        />
+                        Now
+                      </label>
+                      {includeDubcap && (
+                        <label htmlFor="planStartDubcap">
+                          <input
+                            id="planStartDubcap"
+                            type="radio"
+                            name="planStart"
+                            checked={effectiveStartMode === "dubcap"}
+                            onChange={() => {
+                              setStartMode("dubcap");
+                              if (dubcapStartMs == null || dubcapStartMs <= Date.now()) {
+                                setDubcapStartMs(nextLikelyDubcapStartMs(Date.now()));
+                              }
+                            }}
+                          />
+                          Dubcap start
+                        </label>
+                      )}
+                      <label htmlFor="planStartAt">
+                        <input
+                          id="planStartAt"
+                          type="radio"
+                          name="planStart"
+                          checked={effectiveStartMode === "custom"}
+                          onChange={() => {
+                            setStartMode("custom");
+                            if (startAtMs == null || startAtMs <= Date.now()) {
+                              setStartAtMs(Math.ceil((Date.now() + 60_000) / 3_600_000) * 3_600_000);
+                            }
+                          }}
+                        />
+                        Set time
+                      </label>
+                    </fieldset>
+                  </div>
+                  {effectiveStartMode === "custom" && (
+                    <div className={styles.finishByRow}>
+                      <input
+                        type="datetime-local"
+                        className={styles.textInput}
+                        aria-label="Start time"
+                        value={startAtMs != null ? toDateTimeLocalValue(startAtMs) : ""}
+                        min={toDateTimeLocalValue(Date.now())}
+                        onChange={(event) => {
+                          const ms = event.target.value ? new Date(event.target.value).getTime() : NaN;
+                          setStartAtMs(Number.isFinite(ms) ? ms : null);
+                        }}
+                      />
+                      <span className={styles.finishByHint} data-past={startAtMs != null && startAtMs <= Date.now() ? "1" : undefined}>
+                        {startAtMs == null
+                          ? "Pick a time"
+                          : startAtMs <= Date.now()
+                            ? "Passed: plans start now"
+                            : `in ${formatDurationFromHours((startAtMs - Date.now()) / 3_600_000)}`}
+                      </span>
+                    </div>
+                  )}
+                  {effectiveStartMode === "dubcap" &&
+                    (knownLiveDubcap ? (
+                      <p className={styles.dubcapHint}>A dubcap is running now, so the plan starts now.</p>
+                    ) : (
+                      <div className={styles.finishByRow}>
+                        <input
+                          type="datetime-local"
+                          className={styles.textInput}
+                          aria-label="Dubcap start"
+                          value={dubcapStartMs != null ? toDateTimeLocalValue(dubcapStartMs) : ""}
+                          min={toDateTimeLocalValue(Date.now())}
+                          onChange={(event) => {
+                            const ms = event.target.value ? new Date(event.target.value).getTime() : NaN;
+                            setDubcapStartMs(Number.isFinite(ms) ? ms : null);
+                          }}
+                        />
+                        <span className={styles.finishByHint} data-past={dubcapStartMs != null && dubcapStartMs <= Date.now() ? "1" : undefined}>
+                          {dubcapStartMs == null
+                            ? "Pick a time"
+                            : dubcapStartMs <= Date.now()
+                              ? "Passed"
+                              : "Usually Sun 9 AM Pacific"}
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              )}
               <label className={styles.customCheck} htmlFor="fastMode">
                 <input
                   id="fastMode"
@@ -7619,9 +8619,14 @@ export default function MissionCraftPlannerPage() {
                 <div className="kpi">{formatPlanCompletion(projectedCompletion.at)}</div>
                 <div
                   className={`muted ${styles.tooltipValue}`}
-                  title={`Assumes you start launching now and keep all three mission slots busy. Total ${formatDurationFromHours(projectedCompletion.totalSeconds / 3600)} from ${new Date(planReceivedAtMs ?? Date.now()).toLocaleString()}.`}
+                  title={
+                    planClock?.input.sleep
+                      ? `Sends only while you're up, starting ${new Date(planClockStartMs ?? Date.now()).toLocaleString()}; slots that free up overnight wait for the morning. Total ${formatDurationFromHours(projectedCompletion.totalSeconds / 3600)}.`
+                      : `Assumes you start launching ${planStartDelaySeconds > 0 ? "at the start time" : "now"} and keep all three mission slots busy. Total ${formatDurationFromHours(projectedCompletion.totalSeconds / 3600)} from ${new Date(planClockStartMs ?? Date.now()).toLocaleString()}.`
+                  }
                 >
-                  {formatDurationFromHours(projectedCompletion.totalSeconds / 3600)} from now
+                  {formatDurationFromHours(projectedCompletion.totalSeconds / 3600)} from{" "}
+                  {planStartDelaySeconds > 0 && planClockStartMs != null ? formatShortDateTime(planClockStartMs) : "now"}
                 </div>
               </div>
             )}
@@ -7885,7 +8890,7 @@ export default function MissionCraftPlannerPage() {
           </div>
 
           {virtueTankView && (
-            <VirtueFuelTanksPanel view={virtueTankView} planStartMs={planReceivedAtMs ?? Date.now()} />
+            <VirtueFuelTanksPanel view={virtueTankView} planStartMs={planClockStartMs ?? Date.now()} />
           )}
 
           <div className="panel">
@@ -7898,21 +8903,33 @@ export default function MissionCraftPlannerPage() {
               />
             )}
             {virtueTankView && (
-              <VirtueTankTimeline view={virtueTankView} plan={response.plan} />
+              <VirtueTankTimeline
+                view={virtueTankView}
+                plan={response.plan}
+                clock={planClock}
+                sleep={planClock?.input.sleep ?? null}
+                summary={clockSummary}
+              />
             )}
             {missionTimeline && (
               <div className={styles.timelinePanel}>
                 <p className={`muted ${styles.timelineIntro}`}>
-                  {response.plan.dubcap
-                    ? "3-slot launch schedule: prep, then the dubcap window, then ordinary missions once the event's ships return."
-                    : "Heuristic 3-slot timeline view of recommended launches. Exact ordering can vary, but total workload matches the plan."}
+                  {planClock
+                    ? `3-slot launch schedule on your clock${planClock.input.sleep ? "; shaded bands are nights" : ""}.${response.plan.dubcap ? " Prep, then the dubcap window, then ordinary missions once the event's ships return." : ""}`
+                    : response.plan.dubcap
+                      ? "3-slot launch schedule: prep, then the dubcap window, then ordinary missions once the event's ships return."
+                      : "Heuristic 3-slot timeline view of recommended launches. Exact ordering can vary, but total workload matches the plan."}
                 </p>
+                {clockSummary}
                 <div className={styles.timelineStats}>
                   <span>
                     Model total: <strong>{formatDurationFromHours(response.plan.expectedHours)}</strong>
                   </span>
                   <span>
-                    Timeline makespan: <strong>{formatDurationFromHours(missionTimeline.totalSeconds / 3600)}</strong>
+                    Timeline makespan:{" "}
+                    <strong>
+                      {formatDurationFromHours((planClock ? planClock.schedule.makespanSeconds : missionTimeline.totalSeconds) / 3600)}
+                    </strong>
                   </span>
                   <span>
                     Horizon prep workload: <strong>{formatDurationFromHours(missionTimeline.prepSlotSeconds / 3 / 3600)}</strong>
@@ -7928,7 +8945,7 @@ export default function MissionCraftPlannerPage() {
                   )}
                 </div>
 
-                <div className={styles.timelineLanes}>
+                {planClock ? <ClockLanes clock={planClock} sleep={planClock.input.sleep} /> : <div className={styles.timelineLanes}>
                   {missionTimeline.lanes.map((laneBlocks, laneIndex) => (
                     <div key={`lane:${laneIndex}`} className={styles.timelineLaneRow}>
                       <div className={styles.timelineLaneLabel}>Slot {laneIndex + 1}</div>
@@ -7974,7 +8991,7 @@ export default function MissionCraftPlannerPage() {
                       </div>
                     </div>
                   ))}
-                </div>
+                </div>}
 
                 <div className={styles.timelineLegend}>
                   {missionTimeline.segments.map((segment) => (
@@ -7995,6 +9012,7 @@ export default function MissionCraftPlannerPage() {
               <DubcapTimeline
                 event={response.plan.dubcap}
                 tankLabels={response.plan.virtueTanks?.pack.tanks.map((tank) => tank.label)}
+                clockPlan={planClock}
               />
             )}
             {response.plan.missions.length === 0 ? (

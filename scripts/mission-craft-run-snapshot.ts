@@ -18,6 +18,7 @@ import {
   type PlannerResult,
 } from "../lib/planner";
 import { buildVirtueTankPlannerOptions } from "../lib/virtue-tank-plan";
+import { profileAfter } from "../lib/in-flight";
 
 const durationTypeSchema = z.enum(["TUTORIAL", "SHORT", "LONG", "EPIC"]);
 
@@ -52,6 +53,10 @@ const solveInputSnapshotSchema = z.object({
     finishByMs: z.number().finite().optional(),
     // The finish time as the plan got it, in seconds from when it was built.
     finishWithinSeconds: z.number().finite().min(0).optional(),
+    // A later start: the plan saw ships in the air (and a live dubcap) this much further on.
+    startAtMs: z.number().finite().optional(),
+    dubcapStartMs: z.number().finite().optional(),
+    startDelaySeconds: z.number().finite().min(0).optional(),
     // Path of Virtue only; unset falls back the same way the planner page does.
     virtueShiftCap: virtueShiftCapSchema,
     virtueStartTank: virtueStartTankSchema,
@@ -862,7 +867,7 @@ async function run(options: CliOptions): Promise<RunDiagnostics> {
   const virtue = loaded.snapshot.sourceFilters.inventorySource === "virtue";
   const planStartedAt = Date.now();
   const plan = await planForTarget(
-    loaded.snapshot.profile,
+    profileAfter(loaded.snapshot.profile, loaded.snapshot.request.startDelaySeconds ?? 0),
     loaded.snapshot.request.targetItemId,
     loaded.snapshot.request.quantity,
     loaded.snapshot.request.priorityTime,

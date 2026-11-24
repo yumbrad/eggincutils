@@ -165,3 +165,34 @@ export async function projectInFlightMissions(
 
   return { yields, rows, secondsRemaining, missionCount };
 }
+
+/**
+ * The profile as it will stand `seconds` from now, for a plan that starts
+ * later: ships in the air that much nearer home (landed ones at 0, their
+ * drops still owed), and a live event that much nearer its end (gone once
+ * it is over).
+ */
+export function profileAfter<
+  T extends { inFlightMissions?: Array<{ secondsRemaining: number }>; liveDubcap?: { secondsRemaining: number } }
+>(profile: T, seconds: number): T {
+  const delay = Math.max(0, Number(seconds) || 0);
+  if (delay === 0) {
+    return profile;
+  }
+  const { liveDubcap, ...rest } = profile;
+  const live = liveDubcap && liveDubcap.secondsRemaining > delay
+    ? { liveDubcap: { ...liveDubcap, secondsRemaining: liveDubcap.secondsRemaining - delay } }
+    : {};
+  return {
+    ...rest,
+    ...live,
+    ...(profile.inFlightMissions
+      ? {
+          inFlightMissions: profile.inFlightMissions.map((mission) => ({
+            ...mission,
+            secondsRemaining: Math.max(0, mission.secondsRemaining - delay),
+          })),
+        }
+      : {}),
+  } as T;
+}
